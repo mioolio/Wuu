@@ -1,0 +1,166 @@
+<!-- 模态对话框 -->
+
+  <!-- 覆盖确认对话框 -->
+  <div id="parse-modal" class="parse-modal hidden">
+    <div class="parse-modal-card">
+      <div class="parse-modal-title">歌曲已存在</div>
+      <div id="parse-modal-sub" class="parse-modal-sub"></div>
+      <ul id="parse-modal-items" class="parse-modal-items"></ul>
+      <label class="parse-modal-apply-all">
+        <input type="checkbox" id="parse-modal-apply-all">
+        <span>对剩余所有已存在歌曲应用相同决策</span>
+      </label>
+      <div class="parse-modal-actions">
+        <button id="parse-modal-skip" class="parse-modal-btn secondary">跳过</button>
+        <button id="parse-modal-overwrite-all" class="parse-modal-btn secondary">全部覆盖</button>
+        <button id="parse-modal-confirm" class="parse-modal-btn primary">确认更新选中项</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 歌词修复对话框(手动输入分享链接) -->
+  <div id="lyrics-repair-modal" class="parse-modal hidden">
+    <div class="parse-modal-card">
+      <div class="parse-modal-title">手动修复歌词</div>
+      <div id="lyrics-repair-sub" class="parse-modal-sub"></div>
+      <input type="text" id="lyrics-repair-input" class="lyrics-repair-input" placeholder="请粘贴汽水音乐分享链接" />
+      <div class="parse-modal-actions">
+        <button id="lyrics-repair-cancel" class="parse-modal-btn secondary">取消</button>
+        <button id="lyrics-repair-confirm" class="parse-modal-btn primary">解析并修复</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 免费听音乐免责声明 -->
+  <div id="fm-disclaimer" class="parse-modal hidden">
+    <div class="parse-modal-card disclaimer-card">
+      <div class="parse-modal-title">免责声明</div>
+      <div class="disclaimer-body">
+        <p><strong>本专区由第三方 music-dl 引擎提供搜索与播放能力。</strong></p>
+        <p>1. 本专区提供的所有音乐资源均来自第三方平台，本软件不存储任何音乐文件，仅提供搜索与播放的桥接服务。</p>
+        <p>2. <strong>不保证设备的安全性</strong>：第三方引擎可能存在未知风险，使用本专区功能即表示您知悉并自行承担可能的安全风险。</p>
+        <p>3. <strong>不承担版权方的追究责任</strong>：所有音乐版权归原作者及原平台所有，本软件不对任何版权纠纷承担责任。请勿将下载的音乐用于商业用途。</p>
+        <p>4. 保存到本地歌库（<code>output/</code> 目录，与主音乐列表共享）时，无论是否有歌词均可保存；无歌词或纯音乐将仅保存音频与封面，不生成 .lrc 文件。</p>
+        <p>5. 在线试听时，歌词由第三方接口提供，部分歌曲可能无歌词或为纯音乐（将提示"暂无歌词"，但仍可保存到歌库）。</p>
+      </div>
+      <div class="parse-modal-actions">
+        <button id="fm-disclaimer-decline" class="parse-modal-btn secondary">不同意（返回）</button>
+        <button id="fm-disclaimer-accept" class="parse-modal-btn primary">我已了解并同意</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 快速分享当前歌曲 (爱心旁边的分享按钮触发) -->
+  <div id="quick-share-modal" class="parse-modal hidden">
+    <div class="parse-modal-card quick-share-card">
+      <div class="parse-modal-title">快速分享当前歌曲</div>
+      <div id="qs-title" class="qs-song-title"></div>
+      <div id="qs-status" class="qs-status hidden"></div>
+      <div class="qs-result-row">
+        <span class="qs-result-label">分享链接</span>
+        <input id="qs-share-link" class="pl-input qs-input" readonly />
+        <button id="qs-copy-link" class="pl-btn">复制</button>
+      </div>
+      <div class="qs-result-row">
+        <span class="qs-result-label">解密密钥</span>
+        <input id="qs-share-key" class="pl-input qs-input qs-key-input" readonly />
+        <button id="qs-copy-key" class="pl-btn">复制</button>
+      </div>
+      <div class="qs-result-tip">提示: 链接与密钥需分开发送给接收方, 缺一不可解析。需先在设置中开启"歌单分享服务"。</div>
+      <div class="parse-modal-actions">
+        <button id="qs-export-crt" class="parse-modal-btn secondary">导出 .crt</button>
+        <button id="qs-close" class="parse-modal-btn primary">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 访问日志查看 (设置 → 高级网络设置 → 查看日志) -->
+  <div id="access-log-modal" class="parse-modal hidden">
+    <div class="parse-modal-card access-log-card">
+      <div class="al-header">
+        <div class="parse-modal-title">访问日志</div>
+        <div id="access-log-count" class="al-count">加载中...</div>
+      </div>
+      <div class="al-list-wrap">
+        <ul id="access-log-list" class="access-log-list"></ul>
+        <div id="access-log-empty" class="al-empty">暂无访问记录</div>
+      </div>
+      <div class="al-legend">
+        <span class="al-legend-item"><span class="al-dot" style="background:#4caf50"></span>下载歌曲</span>
+        <span class="al-legend-item"><span class="al-dot" style="background:#5aa9ff"></span>访问歌单</span>
+        <span class="al-legend-item"><span class="al-dot" style="background:#a78bfa"></span>获取封面</span>
+        <span class="al-legend-item"><span class="al-dot" style="background:#fbbf24"></span>获取歌词</span>
+        <span class="al-legend-item"><span class="al-dot" style="background:#ef4444"></span>拒绝访问</span>
+        <span class="al-legend-item"><span class="al-dot" style="background:#f97316"></span>频率超限</span>
+      </div>
+      <div class="parse-modal-actions">
+        <button id="access-log-clear" class="parse-modal-btn secondary">清空日志</button>
+        <button id="access-log-refresh" class="parse-modal-btn secondary">刷新</button>
+        <button id="access-log-close" class="parse-modal-btn primary">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 歌单分享设置 (从歌单分享页或主页分享按钮触发) -->
+  <div id="pl-export-modal" class="parse-modal hidden">
+    <div class="parse-modal-card pl-export-modal-card">
+      <div class="parse-modal-title">分享设置</div>
+      <div id="pl-modal-summary" class="pl-modal-summary"></div>
+
+      <!-- 配置态: 有效期 + 访问次数 -->
+      <div id="pl-modal-config" class="pl-modal-config">
+        <div class="pl-form-row">
+          <label class="pl-form-label">有效期 <span class="pl-required">*</span></label>
+          <div class="pl-options-row" id="pl-expire-options">
+            <button type="button" class="pl-chip" data-expire="3600000">1 小时</button>
+            <button type="button" class="pl-chip" data-expire="86400000">1 天</button>
+            <button type="button" class="pl-chip" data-expire="604800000">7 天</button>
+            <button type="button" class="pl-chip" data-expire="2592000000">30 天</button>
+            <button type="button" class="pl-chip" data-expire="0">永久</button>
+          </div>
+        </div>
+        <div class="pl-form-row">
+          <label class="pl-form-label">访问次数 <span class="pl-required">*</span></label>
+          <div class="pl-options-row" id="pl-uses-options">
+            <button type="button" class="pl-chip" data-uses="1">1 次</button>
+            <button type="button" class="pl-chip" data-uses="5">5 次</button>
+            <button type="button" class="pl-chip" data-uses="30">30 次</button>
+            <button type="button" class="pl-chip" data-uses="0">不限</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="pl-modal-status" class="qs-status hidden"></div>
+
+      <!-- 生成结果 (生成成功后显示, 替换配置区) -->
+      <div id="pl-export-result" class="pl-export-result hidden">
+        <div class="pl-result-title">本次生成结果</div>
+        <div class="pl-result-row">
+          <span class="pl-result-label">分享链接</span>
+          <input id="pl-share-link" class="pl-input" readonly />
+          <button id="pl-copy-link" class="pl-btn">复制</button>
+        </div>
+        <div class="pl-result-row">
+          <span class="pl-result-label">解密密钥</span>
+          <input id="pl-share-key" class="pl-input pl-key-input" readonly />
+          <button id="pl-copy-key" class="pl-btn">复制</button>
+        </div>
+        <div class="pl-result-actions">
+          <button id="pl-export-crt" class="pl-btn">导出密钥到 .crt</button>
+          <span id="pl-server-info" class="pl-server-info"></span>
+        </div>
+        <div class="pl-result-tip">提示: 链接与密钥需分开发送给接收方, 缺一不可解析。密钥已保存到本机, 可在"已分享"列表中再次复制。</div>
+      </div>
+
+      <!-- 配置态按钮: 取消 + 确认生成 -->
+      <div id="pl-modal-actions-config" class="parse-modal-actions">
+        <button id="pl-modal-cancel" class="parse-modal-btn secondary">取消</button>
+        <button id="pl-modal-confirm" class="parse-modal-btn primary" disabled>确认生成</button>
+      </div>
+      <!-- 结果态按钮: 销毁此分享 + 完成 -->
+      <div id="pl-modal-actions-result" class="parse-modal-actions hidden">
+        <button id="pl-modal-destroy" class="parse-modal-btn secondary">销毁此分享</button>
+        <button id="pl-modal-done" class="parse-modal-btn primary">完成</button>
+      </div>
+    </div>
+  </div>

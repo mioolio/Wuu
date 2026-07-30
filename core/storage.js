@@ -1,0 +1,142 @@
+// =========== 配置目录与持久化存储 ===========
+// config/ 目录下的 JSON 文件读写: userdata.json / duration_cache.json / free_music.json
+// kugou_config.json 的读写放在 kugou/ 模块 (与酷狗账号逻辑强耦合)
+const path = require('path');
+const fs = require('fs');
+
+const configDir = path.join(__dirname, '..', 'config');
+const userDataFile = path.join(configDir, 'userdata.json');
+const durationCacheFile = path.join(configDir, 'duration_cache.json');
+const freeMusicDataFile = path.join(configDir, 'free_music.json');
+
+function ensureConfigDir() {
+  if (!fs.existsSync(configDir)) fs.mkdirSync(configDir, { recursive: true });
+}
+
+// ---- userdata.json ----
+function readUserData() {
+  ensureConfigDir();
+  if (!fs.existsSync(userDataFile)) return { likes: [], dislikes: [], collections: [], stats: {}, progress: {}, lastSession: null, actualDuration: {}, settings: {} };
+  try {
+    const data = JSON.parse(fs.readFileSync(userDataFile, 'utf-8'));
+    return {
+      likes: Array.isArray(data.likes) ? data.likes : [],
+      // 不推荐(倒点赞)列表: [{ path, ts }]
+      dislikes: Array.isArray(data.dislikes) ? data.dislikes : [],
+      // 多歌单系统: collections 数组持久化 (每项 { id, name, songs: [...], createdAt })
+      // 渲染进程 init.js 会把 songs 数组转回 Set
+      collections: Array.isArray(data.collections) ? data.collections : [],
+      stats: data.stats && typeof data.stats === 'object' ? data.stats : {},
+      progress: data.progress && typeof data.progress === 'object' ? data.progress : {},
+      lastSession: data.lastSession && typeof data.lastSession === 'object' ? data.lastSession : null,
+      actualDuration: data.actualDuration && typeof data.actualDuration === 'object' ? data.actualDuration : {},
+      settings: data.settings && typeof data.settings === 'object' ? data.settings : {},
+    };
+  } catch (e) {
+    return { likes: [], dislikes: [], collections: [], stats: {}, progress: {}, lastSession: null, actualDuration: {}, settings: {} };
+  }
+}
+
+function writeUserData(data) {
+  ensureConfigDir();
+  fs.writeFileSync(userDataFile, JSON.stringify({
+    likes: Array.isArray(data.likes) ? data.likes : [],
+    dislikes: Array.isArray(data.dislikes) ? data.dislikes : [],
+    collections: Array.isArray(data.collections) ? data.collections : [],
+    stats: data.stats && typeof data.stats === 'object' ? data.stats : {},
+    progress: data.progress && typeof data.progress === 'object' ? data.progress : {},
+    lastSession: data.lastSession && typeof data.lastSession === 'object' ? data.lastSession : null,
+    actualDuration: data.actualDuration && typeof data.actualDuration === 'object' ? data.actualDuration : {},
+    settings: data.settings && typeof data.settings === 'object' ? data.settings : {},
+  }, null, 2), 'utf-8');
+}
+
+// ---- duration_cache.json ----
+// 缓存 { audioPath: { mtime, duration } }, 避免每次启动都重新解析所有 AAC 文件
+let durationCache = {};
+function readDurationCache() {
+  try {
+    if (fs.existsSync(durationCacheFile)) {
+      durationCache = JSON.parse(fs.readFileSync(durationCacheFile, 'utf-8')) || {};
+    }
+  } catch (e) { durationCache = {}; }
+}
+function writeDurationCache() {
+  ensureConfigDir();
+  try { fs.writeFileSync(durationCacheFile, JSON.stringify(durationCache, null, 2), 'utf-8'); } catch (e) {}
+}
+// 从缓存读取时长, mtime 不匹配则视为失效返回 0
+function getCachedDuration(audioPath) {
+  const entry = durationCache[audioPath];
+  if (!entry) return 0;
+  try {
+    const stat = fs.statSync(audioPath);
+    if (Math.abs(stat.mtimeMs - entry.mtime) < 1000) return entry.duration || 0;
+  } catch (e) {}
+  return 0;
+}
+function setCachedDuration(audioPath, mtimeMs, duration) {
+  durationCache[audioPath] = { mtime: mtimeMs, duration };
+}
+function getDurationCache() { return durationCache; }
+
+// ---- free_music.json ----
+function readFreeMusicData() {
+  ensureConfigDir();
+  try {
+    if (fs.existsSync(freeMusicDataFile)) return JSON.parse(fs.readFileSync(freeMusicDataFile, 'utf-8'));
+  } catch (e) {}
+  return { disclaimerAccepted: false };
+}
+function writeFreeMusicData(data) {
+  ensureConfigDir();
+  try { fs.writeFileSync(freeMusicDataFile, JSON.stringify(data, null, 2), 'utf-8'); } catch (e) {}
+}
+
+// 启动时加载时长缓存
+readDurationCache();
+
+// ---- 用户数据 IPC ----
+const { ipcMain } = require('electron');
+ipcMain.handle('get-userdata', () => readUserData());
+ipcMain.handle('save-userdata', (event, data) => {
+  writeUserData(data);
+  return true;
+});
+// 同步保存用户数据(用于 beforeunload, 阻塞渲染进程直到写盘完成)
+ipcMain.on('save-userdata-sync', (event, data) => {
+  writeUserData(data);
+  event.returnValue = true;
+});
+
+// 删除磁盘上的歌曲文件夹 (彻底移除不喜欢的音乐)
+// 入参: audioPath (歌曲音频文件的绝对路径)
+// 行为: 删除该音频文件所在的整个子文件夹 (含音频/封面/歌词/info.json)
+// 返回: { ok: true, removed: 'folder' } 或 { ok: true, removed: 'file' } (无父文件夹时仅删文件)
+//       { ok: false, error: 'not_found' | e.message }
+ipcMain.handle('delete-song-folder', async (event, audioPath) => {
+  if (!audioPath || typeof audioPath !== 'string') return { ok: false, error: 'invalid_path' };
+  try {
+    if (!fs.existsSync(audioPath)) return { ok: false, error: 'not_found' };
+    const parentDir = path.dirname(audioPath);
+    const outputRoot = path.join(__dirname, '..', 'output');
+    // 安全检查: 父目录必须是 output/ 下的子文件夹, 防止误删根目录
+    if (parentDir && path.resolve(parentDir) === path.resolve(outputRoot)) {
+      // 父目录就是 output/ 根, 只删文件本身
+      fs.unlinkSync(audioPath);
+      return { ok: true, removed: 'file' };
+    }
+    // 删除整个子文件夹
+    fs.rmSync(parentDir, { recursive: true, force: true });
+    return { ok: true, removed: 'folder' };
+  } catch (e) {
+    return { ok: false, error: e.message || 'unknown_error' };
+  }
+});
+
+module.exports = {
+  configDir, ensureConfigDir,
+  readUserData, writeUserData,
+  readDurationCache, writeDurationCache, getCachedDuration, setCachedDuration, getDurationCache,
+  readFreeMusicData, writeFreeMusicData,
+};

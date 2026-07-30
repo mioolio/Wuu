@@ -1,0 +1,51 @@
+<!-- 底部控制栏 -->
+    <div id="pbar">
+      <span id="t-now">0:00</span>
+      <div id="p-track"><div id="p-fill"></div></div>
+      <span id="t-end">0:00</span>
+    </div>
+    <div id="btns">
+      <!-- 左: 正在播放迷你条(点击展开到播放器视图) -->
+      <div class="b-l">
+        <div id="now-playing" class="hidden">
+          <img id="np-cover" src="" alt="" />
+          <div id="np-ph" class="hidden"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg></div>
+          <div class="np-info">
+            <div id="np-title"></div>
+            <div id="np-artist"></div>
+          </div>
+        </div>
+      </div>
+      <!-- 中: 播放控制 -->
+      <div class="b-c">
+        <button id="btn-prev">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg>
+        </button>
+        <button id="btn-play">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+        </button>
+        <button id="btn-next">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
+        </button>
+      </div>
+      <!-- 右: 模式 + 桌面歌词 + 音量 -->
+      <div class="b-r">
+        <button id="btn-mode">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 014-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 01-4 4H3"/></svg>
+        </button>
+        <button id="btn-desktop-lyric" title="桌面歌词">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+        </button>
+        <button id="btn-lyric-lock" title="桌面歌词鼠标穿透" class="hidden">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
+        </button>
+        <div class="vol">
+          <button id="btn-vol">
+            <svg id="vol-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 010 14.14M15.54 8.46a5 5 0 010 7.07"/></svg>
+          </button>
+          <div id="vol-pop" class="hidden">
+            <input type="range" id="vol-slider" min="0" max="150" value="100" orient="vertical" />
+          </div>
+        </div>
+      </div>
+    </div>

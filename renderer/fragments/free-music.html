@@ -1,0 +1,83 @@
+<!-- 免费听音乐视图 -->
+      <div class="fm-head">
+        <h2>免费听音乐</h2>
+        <p class="fm-tip">在线搜索多平台音乐或粘贴分享链接解析, 试听将套用主播放器界面。</p>
+        <span id="fm-status" class="fm-status">服务启动中...</span>
+      </div>
+      <!-- 模式切换: 在线搜索 / 链接解析 -->
+      <div class="fm-mode-tabs">
+        <button class="fm-mode-tab active" data-fm-mode="search">在线搜索</button>
+        <button class="fm-mode-tab" data-fm-mode="link">链接解析</button>
+      </div>
+
+      <!-- 在线搜索面板 -->
+      <div id="fm-search-panel" class="fm-mode-panel">
+      <div class="fm-search-bar">
+        <!-- 搜索类型切换: 歌曲 / 歌单 / 专辑 (下拉选择, 明确当前模式) -->
+        <div class="fm-type-select-wrap">
+          <select id="fm-type-select">
+            <option value="song">歌曲搜索</option>
+            <option value="playlist">歌单搜索</option>
+            <option value="album">专辑搜索</option>
+          </select>
+        </div>
+        <input id="fm-input" placeholder="输入歌曲名/歌手名..." />
+        <button id="fm-btn">搜索</button>
+        <button id="fm-download" class="fm-btn" title="保存当前试听歌曲到本地歌库" disabled>无歌词</button>
+      </div>
+      <div id="fm-sources" class="fm-sources">
+        <!-- 平台筛选标签, JS 动态填充 -->
+      </div>
+      <div id="fm-search-status" class="fm-search-status hidden"></div>
+      <!-- 歌曲搜索结果 -->
+      <div id="fm-results" class="fm-results"></div>
+      <!-- 歌单搜索结果 -->
+      <div id="fm-playlists" class="fm-results hidden"></div>
+      <!-- 歌单详情(歌曲列表) -->
+      <div id="fm-playlist-detail" class="fm-results hidden">
+        <div class="fm-detail-head">
+          <button id="fm-back-to-playlists" class="fm-btn">← 返回歌单列表</button>
+          <span id="fm-playlist-title" class="fm-detail-title"></span>
+        </div>
+        <div id="fm-playlist-songs" class="fm-results"></div>
+      </div>
+      </div>
+
+      <!-- 链接解析面板 -->
+      <div id="fm-link-panel" class="fm-mode-panel hidden">
+        <div class="fm-link-input-wrap">
+          <textarea id="fm-link-input" placeholder="粘贴汽水音乐分享链接（支持多行 https://）" rows="4"></textarea>
+          <button id="fm-link-btn">解析</button>
+        </div>
+        <div id="fm-link-status" class="fm-link-status hidden"></div>
+        <div id="fm-link-list-wrap" class="fm-link-list-wrap hidden">
+          <div class="fm-link-list-head">
+            <div class="fm-link-list-left">
+              <div class="pmi-checkbox fm-link-select-all" id="fm-link-select-all">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+              </div>
+              <span id="fm-link-list-count">解析结果</span>
+            </div>
+            <button id="fm-link-download-all-btn">添加选中到歌库</button>
+          </div>
+          <div class="fm-link-table-wrap">
+            <table class="fm-link-table">
+              <thead>
+                <tr>
+                  <th class="col-cover"></th>
+                  <th class="col-title">歌曲名</th>
+                  <th class="col-artist">作者</th>
+                  <th class="col-parse-status">解析状态</th>
+                  <th class="col-lib-status">词库</th>
+                </tr>
+              </thead>
+              <tbody id="fm-link-list"></tbody>
+            </table>
+          </div>
+        </div>
+        <div id="fm-link-progress" class="fm-link-progress hidden">
+          <div class="fm-link-progress-bar"><div id="fm-link-progress-fill"></div></div>
+          <div id="fm-link-progress-text" class="fm-link-progress-text"></div>
+          <button id="fm-link-refresh-library-btn" class="fm-link-refresh-btn hidden">刷新歌库</button>
+        </div>
+      </div>

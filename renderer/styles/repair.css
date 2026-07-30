@@ -1,0 +1,206 @@
+/* =========== 修复中心样式 (损坏歌曲列表/状态徽章/复制提示) =========== */
+/* ===== 修复视图 ===== */
+#view-repair {
+  flex: 1; overflow: hidden;
+  display: flex; flex-direction: column;
+  padding: 8px 32px 32px;
+  box-sizing: border-box;
+}
+.repair-head { padding: 8px 0 16px; }
+.repair-head h2 {
+  font-size: 22px; font-weight: 700; margin-bottom: 6px;
+}
+.repair-tip {
+  font-size: 12px; color: var(--fg2); line-height: 1.5;
+}
+
+.repair-body {
+  flex: 1; overflow: auto;
+  display: flex; flex-direction: column; gap: 16px;
+}
+.repair-toolbar {
+  display: flex; align-items: center; gap: 12px;
+}
+#repair-scan-btn, #repair-all-btn {
+  padding: 8px 24px;
+  background: var(--accent); color: #fff;
+  border: none; border-radius: 8px;
+  font-size: 13px; font-weight: 600;
+  cursor: pointer; transition: opacity var(--t);
+  letter-spacing: 0.05em;
+}
+#repair-scan-btn:hover, #repair-all-btn:hover { opacity: 0.9; }
+#repair-scan-btn:disabled, #repair-all-btn:disabled {
+  opacity: 0.5; cursor: not-allowed;
+}
+#repair-all-btn { background: var(--surface2); color: var(--fg); }
+
+.repair-status {
+  font-size: 12px; color: var(--fg2);
+}
+.repair-status.info { color: var(--accent); }
+.repair-status.success { color: #5cb85c; }
+.repair-status.error { color: #e81123; }
+
+.repair-list-wrap {
+  flex: 1; overflow: auto;
+}
+.repair-table-wrap {
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  overflow: auto;
+  background: rgba(var(--bg-rgb), 0.4);
+}
+.repair-table {
+  width: 100%; border-collapse: collapse;
+  table-layout: fixed;
+}
+.repair-table th, .repair-table td {
+  padding: 10px 12px;
+  text-align: left;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+.repair-table th {
+  background: var(--surface2);
+  color: var(--fg2); font-weight: 600;
+  font-size: 11px; text-transform: uppercase;
+  letter-spacing: 0.04em;
+  position: sticky; top: 0; z-index: 1;
+}
+.repair-table tbody tr:hover { background: var(--hover); }
+.repair-table tr:last-child td { border-bottom: none; }
+
+.repair-table .col-cover { width: 40px; }
+.repair-table .col-title { width: auto; }
+.repair-table .col-artist { width: 140px; }
+.repair-table .col-issue { width: 130px; }
+.repair-table .col-trackid { width: 100px; }
+.repair-table .col-repair-status { width: 100px; }
+.repair-table .col-action { width: 80px; text-align: center; }
+/* issue 列允许换行, 显示完整的"歌词精度不足(需重新解析)"等长文本 */
+.repair-table .col-issue { white-space: normal; word-break: break-all; line-height: 1.4; }
+
+.repair-cover-ph {
+  width: 28px; height: 28px;
+  background: var(--surface2);
+  border-radius: 4px;
+  display: flex; align-items: center; justify-content: center;
+}
+.repair-cover-ph svg {
+  width: 16px; height: 16px; color: var(--fg3);
+}
+.repair-cover-img {
+  width: 28px; height: 28px;
+  object-fit: cover;
+  border-radius: 4px;
+  display: block;
+}
+
+/* 点击复制: 歌曲名/作者名 */
+.repair-table .copyable {
+  cursor: pointer;
+  transition: color var(--t);
+  user-select: none;
+}
+.repair-table .copyable:hover {
+  color: var(--accent);
+}
+.repair-table .copyable:active {
+  opacity: 0.6;
+}
+
+/* "已复制" 浮动提示 */
+.copy-toast {
+  position: fixed;
+  transform: translate(-50%, -100%);
+  background: var(--accent);
+  color: #fff;
+  font-size: 11px; font-weight: 500;
+  padding: 3px 10px;
+  border-radius: 10px;
+  pointer-events: none;
+  z-index: 99999;
+  opacity: 0;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+  white-space: nowrap;
+}
+.copy-toast.show {
+  opacity: 1;
+  transform: translate(-50%, -110%);
+}
+
+/* 问题徽章 */
+.issue-badge {
+  display: inline-block;
+  font-size: 10px; font-weight: 600;
+  padding: 2px 8px; border-radius: 10px;
+  background: rgba(232,17,35,0.14);
+  color: #e81123;
+  white-space: normal; word-break: break-all; line-height: 1.4;
+}
+
+/* Track ID 列 */
+.col-trackid { color: var(--fg2); font-family: monospace; font-size: 11px; }
+.col-trackid.no-trackid { color: var(--fg3); font-style: italic; }
+
+/* 修复状态徽章 */
+.repair-status-badge {
+  display: inline-block;
+  font-size: 10px; font-weight: 600;
+  padding: 2px 8px; border-radius: 10px;
+  background: var(--hover); color: var(--fg2);
+  word-break: break-all; white-space: normal;
+  max-width: 100%; display: inline-block;
+}
+.repair-status-badge.repairing {
+  color: var(--accent);
+  background: rgba(251,114,153,0.14);
+}
+.repair-status-badge.repairing::before {
+  content: '';
+  display: inline-block;
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  border: 1.5px solid var(--fg3);
+  border-top-color: var(--accent);
+  animation: parse-spin 0.7s linear infinite;
+  margin-right: 4px; vertical-align: middle;
+}
+.repair-status-badge.done {
+  color: #5cb85c;
+  background: rgba(92,184,92,0.14);
+}
+.repair-status-badge.failed {
+  color: #e81123;
+  background: rgba(232,17,35,0.14);
+}
+
+/* 操作按钮 */
+.repair-one-btn {
+  padding: 4px 14px;
+  background: var(--accent); color: #fff;
+  border: none; border-radius: 6px;
+  font-size: 11px; cursor: pointer;
+  transition: opacity var(--t);
+}
+.repair-one-btn:hover { opacity: 0.9; }
+.repair-one-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+/* 手动修复按钮(需输入链接) */
+.repair-one-btn.manual {
+  background: var(--surface2); color: var(--fg);
+  border: 1px solid var(--border);
+}
+.repair-one-btn.manual:hover { background: var(--hover); }
+.repair-done-mark {
+  color: #5cb85c; font-size: 14px; font-weight: 700;
+}
+.no-trackid-tip {
+  font-size: 10px; color: var(--fg3);
+}
+
+/* 修复中行 */
+.repair-row.repairing { opacity: 0.7; }
+.repair-row.done .col-title { color: var(--fg2); }
+.repair-row.failed { }

@@ -1,0 +1,118 @@
+/* =========== 布局样式 (顶栏/导航/视图容器) =========== */
+/* ===== Top ===== */
+#top-bar {
+  height: 44px; flex-shrink: 0; z-index: 10;
+  position: relative;
+}
+.drag-region {
+  width: 100%; height: 100%;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 0 0 16px;
+  -webkit-app-region: drag;
+}
+.title-left {
+  display: flex; align-items: center; gap: 10px;
+  min-width: 0;
+}
+.app-icon {
+  width: 20px; height: 20px; color: var(--accent); flex-shrink: 0;
+}
+.app-title {
+  font-size: 13px; font-weight: 600; color: var(--fg);
+  flex-shrink: 0;
+}
+.song-count {
+  font-size: 11px; color: var(--fg3);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+.window-controls {
+  display: flex; align-items: center;
+  height: 100%;
+  -webkit-app-region: no-drag;
+}
+.window-controls button {
+  width: 46px; height: 100%;
+  background: none; border: none; color: var(--fg2);
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: background 0.15s, color 0.15s;
+}
+.window-controls button:hover { background: var(--hover); color: var(--fg); }
+.window-controls button svg { width: 12px; height: 12px; }
+.window-controls .close-btn:hover {
+  background: #e81123; color: #fff;
+}
+
+/* ===== App ===== */
+#app { flex: 1; display: flex; overflow: hidden; min-height: 0; position: relative; z-index: 1; }
+
+/* ===== Nav ===== */
+#nav {
+  width: 60px; flex-shrink: 0;
+  display: flex; flex-direction: column;
+  align-items: center; padding: 14px 0; gap: 6px;
+  border-right: 1px solid var(--border);
+}
+.nav-spacer { flex: 1; }
+.nav-item {
+  width: 40px; height: 40px;
+  background: none; border: none; color: var(--fg2);
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+  border-radius: 10px; position: relative;
+  transition: color var(--t), background var(--t);
+}
+.nav-item svg { width: 20px; height: 20px; }
+.nav-item:hover { color: var(--fg); background: var(--hover); }
+.nav-item.active { color: var(--accent); }
+/* 激活指示条: 左侧竖条 */
+.nav-item.active::before {
+  content: ''; position: absolute;
+  left: -14px; top: 50%; transform: translateY(-50%);
+  width: 3px; height: 18px;
+  background: var(--accent); border-radius: 0 2px 2px 0;
+}
+
+/* ===== Left ===== */
+#left {
+  width: 210px; flex-shrink: 0;
+  height: 100%;
+  display: flex; flex-direction: column; align-items: center;
+  justify-content: center; padding: 24px 0 32px;
+  box-sizing: border-box;
+}
+
+#empty { text-align: center; color: var(--fg3); }
+.e-icon { width: 44px; height: 44px; opacity: 0.25; margin-bottom: 12px; }
+#empty p { font-size: 12px; }
+
+/* ===== 视图容器: 列表视图 / 播放器视图 二选一 ===== */
+#view-list, #view-player {
+  flex: 1; display: flex; flex-direction: column;
+  min-width: 0; overflow: hidden;
+}
+#view-player.hidden, #view-list.hidden { display: none !important; }
+
+/* ===== 播放器视图 ===== */
+#view-player {
+  position: relative;
+  flex: 1;
+  display: flex;
+  flex-direction: row;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* 播放器主内容区: 封面(左) + 歌词(右), 纵向排列由内部自己控制;
+   作为 flex item, 它的 flex:1 会在侧边栏展开时自动收缩 */
+.player-main {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: row;
+  justify-content: center;
+  align-items: center;
+  gap: 32px;
+  overflow: hidden;
+}

@@ -1,0 +1,326 @@
+/* =========== 播放器样式 (封面/进度条/控制栏) =========== */
+#player {
+  display: flex; flex-direction: column; align-items: center;
+  gap: 22px; animation: up 0.4s ease;
+}
+@keyframes up { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
+
+/* 封面容器 */
+.cover {
+  width: 210px; height: 210px; border-radius: 16px;
+  overflow: hidden; position: relative;
+  box-shadow: 0 16px 48px rgba(0,0,0,0.4);
+}
+/* 唱片式圆盘封面: 播放时旋转, 暂停时停止 */
+/* 不在中间抠洞, 保持封面完整; 外围加黑胶转盘修饰圈 */
+.cover.disc {
+  border-radius: 50%;
+  /* 黑胶转盘外环: 多层 box-shadow 模拟黑胶边缘和同心纹理 */
+  box-shadow:
+    0 0 0 3px #0d0d0d,               /* 黑胶内圈边线 */
+    0 0 0 4px rgba(255,255,255,0.05), /* 细高光分隔 */
+    0 0 0 10px #1a1a1a,              /* 黑胶主体外圈 */
+    0 0 0 11px rgba(255,255,255,0.03),
+    0 16px 48px rgba(0,0,0,0.4);     /* 投影 */
+  animation: spin 20s linear infinite;
+  animation-play-state: paused;
+}
+.cover.disc.playing { animation-play-state: running; }
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+#cover-img { width:100%; height:100%; object-fit:cover; }
+.cover:hover #cover-img { transform: none; }
+#cover-ph {
+  position: absolute; inset: 0; background: var(--surface2);
+  display: flex; align-items: center; justify-content: center;
+  border-radius: inherit;
+}
+#cover-ph svg { width: 52px; height: 52px; color: var(--fg3); }
+
+/* 视频沉浸模式: 独占 player-main 整个区域, 隐藏封面/歌词/元信息 */
+#video-stage {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  z-index: 5;
+}
+#video-stage.hidden { display: none; }
+#video-mount {
+  width: 100%;
+  height: 100%;
+  position: relative;
+}
+#media-player {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
+  display: block;
+}
+/* 视频左下角作者信息覆盖层 */
+#video-info {
+  position: absolute;
+  left: 20px;
+  bottom: 20px;
+  z-index: 2;
+  max-width: 60%;
+  padding: 10px 14px;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(14px) saturate(160%);
+  -webkit-backdrop-filter: blur(14px) saturate(160%);
+  border-radius: 10px;
+  color: #fff;
+  pointer-events: none;
+}
+#video-title {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0 0 3px 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-shadow: 0 1px 3px rgba(0,0,0,0.7);
+}
+#video-artist {
+  font-size: 12px;
+  margin: 0;
+  color: rgba(255, 255, 255, 0.78);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.6);
+}
+/* 视频右下角操作按钮组 (收藏 + 保存到本地) */
+#video-actions {
+  position: absolute;
+  right: 20px;
+  bottom: 20px;
+  z-index: 2;
+  display: flex;
+  gap: 10px;
+}
+.video-action-btn {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(14px) saturate(160%);
+  -webkit-backdrop-filter: blur(14px) saturate(160%);
+  border: none;
+  color: #fff;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s, transform 0.15s, color 0.2s;
+}
+.video-action-btn:hover {
+  background: rgba(0, 0, 0, 0.75);
+  transform: scale(1.08);
+}
+.video-action-btn svg {
+  width: 18px;
+  height: 18px;
+}
+.video-action-btn.liked {
+  color: var(--accent, #ff4d4f);
+}
+.video-action-btn.liked svg {
+  fill: var(--accent, #ff4d4f);
+}
+/* 视频沉浸模式: 隐藏封面、元信息、歌词区, 让 #video-stage 独占 */
+body.video-mode #player,
+body.video-mode #lyrics,
+body.video-mode #left {
+  display: none !important;
+}
+
+.meta { text-align: center; }
+.meta h1 { font-size: 17px; font-weight: 700; letter-spacing: -0.01em; margin-bottom: 4px; }
+.meta p { font-size: 12px; color: var(--fg2); margin-bottom: 10px; }
+/* 作词/作曲显示行: 比 artist 更弱化的辅助信息, 但保持可读性 */
+.meta p.credits { font-size: 11px; color: var(--fg2); margin-bottom: 8px; opacity: 0.75; }
+.meta p.credits.missing { color: var(--fg3); opacity: 0.7; font-style: italic; }
+.like-btn {
+  background: none; border: none; color: var(--fg2);
+  cursor: pointer; padding: 6px; display: inline-flex;
+  align-items: center; justify-content: center;
+  border-radius: 50%; transition: color var(--t), transform 0.15s;
+}
+.like-btn svg { width: 18px; height: 18px; }
+.like-btn:hover { color: var(--accent); transform: scale(1.1); }
+.like-btn.liked { color: var(--accent); }
+.like-btn.liked svg { fill: var(--accent); }
+/* 试听模式: 收藏按钮变为"添加到歌库"按钮, 用绿色区分 */
+.like-btn.fm-add-btn:hover { color: #00c853; }
+.like-btn.fm-add-btn.liked { color: #00c853; }
+.like-btn.fm-add-btn.liked svg { stroke: #00c853; }
+/* 不推荐(倒点赞)按钮: 用红灰色区分, 激活时变深灰 */
+.dislike-btn:hover { color: #888; transform: scale(1.1); }
+.dislike-btn.disliked { color: #666; }
+.dislike-btn.disliked svg { fill: #666; }
+/* 爱心 + 分享 按钮横向排列容器 */
+.meta-actions {
+  display: inline-flex; align-items: center; gap: 4px;
+}
+/* 分享按钮 (爱心旁边): 与爱心按钮同尺寸, hover 用蓝色区分 */
+.share-btn:hover { color: #4a90e2; transform: scale(1.1); }
+.share-btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+
+/* 右侧边缘三点按钮(贴边, 半透明, 收起时显示) */
+#btn-float-list {
+  position: absolute;
+  top: 16px; right: 0;
+  width: 22px; height: 56px;
+  background: rgba(128,128,128,0.15);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: none;
+  border-radius: 8px 0 0 8px;
+  color: var(--fg2);
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: background 0.2s, color 0.2s, width 0.2s;
+  z-index: 10;
+  flex-shrink: 0;
+}
+#btn-float-list svg { width: 14px; height: 14px; }
+#btn-float-list:hover {
+  background: rgba(128,128,128,0.3);
+  color: var(--fg);
+  width: 28px;
+}
+#btn-float-list.hidden { display: none; }
+
+/* ===== Controls ===== */
+#ctrl {
+  height: 74px; flex-shrink: 0;
+  background: transparent;
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border-top: 1px solid var(--border);
+  padding: 6px 18px 12px; display: flex;
+  flex-direction: column; justify-content: center; gap: 6px;
+  position: relative; z-index: 1;
+}
+
+/* Progress */
+#pbar { display: flex; align-items: center; gap: 10px; }
+#pbar span {
+  font-size: 11px; color: var(--fg3);
+  font-variant-numeric: tabular-nums; min-width: 32px;
+}
+#pbar span:last-child { text-align: right; }
+#p-track {
+  flex: 1; height: 4px;
+  background: var(--border); border-radius: 4px;
+  cursor: pointer; position: relative;
+  transition: height 0.12s;
+}
+#p-track:hover { height: 6px; }
+#p-fill {
+  height: 100%; width: 0%;
+  /* 启用自定义色: --progress-bg 存在时用自定义渐变; 否则用封面多彩渐变, 回退主色 */
+  background: var(--progress-bg, var(--cover-progress-gradient, var(--cover-accent, var(--accent))));
+  border-radius: 4px; position: relative; transition: width 0.05s linear, background 0.3s ease;
+}
+#p-track:hover #p-fill::after {
+  content: ''; position: absolute; right: -6px; top: 50%;
+  transform: translateY(-50%);
+  width: 12px; height: 12px; background: var(--cover-accent, var(--accent));
+  border-radius: 50%; box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+}
+
+/* Buttons */
+#btns { display: flex; align-items: center; justify-content: space-between; }
+.b-l, .b-r { width: 240px; display: flex; align-items: center; gap: 8px; }
+.b-r { justify-content: flex-end; }
+.b-c { display: flex; align-items: center; gap: 10px; }
+
+/* 正在播放迷你条(点击切换到播放器视图) */
+#now-playing {
+  display: flex; align-items: center; gap: 10px;
+  cursor: pointer; padding: 4px 10px 4px 4px;
+  border-radius: 10px; transition: background var(--t);
+  min-width: 0; max-width: 240px;
+}
+#now-playing:hover { background: var(--hover); }
+#now-playing.hidden { display: none; }
+#np-cover {
+  width: 38px; height: 38px; border-radius: 6px;
+  object-fit: cover; background: var(--surface2); flex-shrink: 0;
+}
+#np-ph {
+  width: 38px; height: 38px; border-radius: 6px; flex-shrink: 0;
+  background: var(--surface2); display: flex;
+  align-items: center; justify-content: center;
+}
+#np-ph svg { width: 18px; height: 18px; color: var(--fg3); }
+.np-info { min-width: 0; }
+#np-title {
+  font-size: 12px; font-weight: 500; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis;
+}
+#np-artist {
+  font-size: 10px; color: var(--fg2); white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis;
+}
+
+.b-c button {
+  background: none; border: none; color: var(--fg);
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+  transition: opacity var(--t);
+}
+.b-c button:hover { opacity: 0.65; }
+#btn-prev, #btn-next { width: 30px; height: 30px; }
+#btn-prev svg, #btn-next svg { width: 14px; height: 14px; }
+
+#btn-play {
+  width: 40px; height: 40px;
+  background: var(--accent); color: #fff;
+  border: none; border-radius: 50%; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: background var(--t), transform 0.15s; flex-shrink: 0;
+}
+#btn-play:hover { background: var(--accent-dim); transform: scale(1.06); }
+#btn-play svg { width: 18px; height: 18px; }
+
+#btn-mode, #btn-desktop-lyric, #btn-lyric-lock {
+  background: none; border: none; color: var(--fg);
+  cursor: pointer; width: 28px; height: 28px;
+  display: flex; align-items: center; justify-content: center;
+  transition: opacity var(--t), color var(--t);
+}
+#btn-mode:hover, #btn-desktop-lyric:hover, #btn-lyric-lock:hover { opacity: 0.65; }
+#btn-mode svg, #btn-desktop-lyric svg, #btn-lyric-lock svg { width: 15px; height: 15px; }
+#btn-desktop-lyric.active, #btn-lyric-lock.active { color: var(--accent); opacity: 1; }
+#btn-lyric-lock.hidden { display: none; }
+
+/* Volume */
+.vol { position: relative; }
+#btn-vol {
+  background: none; border: none; color: var(--fg);
+  cursor: pointer; padding: 4px; display: flex;
+  align-items: center; justify-content: center;
+  transition: opacity var(--t);
+}
+#btn-vol:hover { opacity: 0.65; }
+#btn-vol svg { width: 17px; height: 17px; }
+
+#vol-pop {
+  position: absolute; bottom: 38px; left: 50%; transform: translateX(-50%);
+  background: rgba(var(--bg-rgb), var(--glass-opacity));
+  backdrop-filter: blur(16px) saturate(150%);
+  -webkit-backdrop-filter: blur(16px) saturate(150%);
+  border: 1px solid var(--border);
+  border-radius: var(--r); padding: 10px 6px; z-index: 20;
+}
+#vol-slider { -webkit-appearance: slider-vertical; width: 18px; height: 90px; cursor: pointer; }

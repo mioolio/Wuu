@@ -1,0 +1,134 @@
+/* =========== 统计视图样式 (总览卡片/排行榜) =========== */
+/* ===== 统计视图 ===== */
+#view-stats {
+  flex: 1; display: flex; flex-direction: column;
+  overflow: hidden; min-width: 0;
+}
+.stats-head {
+  padding: 22px 28px 12px; flex-shrink: 0;
+}
+.stats-head h2 { font-size: 22px; font-weight: 700; letter-spacing: -0.01em; }
+
+.stats-body {
+  flex: 1; overflow-y: auto; padding: 8px 28px 28px;
+}
+/* 总览卡片网格 */
+.stats-overview {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr 1fr;
+  gap: 14px; margin-bottom: 28px;
+}
+.stat-card {
+  background: rgba(var(--bg-rgb), 0.4);
+  backdrop-filter: blur(16px) saturate(150%);
+  -webkit-backdrop-filter: blur(16px) saturate(150%);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 18px 20px;
+  display: flex; flex-direction: column; gap: 6px;
+  transition: transform 0.2s, border-color var(--t);
+}
+.stat-card:hover { transform: translateY(-2px); border-color: var(--cover-accent, var(--accent)); }
+.stat-card.primary {
+  background: linear-gradient(135deg, rgba(255,255,255,0.04), transparent);
+  backdrop-filter: blur(16px) saturate(150%);
+  -webkit-backdrop-filter: blur(16px) saturate(150%);
+  border-color: var(--cover-accent, var(--accent));
+}
+.stat-card .stat-label {
+  font-size: 11px; color: var(--fg2);
+  letter-spacing: 0.02em; text-transform: uppercase;
+}
+.stat-card .stat-value {
+  font-size: 28px; font-weight: 700; color: var(--fg);
+  font-variant-numeric: tabular-nums; line-height: 1.1;
+}
+.stat-card.primary .stat-value { font-size: 34px; color: var(--cover-accent, var(--accent)); }
+.stat-card .stat-sub {
+  font-size: 11px; color: var(--fg3);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 排行榜 */
+.stats-ranking { margin-top: 8px; }
+.ranking-head {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 14px;
+}
+.ranking-head h3 { font-size: 16px; font-weight: 600; }
+.ranking-tabs { display: flex; gap: 4px; }
+.ranking-tab {
+  background: none; border: 1px solid var(--border);
+  color: var(--fg2); padding: 6px 12px;
+  border-radius: 16px; font-size: 11px; cursor: pointer;
+  transition: color var(--t), background var(--t), border-color var(--t);
+}
+.ranking-tab:hover { color: var(--fg); }
+.ranking-tab.active {
+  color: var(--accent); border-color: var(--accent);
+  background: rgba(251,114,153,0.08);
+}
+
+#ranking-list { list-style: none; }
+#ranking-empty { text-align: center; color: var(--fg3); padding: 60px 0; font-size: 13px; }
+
+.rank-item {
+  display: flex; align-items: center; gap: 14px;
+  padding: 10px 14px; border-radius: var(--r-sm);
+  cursor: pointer; transition: background 0.12s;
+}
+.rank-item:hover { background: var(--hover); }
+.rank-item.cur { background: var(--active); }
+.rank-item.cur .rk-name { color: var(--accent); }
+
+.rank-num {
+  width: 28px; text-align: center; flex-shrink: 0;
+  font-size: 14px; font-weight: 700; color: var(--fg3);
+  font-variant-numeric: tabular-nums;
+}
+.rank-item:nth-child(1) .rank-num { color: var(--accent); font-size: 16px; }
+.rank-item:nth-child(2) .rank-num { color: var(--accent-dim); font-size: 16px; }
+.rank-item:nth-child(3) .rank-num { color: var(--accent-dim); font-size: 16px; }
+
+.rank-thumb {
+  width: 44px; height: 44px; border-radius: 8px;
+  object-fit: cover; background: var(--surface2); flex-shrink: 0;
+}
+.rank-ph {
+  width: 44px; height: 44px; border-radius: 8px;
+  background: var(--surface2); flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+}
+.rank-ph svg { width: 20px; height: 20px; color: var(--fg3); }
+
+.rank-info { min-width: 0; flex: 1; }
+.rk-name {
+  font-size: 13px; font-weight: 500; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis;
+}
+.rk-artist {
+  font-size: 11px; color: var(--fg2); white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; margin-top: 2px;
+}
+
+/* 排行榜统计列 + 进度条 */
+.rank-stats {
+  display: flex; flex-direction: column; align-items: flex-end;
+  gap: 4px; flex-shrink: 0; min-width: 110px;
+}
+.rk-value {
+  font-size: 13px; color: var(--fg); font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.rk-sub {
+  font-size: 10px; color: var(--fg3);
+  font-variant-numeric: tabular-nums;
+}
+.rk-bar {
+  width: 100%; height: 3px; background: var(--border);
+  border-radius: 2px; overflow: hidden;
+}
+.rk-bar-fill {
+  height: 100%; background: var(--accent);
+  border-radius: 2px; transition: width 0.4s ease;
+}

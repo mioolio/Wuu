@@ -1,0 +1,10 @@
+# 用户指定排除
+config/
+output/
+node_modules/
+
+# 抓取工具产生的浏览器缓存与数据
+tools/netease-capture/
+
+# IDE
+.vs/

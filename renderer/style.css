@@ -1,0 +1,17 @@
+/* =========== SQET 音乐播放器 - 样式入口 =========== */
+/* 各功能样式已拆分到 styles/ 目录, 通过 @import 按顺序加载 */
+@import url('styles/base.css');
+@import url('styles/layout.css');
+@import url('styles/player.css');
+@import url('styles/list.css');
+@import url('styles/lyrics.css');
+@import url('styles/stats.css');
+@import url('styles/free-music.css');
+@import url('styles/kugou-import.css');
+@import url('styles/qishui-import.css');
+@import url('styles/netease-import.css');
+@import url('styles/settings.css');
+@import url('styles/parse.css');
+@import url('styles/repair.css');
+@import url('styles/playlist-share.css');
+@import url('styles/management.css');

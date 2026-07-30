@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>wuu 音乐播放器</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header id="top-bar">
+    <div class="drag-region">
+      <div class="title-left">
+        <svg viewBox="0 0 24 24" fill="currentColor" class="app-icon"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg>
+        <span class="app-title">Wuu 音乐</span>
+      </div>
+      <div class="window-controls">
+        <button id="btn-minimize" title="最小化">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        </button>
+        <button id="btn-maximize" title="最大化">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>
+        </button>
+        <button id="btn-close" title="关闭" class="close-btn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="6" y1="6" x2="18" y2="18"/><line x1="6" y1="18" x2="18" y2="6"/></svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <div id="app">
+    <!-- 左侧导航栏 -->
+    <nav id="nav">
+      <button class="nav-item active" data-view="home" title="推荐">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+      </button>
+      <button class="nav-item" data-view="list" title="音乐列表">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+      </button>
+      <button class="nav-item" data-view="liked" title="我喜欢的音乐">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
+      </button>
+      <button class="nav-item" data-view="import" title="音乐导入">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="16.5" y1="9.4" x2="7.5" y2="4.21"/><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
+      </button>
+      <button class="nav-item" data-view="free-music" title="免费听音乐">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+      </button>
+      <button class="nav-item" data-view="repair" title="修复">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+      </button>
+      <button class="nav-item" data-view="stats" title="音乐统计">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+      </button>
+      <button class="nav-item" data-view="playlist" title="歌单分享">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg>
+      </button>
+      <button class="nav-item" data-view="management" title="不推荐管理">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="transform:rotate(180deg)"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-3.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>
+      </button>
+      <div class="nav-spacer"></div>
+      <button class="nav-item" data-view="settings" title="设置">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+      </button>
+    </nav>
+
+    <!-- 列表视图(推荐 / 我喜欢) -->
+    <section id="view-list">
+      <div class="list-head">
+        <h2 id="list-title">推荐</h2>
+        <input id="search" placeholder="搜索歌曲..." />
+        <button id="btn-create-collection" class="group-toggle" title="新建歌单">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="13" x2="12" y2="17"/><line x1="10" y1="15" x2="14" y2="15"/></svg>
+        </button>
+        <button id="btn-group-artist" class="group-toggle" title="按歌手分组">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        </button>
+      </div>
+      <div class="list-body">
+        <ul id="list"></ul>
+        <div id="list-empty" class="hidden">
+          <p>暂无歌曲</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- 播放器视图(封面 + 歌词) -->
+    <section id="view-player" class="hidden">
+      <div id="player-main" class="player-main">
+        <div id="left">
+          <div id="empty">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="e-icon">
+              <path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>
+            </svg>
+            <p>选择一首歌开始播放</p>
+          </div>
+          <div id="player" class="hidden">
+            <div class="cover">
+              <img id="cover-img" src="" alt="" />
+              <div id="cover-ph" class="hidden">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+              </div>
+            </div>
+            <div class="meta">
+              <h1 id="title"></h1>
+              <p id="artist"></p>
+              <p id="credits" class="credits"></p>
+              <div class="meta-actions">
+                <button id="btn-like" class="like-btn" title="收藏">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
+                </button>
+                <button id="btn-dislike" class="like-btn dislike-btn" title="不推荐">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="transform:rotate(180deg)"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-3.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>
+                </button>
+                <button id="btn-share" class="like-btn share-btn" title="快速分享">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <section id="lyrics" class="hidden">
+          <div id="lyrics-inner"></div>
+        </section>
+        <!-- 视频沉浸模式: 独占整个 player-main 区域, 不走转盘/歌词布局 -->
+        <div id="video-stage" class="hidden">
+          <div id="video-mount"></div>
+          <div id="video-info">
+            <h2 id="video-title"></h2>
+            <p id="video-artist"></p>
+          </div>
+          <div id="video-actions">
+            <button id="btn-video-like" class="video-action-btn" title="收藏">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
+            </button>
+            <button id="btn-video-save" class="video-action-btn" title="保存到本地">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 右侧边缘三点按钮(贴边, 半透明, 收起时显示) -->
+      <button id="btn-float-list" title="展开播放列表" class="hidden">
+        <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>
+      </button>
+
+      <!-- 内嵌可展开播放列表(右侧滑出, 展开时主内容区自动收缩) -->
+      <aside id="float-list-wrap" class="hidden">
+        <div id="float-list">
+          <div class="fl-head">
+            <span>播放列表</span>
+            <button id="btn-fl-close" title="收起">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          </div>
+          <div class="fl-search">
+            <input id="fl-search" placeholder="搜索歌曲..." />
+          </div>
+          <ul id="fl-list"></ul>
+        </div>
+      </aside>
+    </section>
+
+    <!-- 设置视图 (内容由 fragments/settings.html 同步注入) -->
+    <section id="view-settings" class="hidden"></section>
+
+    <!-- 统计视图(总览 + 排行榜) (内容由 fragments/stats.html 同步注入) -->
+    <section id="view-stats" class="hidden"></section>
+
+    <!-- 音乐导入视图 (汽水/酷狗/网易云, 由 fragments/import.html 同步注入) -->
+    <section id="view-import" class="hidden"></section>
+
+    <!-- 免费听音乐专区 (内容由 fragments/free-music.html 同步注入) -->
+    <section id="view-free-music" class="hidden"></section>
+
+    <!-- 修复视图 (内容由 fragments/repair.html 同步注入) -->
+    <section id="view-repair" class="hidden"></section>
+
+    <!-- 歌单分享视图 (内容由 fragments/playlist.html 同步注入) -->
+    <section id="view-playlist-share" class="hidden"></section>
+
+    <!-- 不推荐管理视图 (内容由 fragments/management.html 同步注入) -->
+    <section id="view-management" class="hidden"></section>
+  </div>
+
+  <!-- 模态对话框容器 (内容由 fragments/modals.html 同步注入) -->
+  <div id="modals-container"></div>
+
+  <!-- 底部 (内容由 fragments/footer.html 同步注入) -->
+  <footer id="ctrl"></footer>
+
+  <!-- 同步加载各功能区 HTML 片段(在模块脚本之前执行, 确保 DOM 元素可用) -->
+  <script>
+    (function() {
+      function loadFragmentSync(url, targetId, isContainer) {
+        try {
+          var xhr = new XMLHttpRequest();
+          xhr.open('GET', url, false);
+          xhr.send();
+          if (xhr.status === 200 || xhr.status === 0) {
+            var target = document.getElementById(targetId);
+            if (target) {
+              if (isContainer) target.innerHTML = xhr.responseText;
+              else target.innerHTML = xhr.responseText;
+            }
+          }
+        } catch (e) { console.error('Failed to load fragment:', url, e); }
+      }
+      loadFragmentSync('fragments/settings.html', 'view-settings');
+      loadFragmentSync('fragments/stats.html', 'view-stats');
+      loadFragmentSync('fragments/import.html', 'view-import');
+      loadFragmentSync('fragments/free-music.html', 'view-free-music');
+      loadFragmentSync('fragments/repair.html', 'view-repair');
+      loadFragmentSync('fragments/playlist.html', 'view-playlist-share');
+      loadFragmentSync('fragments/management.html', 'view-management');
+      loadFragmentSync('fragments/modals.html', 'modals-container');
+      loadFragmentSync('fragments/footer.html', 'ctrl');
+    })();
+  </script>
+
+  <script src="modules/dom.js"></script>
+  <script src="modules/state.js"></script>
+  <script src="modules/utils.js"></script>
+  <script src="modules/data.js"></script>
+  <script src="modules/desktop-lyric-sync.js"></script>
+  <script src="modules/cover.js"></script>
+  <script src="modules/lrc.js"></script>
+  <script src="modules/list.js"></script>
+  <script src="modules/views.js"></script>
+  <script src="modules/settings.js"></script>
+  <script src="modules/player-core.js"></script>
+  <script src="modules/events.js"></script>
+  <script src="modules/parse.js"></script>
+  <script src="modules/repair.js"></script>
+  <script src="modules/free-music/init.js"></script>
+  <script src="modules/free-music/search.js"></script>
+  <script src="modules/free-music/player.js"></script>
+  <script src="modules/free-music/save.js"></script>
+  <script src="modules/kugou-import/init.js"></script>
+  <script src="modules/kugou-import/login.js"></script>
+  <script src="modules/kugou-import/playlists.js"></script>
+  <script src="modules/kugou-import/preview.js"></script>
+  <script src="modules/qishui-import/init.js"></script>
+  <script src="modules/qishui-import/login.js"></script>
+  <script src="modules/qishui-import/playlists.js"></script>
+  <script src="modules/qishui-import/preview.js"></script>
+  <script src="modules/netease-import/init.js"></script>
+  <script src="modules/netease-import/login.js"></script>
+  <script src="modules/netease-import/playlists.js"></script>
+  <script src="modules/netease-import/preview.js"></script>
+  <script src="modules/playlist-share.js"></script>
+  <script src="modules/management.js"></script>
+  <script src="modules/init.js"></script>
+</body>
+</html>

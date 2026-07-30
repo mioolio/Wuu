@@ -1,0 +1,148 @@
+/* =========== 基础样式 (重置/变量/主题/工具类) =========== */
+/* ===== Reset ===== */
+*, *::before, *::after { margin:0; padding:0; box-sizing:border-box; }
+
+/* ===== Dark ===== */
+:root {
+  --bg-rgb: 10, 10, 10;
+  --bg: #0a0a0a;
+  --bg2: #141414;
+  --surface: #1a1a1a;
+  --surface2: #222;
+  --fg: rgba(255,255,255,0.92);
+  --fg2: rgba(255,255,255,0.50);
+  --fg3: rgba(255,255,255,0.22);
+  --border: rgba(255,255,255,0.06);
+  --hover: rgba(255,255,255,0.04);
+  --active: rgba(255,255,255,0.08);
+  --accent: #fb7299;
+  --accent-dim: #e05a82;
+  --lyric-done-opacity: 0.90;
+  --lyric-wait-opacity: 0.55;
+  --lyric-done: rgba(255,255,255,var(--lyric-done-opacity));
+  --lyric-wait: rgba(255,255,255,var(--lyric-wait-opacity));
+  --lyric-size: 15px;
+  --r: 14px;
+  --r-sm: 8px;
+  --t: 0.28s cubic-bezier(0.4,0,0.2,1);
+  --lw: 260px;
+  --glass-opacity: 0.72;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg-rgb: 246, 247, 248;
+    --bg: #f6f7f8;
+    --bg2: #ecedf0;
+    --surface: #fff;
+    --surface2: #f3f4f6;
+    --fg: rgba(0,0,0,0.88);
+    --fg2: rgba(0,0,0,0.48);
+    --fg3: rgba(0,0,0,0.22);
+    --border: rgba(0,0,0,0.06);
+    --hover: rgba(0,0,0,0.03);
+    --active: rgba(0,0,0,0.06);
+    --accent: #fb7299;
+    --accent-dim: #e05a82;
+    --lyric-done-opacity: 0.88;
+    --lyric-wait-opacity: 0.55;
+    --lyric-done: rgba(0,0,0,var(--lyric-done-opacity));
+    --lyric-wait: rgba(0,0,0,var(--lyric-wait-opacity));
+  }
+}
+
+/* ===== Base ===== */
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  background: rgba(var(--bg-rgb), var(--glass-opacity));
+  color: var(--fg);
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+  position: relative;
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border-radius: 8px;
+}
+/* 动态背景层: 全屏渐变覆盖整个界面, 渐变字符串由 player.js 注入 --cover-gradient */
+/* 切歌时通过 --cover-opacity 做 fade 过渡(0.3s 淡出 → 换渐变 → 0.3s 淡入) */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: var(--cover-gradient, transparent);
+  opacity: var(--cover-opacity, 0);
+  pointer-events: none;
+  z-index: 0;
+  transition: opacity 0.3s ease;
+}
+
+/* ===== 通用工具类 ===== */
+.hidden { display: none !important; }
+
+/* ===== Toast 通知 ===== */
+.app-toast {
+  position: fixed; top: 24px; left: 50%; transform: translateX(-50%) translateY(-80px);
+  z-index: 9999; padding: 12px 28px; border-radius: 24px;
+  font-size: 13px; font-weight: 500; color: #fff;
+  opacity: 0; pointer-events: none;
+  transition: opacity 0.3s ease, transform 0.3s ease;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.25);
+  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  max-width: 80vw; text-align: center;
+}
+.app-toast-show { opacity: 1; transform: translateX(-50%) translateY(0); }
+.app-toast-success { background: rgba(0, 200, 83, 0.9); }
+.app-toast-error { background: rgba(232, 17, 35, 0.9); }
+.app-toast-info { background: rgba(0, 120, 212, 0.9); }
+
+/* ===== 全局滚动条: 首页列表完全隐藏, 其他容器 Overlay 现代风格 ===== */
+/* Firefox: 全局细而半透明, hover 加深 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--fg3, rgba(255,255,255,0.18)) transparent;
+}
+*:hover {
+  scrollbar-color: var(--fg2, rgba(255,255,255,0.40)) transparent;
+}
+/* WebKit / Chromium: 全局基础样式 */
+::-webkit-scrollbar {
+  width: 10px; height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+  margin: 4px 0;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--fg3, rgba(255,255,255,0.18));
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  transition: background 0.25s ease;
+}
+*:hover::-webkit-scrollbar-thumb {
+  background: var(--fg2, rgba(255,255,255,0.40));
+  background-clip: padding-box;
+}
+*:hover::-webkit-scrollbar-thumb:hover {
+  background: var(--fg, rgba(255,255,255,0.65));
+  background-clip: padding-box;
+}
+*:active::-webkit-scrollbar-thumb {
+  background: var(--fg, rgba(255,255,255,0.65));
+  background-clip: padding-box;
+}
+/* 首页列表容器: 完全隐藏滚动条 (保留滚轮/触摸滚动能力)
+   用户偏好简洁现代风格, 滚动条突兀影响视觉一致性 */
+.list-body {
+  scrollbar-width: none;  /* Firefox */
+  -ms-overflow-style: none;  /* IE/Edge */
+}
+.list-body::-webkit-scrollbar {
+  display: none;  /* WebKit/Chromium */
+  width: 0;
+  height: 0;
+}

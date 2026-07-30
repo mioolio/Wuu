@@ -1,0 +1,87 @@
+<!-- 歌单分享与导入视图 (渐进式展开 + 折叠卡片) -->
+<div class="playlist-view">
+  <!-- 顶部行: 标题 + 服务器状态徽章 -->
+  <div class="pl-top-bar">
+    <h2 class="pl-page-title">歌单分享</h2>
+    <span id="pl-server-badge" class="pl-server-badge"></span>
+  </div>
+
+  <!-- 主体: 左右双栏 -->
+  <div class="pl-main-grid">
+    <!-- ============ 左栏: 生成新分享 ============ -->
+    <div class="pl-section pl-section-export">
+      <h3 class="pl-section-title">生成新分享</h3>
+
+      <!-- 选择来源 -->
+      <div class="pl-form-row">
+        <label class="pl-form-label">歌曲来源</label>
+        <div id="pl-export-sources" class="pl-export-sources">
+          <!-- 快选项由 JS 动态生成: 全部歌曲 + 各收藏歌单 -->
+        </div>
+      </div>
+
+      <!-- 歌单名称 -->
+      <div class="pl-form-row">
+        <label class="pl-form-label">歌单名称 <span class="pl-form-hint">(可选, 留空自动命名)</span></label>
+        <input id="pl-export-name" class="pl-input" placeholder="未命名歌单" />
+      </div>
+
+      <!-- 警告 + 生成按钮 (点击打开二级菜单) -->
+      <div id="pl-export-warn" class="pl-export-warn hidden"></div>
+      <div class="pl-form-row pl-export-actions">
+        <button id="pl-export-btn" class="pl-btn primary" disabled>生成分享链接</button>
+      </div>
+
+      <!-- 操作提示 -->
+      <div class="pl-export-hint">
+        点击"生成分享链接"后在弹窗中选择有效期和访问次数
+      </div>
+    </div>
+
+    <!-- ============ 右栏: 已生成的分享 (折叠卡片列表) ============ -->
+    <div class="pl-section pl-section-manage">
+      <div class="pl-manage-head">
+        <h3 class="pl-section-title">已生成的分享</h3>
+        <div class="pl-manage-actions">
+          <button id="pl-refresh-shared" class="pl-btn pl-btn-mini">刷新</button>
+        </div>
+      </div>
+      <div id="pl-shared-empty" class="pl-shared-empty hidden">尚未生成任何分享</div>
+      <div id="pl-shared-list" class="pl-shared-list">
+        <!-- 由 JS 动态渲染为可折叠卡片 -->
+        <div id="pl-shared-sentinel" class="pl-shared-sentinel hidden">
+          <span class="pl-shared-sentinel-text">加载中...</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ 底部: 导入区 (整宽) ============ -->
+  <div class="pl-section pl-section-import">
+    <h3 class="pl-section-title">导入歌单</h3>
+    <div class="pl-import-form">
+      <input id="pl-import-link" class="pl-input" placeholder="粘贴 wuu:// 分享链接" />
+      <input id="pl-import-key" class="pl-input pl-key-input" placeholder="解密密钥" />
+      <button id="pl-parse-btn" class="pl-btn primary">解析歌单</button>
+      <button id="pl-import-crt-btn" class="pl-btn">导入 CRT 文件</button>
+    </div>
+    <div id="pl-import-status" class="pl-status hidden"></div>
+    <div id="pl-import-list-wrap" class="pl-list-wrap hidden">
+      <div class="pl-list-head">
+        <span id="pl-playlist-name" class="pl-playlist-name"></span>
+        <div class="pl-list-actions">
+          <label class="pl-check-all"><input type="checkbox" id="pl-check-all" checked /> 全选</label>
+          <button id="pl-download-all" class="pl-btn primary">下载选中</button>
+          <span id="pl-download-count" class="pl-download-count"></span>
+        </div>
+      </div>
+      <div class="pl-list-body">
+        <ul id="pl-import-list"></ul>
+      </div>
+      <div id="pl-progress-wrap" class="pl-progress-wrap hidden">
+        <div class="pl-progress-bar"><div id="pl-progress-fill" class="pl-progress-fill"></div></div>
+        <span id="pl-progress-text" class="pl-progress-text"></span>
+      </div>
+    </div>
+  </div>
+</div>

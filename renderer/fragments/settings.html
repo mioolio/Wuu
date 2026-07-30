@@ -1,0 +1,298 @@
+<!-- 设置视图 -->
+      <div class="settings-head">
+        <h2>设置</h2>
+      </div>
+      <div class="settings-body">
+        <div class="settings-group">
+          <div class="settings-item">
+            <div class="settings-info">
+              <div class="settings-label">显示展开播放列表按钮</div>
+              <div class="settings-desc">在播放器视图右侧显示展开播放列表的贴边按钮</div>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="setting-show-float-btn" checked>
+              <span class="switch-slider"></span>
+            </label>
+          </div>
+          <div class="settings-item">
+            <div class="settings-info">
+              <div class="settings-label">全局透明度</div>
+              <div class="settings-desc">调节毛玻璃面板的不透明度</div>
+            </div>
+            <div class="slider-wrap">
+              <input type="range" id="setting-glass-opacity" min="0.3" max="0.95" step="0.01" value="0.72">
+              <span id="glass-opacity-val">72%</span>
+            </div>
+          </div>
+          <div class="settings-item">
+            <div class="settings-info">
+              <div class="settings-label">唱片圆盘封面</div>
+              <div class="settings-desc">启用后封面以圆形唱片形式显示，播放时旋转</div>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="setting-disc-cover" checked>
+              <span class="switch-slider"></span>
+            </label>
+          </div>
+          <div class="settings-item">
+            <div class="settings-info">
+              <div class="settings-label">推荐页颜色浓度</div>
+              <div class="settings-desc">调节推荐页动态背景的色彩饱和度</div>
+            </div>
+            <div class="slider-wrap">
+              <input type="range" id="setting-color-intensity" min="0.2" max="1.0" step="0.05" value="0.85">
+              <span id="color-intensity-val">85%</span>
+            </div>
+          </div>
+          <div class="settings-item">
+            <div class="settings-info">
+              <div class="settings-label">其他页面跟随封面配色</div>
+              <div class="settings-desc">开启后列表/统计/设置/解析等页面也会应用当前歌曲封面的渐变背景</div>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="setting-theme-follow-cover">
+              <span class="switch-slider"></span>
+            </label>
+          </div>
+          <div class="settings-item">
+            <div class="settings-info">
+              <div class="settings-label">封面统一性</div>
+              <div class="settings-desc">开启后试听模式下换源时保持原封面不变 (与列表显示一致), 切歌时正常更新为新封面; 关闭后换源时封面跟随新源变化</div>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="setting-cover-change" checked>
+              <span class="switch-slider"></span>
+            </label>
+          </div>
+          <div class="settings-item">
+            <div class="settings-info">
+              <div class="settings-label">桌面歌词持久化</div>
+              <div class="settings-desc">开启后每次启动软件自动打开桌面歌词, 无需手动开启</div>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="setting-lyric-persist">
+              <span class="switch-slider"></span>
+            </label>
+          </div>
+          <div class="settings-item">
+            <div class="settings-info">
+              <div class="settings-label">桌面歌词位置</div>
+              <div class="settings-desc">拖动桌面歌词窗口后位置自动保存; 点击重置恢复默认居中位置</div>
+            </div>
+            <button id="setting-lyric-reset" class="pl-btn">重置位置</button>
+          </div>
+          <div class="settings-item">
+          <div class="settings-info">
+            <div class="settings-label">低精度歌词模拟走字</div>
+            <div class="settings-desc">对无逐字精度的歌词(行级LRC),在两行时间戳间均匀模拟逐字填充进度,获得近似走字效果(默认关闭)</div>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="setting-simulate-lrc">
+            <span class="switch-slider"></span>
+          </label>
+        </div>
+        <div class="settings-item">
+          <div class="settings-info">
+            <div class="settings-label">歌手分组模式</div>
+            <div class="settings-desc">桶包含: "洛天依/言和"共创歌曲归入"洛天依/言和"一个分组; 拆分: 拆成"洛天依"和"言和"两个分组, 歌曲同时出现在各自分组下 (支持 / ／ & ＆ 、 , ， ; ； | feat./ft./with/x 分隔符)</div>
+          </div>
+          <div class="select-wrap">
+            <select id="setting-artist-group-mode">
+              <option value="bucket">桶包含 (默认)</option>
+              <option value="split">拆分多歌手</option>
+            </select>
+          </div>
+        </div>
+          <div class="settings-item">
+            <div class="settings-info">
+              <div class="settings-label">进度条颜色</div>
+              <div class="settings-desc">启用后使用自定义颜色(支持两色渐变过渡), 关闭则跟随当前歌曲封面色</div>
+            </div>
+            <div class="progress-color-wrap">
+              <label class="switch switch-inline">
+                <input type="checkbox" id="setting-progress-color-enabled">
+                <span class="switch-slider"></span>
+              </label>
+              <input type="color" id="setting-progress-color" value="#fb7299" title="起点颜色">
+              <input type="color" id="setting-progress-color-2" value="#ff5e8a" title="终点颜色">
+              <button id="progress-color-reset" class="color-reset-btn" title="重置为默认粉色">重置</button>
+            </div>
+          </div>
+          <div class="settings-item">
+            <div class="settings-info">
+              <div class="settings-label">歌词深度</div>
+              <div class="settings-desc">已唱歌词的颜色深度（数值越高越清晰）</div>
+            </div>
+            <div class="slider-wrap">
+              <input type="range" id="setting-lyric-done" min="0.4" max="1.0" step="0.05" value="0.90">
+              <span id="lyric-done-val">90%</span>
+            </div>
+          </div>
+          <div class="settings-item">
+            <div class="settings-info">
+              <div class="settings-label">歌词浅度</div>
+              <div class="settings-desc">未唱歌词的颜色浅度（数值越低越淡）</div>
+            </div>
+            <div class="slider-wrap">
+              <input type="range" id="setting-lyric-wait" min="0.1" max="0.8" step="0.05" value="0.55">
+              <span id="lyric-wait-val">55%</span>
+            </div>
+          </div>
+          <div class="settings-item">
+            <div class="settings-info">
+              <div class="settings-label">歌词字体大小</div>
+              <div class="settings-desc">调节歌词显示的字体大小（12px-24px）</div>
+            </div>
+            <div class="slider-wrap">
+              <input type="range" id="setting-lyric-size" min="12" max="24" step="1" value="15">
+              <span id="lyric-size-val">15px</span>
+            </div>
+          </div>
+          <div class="settings-item">
+            <div class="settings-info">
+              <div class="settings-label">长歌词跑马灯</div>
+              <div class="settings-desc">当歌词超出容器宽度时, 启用横向滚动展示完整内容(先停留再滚动, 循环播放)。关闭后回退到字号缩放</div>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="setting-marquee-enabled" checked>
+              <span class="switch-slider"></span>
+            </label>
+          </div>
+          <div class="settings-item">
+            <div class="settings-info">
+              <div class="settings-label">跑马灯速度</div>
+              <div class="settings-desc">横向滚动速度（30-150 像素/秒, 值越大滚动越快）</div>
+            </div>
+            <div class="slider-wrap">
+              <input type="range" id="setting-marquee-speed" min="30" max="150" step="5" value="60">
+              <span id="marquee-speed-val">60 px/s</span>
+            </div>
+          </div>
+          <div class="settings-item">
+            <div class="settings-info">
+              <div class="settings-label">跑马灯启动阈值</div>
+              <div class="settings-desc">歌词宽度达到容器宽度的多少倍时启动跑马灯（1.0=刚好超出即启动, 1.5=超出50%才启动）</div>
+            </div>
+            <div class="slider-wrap">
+              <input type="range" id="setting-marquee-threshold" min="1.0" max="2.0" step="0.1" value="1.0">
+              <span id="marquee-threshold-val">1.0x</span>
+            </div>
+          </div>
+          <div class="settings-item">
+            <div class="settings-info">
+              <div class="settings-label">跑马灯停留时间</div>
+              <div class="settings-desc">歌词滚动到两端时的停留时间（0.5-3.0 秒）</div>
+            </div>
+            <div class="slider-wrap">
+              <input type="range" id="setting-marquee-pause" min="0.5" max="3.0" step="0.1" value="1.5">
+              <span id="marquee-pause-val">1.5s</span>
+            </div>
+          </div>
+          <div class="settings-item">
+            <div class="settings-info">
+              <div class="settings-label">暂停音量淡出</div>
+              <div class="settings-desc">点击暂停时音量在 0.5 秒内平滑淡出（类似网易云音乐），关闭后立即暂停</div>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="setting-fade-pause" checked>
+              <span class="switch-slider"></span>
+            </label>
+          </div>
+
+        </div>
+        <div class="settings-group">
+          <div class="settings-group-title">网络服务</div>
+          <div class="settings-item">
+            <div class="settings-info">
+              <div class="settings-label">开启歌单分享服务</div>
+              <div class="settings-desc">开启后本地启动 HTTP 服务器, 允许其他设备通过 wuu:// 链接拉取你的歌单。默认关闭, 仅在需要分享时开启</div>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="setting-server-enabled">
+              <span class="switch-slider"></span>
+            </label>
+          </div>
+          <div class="settings-item">
+            <div class="settings-info">
+              <div class="settings-label">服务端口</div>
+              <div class="settings-desc">HTTP 服务器监听端口 (1-65535), 默认 30967</div>
+            </div>
+            <div class="port-input-wrap">
+              <input type="number" id="setting-server-port" min="1" max="65535" value="30967" class="port-input">
+              <span id="server-status-text" class="server-status-text"></span>
+            </div>
+          </div>
+          <div class="settings-item">
+            <div class="settings-info">
+              <div class="settings-label">对外地址</div>
+              <div class="settings-desc">生成分享链接时使用的地址。软件部署在公网服务器或使用内网穿透时, 自动获取的本机 IP 可能是内网地址 (如 192.168.1.4), 此处可固定为公网 IP 或域名, <b>不含端口号</b> (端口由"远程端口"控制)。例: 8.153.37.78 或 example.com</div>
+            </div>
+            <div class="port-input-wrap" style="gap:8px;flex-wrap:wrap;">
+              <select id="setting-public-host-mode" style="min-width:120px;padding:8px 12px;border:1px solid var(--border);border-radius:8px;background:var(--input-bg);color:var(--fg);font-size:13px;outline:none;">
+                <option value="auto">自动获取</option>
+                <option value="manual">手动指定</option>
+              </select>
+              <input type="text" id="setting-public-host" class="port-input" placeholder="8.153.37.78 或 example.com" style="flex:1;min-width:180px;">
+            </div>
+          </div>
+          <div class="settings-item">
+            <div class="settings-info">
+              <div class="settings-label">远程端口</div>
+              <div class="settings-desc">生成分享链接时使用的端口。frp 等内网穿透转发时, 远程端口可能与本地服务端口不同 (如本地 30967 → 公网 18967), 此处填入公网侧端口。留空则使用"服务端口"。</div>
+            </div>
+            <div class="port-input-wrap">
+              <input type="number" id="setting-public-port" min="0" max="65535" placeholder="留空=使用服务端口" class="port-input">
+            </div>
+          </div>
+          <div class="settings-item settings-item-collapsible">
+            <div class="settings-collapsible-header" id="setting-server-advanced-toggle">
+              <span class="settings-label">高级网络设置 (IP 绑定 + 白名单 + 频率限制 + 日志)</span>
+              <span class="settings-collapse-icon">▼</span>
+            </div>
+            <div class="settings-collapsible-body hidden">
+              <div class="settings-sub-item">
+                <div class="settings-info">
+                  <div class="settings-label">IP 源绑定</div>
+                  <div class="settings-desc">0.0.0.0 = 监听所有网卡 (允许局域网访问); 127.0.0.1 = 仅本机访问; 或填入特定网卡 IP</div>
+                </div>
+                <div class="select-wrap">
+                  <select id="setting-server-bind-ip">
+                    <option value="0.0.0.0">所有网卡 (0.0.0.0)</option>
+                    <option value="127.0.0.1">仅本机 (127.0.0.1)</option>
+                  </select>
+                </div>
+              </div>
+              <div class="settings-sub-item">
+                <div class="settings-info">
+                  <div class="settings-label">客户端 IP 白名单</div>
+                  <div class="settings-desc">每行一个 IP, 支持通配符 (如 192.168.*.*)。留空 = 允许所有 IP 访问; 本机始终放行</div>
+                </div>
+                <textarea id="setting-server-whitelist" class="whitelist-input" rows="4" placeholder="192.168.1.100&#10;10.0.*.*&#10;留空表示允许所有"></textarea>
+              </div>
+              <div class="settings-sub-item">
+                <div class="settings-info">
+                  <div class="settings-label">频率限制 (每 IP / 分钟)</div>
+                  <div class="settings-desc">限制每个客户端 IP 每分钟最大请求数, 防止恶意刷接口。0 = 不限制; 推荐 30~120。本机访问不受限制</div>
+                </div>
+                <div class="rate-limit-wrap">
+                  <input type="number" id="setting-server-rate-limit" min="0" max="10000" value="0" class="port-input">
+                  <span class="rate-limit-unit">次/分钟</span>
+                </div>
+              </div>
+              <div class="settings-sub-item">
+                <div class="settings-info">
+                  <div class="settings-label">访问日志记录</div>
+                  <div class="settings-desc">开启后记录每个客户端的访问行为 (哪个 IP 下载了哪首歌/访问了哪个歌单), 最多保留 500 条</div>
+                </div>
+                <div class="access-log-wrap">
+                  <label class="switch switch-inline">
+                    <input type="checkbox" id="setting-server-access-log">
+                    <span class="switch-slider"></span>
+                  </label>
+                  <button id="setting-server-view-logs" class="pl-btn">查看日志</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>

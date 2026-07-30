@@ -1,0 +1,372 @@
+<!-- 音乐导入视图 (汽水/酷狗/网易云 三平台统一入口) -->
+      <div class="imp-head">
+        <h2>音乐导入</h2>
+        <p class="imp-tip">从汽水音乐 / 酷狗音乐 / 网易云音乐 导入歌单到本地歌库</p>
+      </div>
+
+      <!-- 平台切换 Tab -->
+      <div class="imp-platform-tabs">
+        <button class="imp-tab-btn active" data-imp-tab="qishui">汽水音乐</button>
+        <button class="imp-tab-btn" data-imp-tab="kugou">酷狗音乐</button>
+        <button class="imp-tab-btn" data-imp-tab="netease">网易云音乐</button>
+      </div>
+
+      <!-- ===== 汽水音乐面板 ===== -->
+      <div id="imp-qishui-panel" class="imp-panel">
+        <div class="qs-head">
+          <p class="qs-tip">登录汽水音乐账号, 导入歌单中的歌曲到本地歌库(支持本地解密)</p>
+        </div>
+
+        <!-- 未登录: 登录区域 -->
+        <div id="qs-login-area" class="qs-login-area">
+          <!-- 已保存账号列表(多账号切换) -->
+          <div id="qs-accounts-area" class="qs-accounts-area hidden">
+            <p class="qs-accounts-title">选择账号登录</p>
+            <div id="qs-accounts-list" class="qs-accounts-list"></div>
+            <button id="qs-add-account" class="qs-btn qs-btn-primary qs-add-account-btn">添加新账号</button>
+          </div>
+          <button id="qs-back-to-accounts" class="qs-back-btn hidden">← 返回账号列表</button>
+          <!-- 登录方式切换 -->
+          <div class="qs-login-toggle">
+            <button class="qs-tab-btn active" data-qs-tab="qrcode">扫码登录</button>
+            <button class="qs-tab-btn" data-qs-tab="oneclick">一键登录</button>
+            <button class="qs-tab-btn" data-qs-tab="file">文件登录</button>
+            <button class="qs-tab-btn" data-qs-tab="manual">参数登录</button>
+          </div>
+
+          <!-- 扫码登录面板 -->
+          <div id="qs-qrcode-panel" class="qs-login-panel">
+            <div id="qs-qr-loading" class="qs-qr-loading">
+              <p>正在生成二维码...</p>
+            </div>
+            <div id="qs-qr-img-wrap" class="qs-qr-img-wrap hidden">
+              <img id="qs-qr-img" src="" alt="QR Code" />
+            </div>
+            <p id="qs-qr-hint" class="qs-qr-hint">请使用抖音/汽水音乐APP扫码登录</p>
+            <button id="qs-qr-refresh" class="qs-btn">刷新二维码</button>
+          </div>
+
+          <!-- 一键登录面板 -->
+          <div id="qs-oneclick-panel" class="qs-login-panel hidden">
+            <div id="qs-peek-user" class="qs-peek-user hidden">
+              <img id="qs-peek-avatar" src="" alt="" class="qs-peek-avatar" />
+              <div class="qs-peek-info">
+                <span id="qs-peek-name" class="qs-peek-name"></span>
+                <span id="qs-peek-vip" class="qs-vip-badge hidden">VIP</span>
+              </div>
+            </div>
+            <p class="qs-oneclick-hint">自动读取本地汽水音乐客户端Cookie登录(需先退出汽水音乐PC端)</p>
+            <button id="qs-oneclick-btn" class="qs-btn qs-btn-primary">一键登录</button>
+            <p id="qs-oneclick-status" class="qs-status-msg hidden"></p>
+          </div>
+
+          <!-- 文件登录面板 -->
+          <div id="qs-file-panel" class="qs-login-panel hidden">
+            <p class="qs-file-hint">上传汽水音乐Cookie文件(位于 %AppData%\SodaMusic\Network\Cookies)</p>
+            <input id="qs-file-input" type="file" accept=".sqlite,.db" />
+            <button id="qs-file-login" class="qs-btn qs-btn-primary" disabled>登录</button>
+            <p id="qs-file-status" class="qs-status-msg hidden"></p>
+          </div>
+
+          <!-- 参数登录面板 -->
+          <div id="qs-manual-panel" class="qs-login-panel hidden">
+            <div class="qs-form-group">
+              <label>平台</label>
+              <select id="qs-manual-platform">
+                <option value="pc">PC (aid=386088)</option>
+                <option value="android">Android (aid=234123)</option>
+              </select>
+            </div>
+            <div class="qs-form-group">
+              <label>sessionid</label>
+              <input id="qs-manual-sessionid" type="text" placeholder="输入sessionid" />
+            </div>
+            <button id="qs-manual-login" class="qs-btn qs-btn-primary">登录</button>
+          </div>
+        </div>
+
+        <!-- 已登录: 歌单列表 + 导入 -->
+        <div id="qs-logged-area" class="qs-logged-area hidden">
+          <!-- 用户信息栏 -->
+          <div class="qs-user-bar">
+            <div class="qs-user-info">
+              <img id="qs-user-avatar" src="" alt="" class="qs-avatar hidden" />
+              <div id="qs-user-avatar-ph" class="qs-avatar-ph">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="8" r="4"/><path d="M4 20a8 8 0 0116 0"/></svg>
+              </div>
+              <span id="qs-user-name" class="qs-user-name"></span>
+              <span id="qs-user-vip" class="qs-vip-badge hidden">VIP</span>
+            </div>
+            <button id="qs-logout" class="qs-btn">退出登录</button>
+          </div>
+
+          <!-- 歌单列表 -->
+          <div id="qs-playlists" class="qs-playlists">
+            <div class="qs-playlist-tabs">
+              <button class="qs-pl-tab-btn active" data-qs-pl-tab="created">我创建的歌单</button>
+              <button class="qs-pl-tab-btn" data-qs-pl-tab="collected">我收藏的歌单</button>
+            </div>
+            <div id="qs-playlist-grid" class="qs-playlist-grid"></div>
+          </div>
+
+          <!-- 歌曲列表 -->
+          <div id="qs-track-list-wrap" class="qs-track-list-wrap hidden">
+            <div class="qs-track-head">
+              <button id="qs-back-to-playlists" class="qs-btn">← 返回歌单列表</button>
+              <span id="qs-playlist-title" class="qs-track-title"></span>
+            </div>
+            <div class="qs-table-wrap" id="qs-table-wrap">
+              <table class="qs-track-table">
+                <thead>
+                  <tr>
+                    <th class="col-cover"></th>
+                    <th class="col-title">歌曲名</th>
+                    <th class="col-artist">歌手</th>
+                    <th class="col-album">专辑</th>
+                    <th class="col-duration">时长</th>
+                    <th class="col-tags">标签</th>
+                    <th class="col-action">操作</th>
+                  </tr>
+                </thead>
+                <tbody id="qs-track-list"></tbody>
+              </table>
+              <div id="qs-scroll-sentinel" class="qs-scroll-sentinel" style="height:1px;"></div>
+            </div>
+          </div>
+
+          <!-- 导入进度 -->
+          <div id="qs-progress" class="qs-progress hidden">
+            <div class="qs-progress-bar"><div id="qs-progress-fill"></div></div>
+            <div id="qs-progress-text" class="qs-progress-text"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ===== 酷狗音乐面板 ===== -->
+      <div id="imp-kugou-panel" class="imp-panel hidden">
+        <div class="kg-head">
+          <p class="kg-tip">登录酷狗音乐账号, 导入歌单中的歌曲(含高精度逐字歌词)到本地歌库</p>
+        </div>
+
+        <!-- 未登录: 登录区域 -->
+        <div id="kg-login-area" class="kg-login-area">
+          <!-- 已保存账号列表(多账号切换) -->
+          <div id="kg-accounts-area" class="kg-accounts-area hidden">
+            <p class="kg-accounts-title">选择账号登录</p>
+            <div id="kg-accounts-list" class="kg-accounts-list"></div>
+            <button id="kg-add-account" class="kg-btn kg-btn-primary kg-add-account-btn">添加新账号</button>
+          </div>
+          <!-- 返回账号列表 -->
+          <button id="kg-back-to-accounts" class="kg-back-btn hidden">← 返回账号列表</button>
+          <!-- 登录方式切换 (toggle slider) -->
+          <div id="kg-login-toggle" class="kg-login-toggle">
+            <button class="kg-tab-btn active" data-kg-tab="qr">扫码登录</button>
+            <button class="kg-tab-btn" data-kg-tab="phone">手机登录</button>
+          </div>
+
+          <!-- 扫码登录面板 -->
+          <div id="kg-qr-panel" class="kg-login-panel">
+            <div id="kg-qr-loading" class="kg-qr-loading hidden">
+              <p>正在生成二维码...</p>
+            </div>
+            <div id="kg-qr-img-wrap" class="kg-qr-img-wrap hidden">
+              <img id="kg-qr-img" src="" alt="QR Code" />
+            </div>
+            <p id="kg-qr-hint" class="kg-qr-hint">请使用酷狗音乐APP扫码登录</p>
+            <button id="kg-qr-refresh" class="kg-btn">刷新二维码</button>
+          </div>
+
+          <!-- 手机登录面板 -->
+          <div id="kg-phone-panel" class="kg-login-panel hidden">
+            <div class="kg-form-group">
+              <input id="kg-phone-input" type="tel" placeholder="手机号" />
+            </div>
+            <div class="kg-form-group kg-code-row">
+              <input id="kg-code-input" type="text" placeholder="验证码" />
+              <button id="kg-send-code" class="kg-btn">发送验证码</button>
+            </div>
+            <button id="kg-phone-login" class="kg-btn kg-btn-primary">登录</button>
+          </div>
+
+          <!-- 多账号选择 -->
+          <div id="kg-account-select" class="kg-account-select hidden">
+            <p>请选择要登录的账号:</p>
+            <div id="kg-account-list"></div>
+          </div>
+        </div>
+
+        <!-- 已登录: 歌单列表 + 导入 -->
+        <div id="kg-logged-area" class="kg-logged-area hidden">
+          <!-- 用户信息栏 -->
+          <div class="kg-user-bar">
+            <div class="kg-user-info">
+              <img id="kg-user-avatar" src="" alt="" class="kg-avatar hidden" />
+              <div id="kg-user-avatar-ph" class="kg-avatar-ph">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="8" r="4"/><path d="M4 20a8 8 0 0116 0"/></svg>
+              </div>
+              <span id="kg-user-name" class="kg-user-name"></span>
+              <span id="kg-user-vip" class="kg-vip-badge hidden">VIP</span>
+            </div>
+            <button id="kg-logout" class="kg-btn">退出登录</button>
+          </div>
+
+          <!-- 歌单列表 -->
+          <div class="kg-playlist-section">
+            <div class="kg-section-head">
+              <h3>我的歌单</h3>
+              <span id="kg-playlist-count" class="kg-count"></span>
+            </div>
+            <div id="kg-playlists" class="kg-playlists">
+              <p class="kg-empty-hint hidden" id="kg-playlist-empty">暂无歌单</p>
+            </div>
+          </div>
+
+          <!-- 歌单曲目列表 -->
+          <div id="kg-tracks-section" class="kg-tracks-section hidden">
+            <div class="kg-section-head">
+              <div class="kg-tracks-head-left">
+                <button id="kg-back-to-playlists" class="kg-btn">← 返回歌单</button>
+                <h3 id="kg-current-playlist"></h3>
+              </div>
+              <div class="kg-tracks-head-right">
+                <select id="kg-quality-select" class="kg-quality-select" title="导入音质">
+                  <option value="128">128K</option>
+                  <option value="320">320K</option>
+                  <option value="flac" selected>无损 FLAC</option>
+                  <option value="high">高品质 HiRes</option>
+                </select>
+                <button id="kg-import-selected" class="kg-btn">导入选中</button>
+                <button id="kg-import-all" class="kg-btn kg-btn-primary">导入全部</button>
+              </div>
+            </div>
+            <div class="kg-table-wrap">
+              <table class="kg-table">
+                <thead>
+                  <tr>
+                    <th class="col-check"><input type="checkbox" id="kg-check-all" /></th>
+                    <th class="col-idx">#</th>
+                    <th class="col-cover">封面</th>
+                    <th class="col-name">歌曲名</th>
+                    <th class="col-artist">歌手</th>
+                    <th class="col-album">专辑</th>
+                    <th class="col-duration">时长</th>
+                    <th class="col-action">操作</th>
+                    <th class="col-import-status">导入状态</th>
+                  </tr>
+                </thead>
+                <tbody id="kg-tracks"></tbody>
+              </table>
+            </div>
+            <!-- 导入进度条 -->
+            <div id="kg-import-progress" class="kg-import-progress hidden">
+              <div class="kg-progress-bar"><div id="kg-progress-fill"></div></div>
+              <div id="kg-progress-text" class="kg-progress-text"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ===== 网易云音乐面板 ===== -->
+      <div id="imp-netease-panel" class="imp-panel hidden">
+        <div class="wy-head">
+          <p class="wy-tip">登录网易云音乐账号, 导入歌单中的歌曲到本地歌库(支持扫码/Cookie登录)</p>
+        </div>
+
+        <!-- 未登录: 登录区域 -->
+        <div id="wy-login-area" class="wy-login-area">
+          <!-- 已保存账号列表(多账号切换) -->
+          <div id="wy-accounts-area" class="wy-accounts-area hidden">
+            <p class="wy-accounts-title">选择账号登录</p>
+            <div id="wy-accounts-list" class="wy-accounts-list"></div>
+            <button id="wy-add-account" class="wy-btn wy-btn-primary wy-add-account-btn">添加新账号</button>
+          </div>
+          <button id="wy-back-to-accounts" class="wy-back-btn hidden">← 返回账号列表</button>
+          <!-- 登录方式切换 -->
+          <div id="wy-login-toggle" class="wy-login-toggle">
+            <button class="wy-tab-btn active" data-wy-tab="qr">扫码登录</button>
+            <button class="wy-tab-btn" data-wy-tab="cookie">Cookie 导入</button>
+          </div>
+
+          <!-- 扫码登录面板 -->
+          <div id="wy-qr-panel" class="wy-login-panel">
+            <div id="wy-qr-loading" class="wy-qr-loading">
+              <p>正在生成二维码...</p>
+            </div>
+            <div id="wy-qr-img-wrap" class="wy-qr-img-wrap hidden">
+              <img id="wy-qr-img" src="" alt="QR Code" />
+            </div>
+            <p id="wy-qr-hint" class="wy-qr-hint">请使用网易云音乐APP扫码登录</p>
+            <button id="wy-qr-refresh" class="wy-btn">刷新二维码</button>
+          </div>
+
+          <!-- Cookie 导入面板 -->
+          <div id="wy-cookie-panel" class="wy-login-panel hidden">
+            <p class="wy-cookie-hint">在浏览器登录网易云音乐后, F12 → Application → Cookies, 复制 music.163.com 域下所有 cookie(必须含 MUSIC_U), 粘贴到下方</p>
+            <textarea id="wy-cookie-input" class="wy-cookie-input" rows="4" placeholder="MUSIC_U=xxx; __csrf=yyy; NMTID=zzz; ..."></textarea>
+            <button id="wy-cookie-login" class="wy-btn wy-btn-primary" disabled>登录</button>
+            <p id="wy-cookie-status" class="wy-status-msg hidden"></p>
+          </div>
+        </div>
+
+        <!-- 已登录: 歌单列表 + 导入 -->
+        <div id="wy-logged-area" class="wy-logged-area hidden">
+          <!-- 用户信息栏 -->
+          <div class="wy-user-bar">
+            <div class="wy-user-info">
+              <img id="wy-user-avatar" src="" alt="" class="wy-avatar hidden" />
+              <div id="wy-user-avatar-ph" class="wy-avatar-ph">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="8" r="4"/><path d="M4 20a8 8 0 0116 0"/></svg>
+              </div>
+              <span id="wy-user-name" class="wy-user-name"></span>
+              <span id="wy-user-vip" class="wy-vip-badge hidden">VIP</span>
+            </div>
+            <button id="wy-logout" class="wy-btn">退出登录</button>
+          </div>
+
+          <!-- 歌单列表 -->
+          <div id="wy-playlists" class="wy-playlists">
+            <div class="wy-playlist-tabs">
+              <button class="wy-pl-tab-btn active" data-wy-pl-tab="created">我创建的歌单</button>
+              <button class="wy-pl-tab-btn" data-wy-pl-tab="collected">我收藏的歌单</button>
+            </div>
+            <div id="wy-playlist-grid" class="wy-playlist-grid"></div>
+          </div>
+
+          <!-- 歌曲列表 -->
+          <div id="wy-track-list-wrap" class="wy-track-list-wrap hidden">
+            <div class="wy-track-head">
+              <button id="wy-back-to-playlists" class="wy-btn">← 返回歌单列表</button>
+              <span id="wy-playlist-title" class="wy-track-title"></span>
+              <div class="wy-tracks-head-right">
+                <select id="wy-quality-select" class="wy-quality-select" title="导入音质">
+                  <option value="standard">标准 128K</option>
+                  <option value="exhigh">极高 320K</option>
+                  <option value="lossless" selected>无损 FLAC</option>
+                </select>
+              </div>
+            </div>
+            <div class="wy-table-wrap" id="wy-table-wrap">
+              <table class="wy-track-table">
+                <thead>
+                  <tr>
+                    <th class="col-cover"></th>
+                    <th class="col-title">歌曲名</th>
+                    <th class="col-artist">歌手</th>
+                    <th class="col-album">专辑</th>
+                    <th class="col-duration">时长</th>
+                    <th class="col-tags">标签</th>
+                    <th class="col-action">操作</th>
+                  </tr>
+                </thead>
+                <tbody id="wy-track-list"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- 导入进度 -->
+          <div id="wy-progress" class="wy-progress hidden">
+            <div class="wy-progress-bar"><div id="wy-progress-fill"></div></div>
+            <div id="wy-progress-text" class="wy-progress-text"></div>
+          </div>
+        </div>
+      </div>

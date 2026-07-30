@@ -1,0 +1,140 @@
+/* =========== 音乐导入统一容器 (三平台 Tab + 视图) =========== */
+#view-import { flex: 1; min-width: 0; display: flex; flex-direction: column; padding: 16px 20px; overflow: hidden; }
+#view-import::-webkit-scrollbar { display: none; }
+
+/* 头部 */
+.imp-head { margin-bottom: 12px; }
+.imp-head h2 { font-size: 20px; margin: 0 0 4px 0; }
+.imp-tip { color: var(--fg2); font-size: 12px; margin: 0; }
+
+/* 平台切换 Tab (汽水/酷狗/网易云) */
+.imp-platform-tabs { display: flex; gap: 4px; padding: 4px; border-radius: 10px; background: var(--active); margin-bottom: 16px; }
+.imp-tab-btn { padding: 8px 24px; border: none; background: transparent; color: var(--fg2); font-size: 13px; cursor: pointer; border-radius: 8px; transition: all 0.2s; }
+.imp-tab-btn.active { background: var(--surface); color: var(--fg); box-shadow: 0 1px 3px rgba(0,0,0,0.15); }
+.imp-tab-btn:hover:not(.active) { color: var(--fg); }
+
+/* 面板容器 */
+.imp-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.imp-panel.hidden { display: none !important; }
+
+/* =========== 网易云音乐导入样式 (镜像 kg-* 样式, 使用 wy-* 前缀) =========== */
+.wy-head { margin-bottom: 12px; }
+.wy-head h2 { font-size: 20px; margin: 0 0 4px 0; }
+.wy-tip { color: var(--fg2); font-size: 12px; margin: 0; }
+
+/* 登录区域 */
+.wy-login-area { display: flex; flex-direction: column; align-items: center; padding: 20px 0; flex: 1; }
+.wy-login-toggle { display: flex; gap: 4px; padding: 4px; border-radius: 10px; background: var(--active); margin-bottom: 24px; }
+.wy-tab-btn { padding: 8px 24px; border: none; background: transparent; color: var(--fg2); font-size: 13px; cursor: pointer; border-radius: 8px; transition: all 0.2s; }
+.wy-tab-btn.active { background: var(--surface); color: var(--fg); box-shadow: 0 1px 3px rgba(0,0,0,0.15); }
+.wy-login-panel { display: flex; flex-direction: column; align-items: center; gap: 12px; min-height: 280px; }
+
+/* 二维码 */
+.wy-qr-loading { display: flex; align-items: center; justify-content: center; height: 200px; color: var(--fg2); }
+.wy-qr-img-wrap { width: 200px; height: 200px; padding: 12px; background: var(--surface); border: 2px solid var(--border); border-radius: 12px; box-shadow: 0 2px 12px rgba(0,0,0,0.08); }
+.wy-qr-img-wrap img { width: 100%; height: 100%; object-fit: contain; }
+.wy-qr-hint { color: var(--fg2); font-size: 13px; margin: 0; }
+
+/* Cookie 导入 */
+.wy-cookie-hint { color: var(--fg2); font-size: 12px; text-align: center; max-width: 460px; line-height: 1.6; }
+.wy-cookie-input { width: 460px; max-width: 100%; padding: 10px 14px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--fg); font-size: 13px; font-family: Consolas, "Courier New", monospace; outline: none; box-sizing: border-box; resize: vertical; }
+.wy-cookie-input:focus { border-color: var(--accent); }
+.wy-status-msg { color: var(--fg2); font-size: 12px; margin: 0; }
+
+/* 通用按钮 */
+.wy-btn { padding: 8px 16px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface2); color: var(--fg); font-size: 13px; cursor: pointer; transition: background 0.2s; }
+.wy-btn:hover:not(:disabled) { background: var(--hover); }
+.wy-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.wy-btn-primary { background: var(--accent); color: #fff; border: none; }
+.wy-btn-primary:hover:not(:disabled) { background: var(--accent-dim); }
+.wy-btn-icon { padding: 3px 6px; font-size: 13px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface2); color: var(--fg); cursor: pointer; transition: background 0.2s; margin-left: 4px; vertical-align: middle; display: inline-flex; align-items: center; justify-content: center; }
+.wy-btn-icon:hover { background: var(--hover); }
+
+/* 多账号切换区域 (已保存账号列表) */
+.wy-accounts-area { width: 340px; display: flex; flex-direction: column; gap: 12px; padding: 8px 0; }
+.wy-accounts-title { font-size: 14px; color: var(--fg2); margin: 0; text-align: center; }
+.wy-accounts-list { display: flex; flex-direction: column; gap: 8px; }
+.wy-account-item { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; transition: all 0.2s; background: var(--surface); }
+.wy-account-item:hover { border-color: var(--accent); background: var(--hover); }
+.wy-account-avatar { width: 40px; height: 40px; border-radius: 50%; object-fit: cover; flex-shrink: 0; background: var(--surface2); }
+.wy-account-info { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; }
+.wy-account-name { font-size: 14px; font-weight: 500; color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wy-account-actions { display: flex; gap: 4px; flex-shrink: 0; align-items: center; }
+.wy-switch-account { padding: 4px 10px; font-size: 12px; }
+.wy-remove-account { width: 28px; height: 28px; border: none; }
+.wy-remove-account:hover { background: rgba(244,67,54,0.12); color: #f44336; }
+.wy-remove-account svg { width: 14px; height: 14px; }
+.wy-add-account-btn { margin-top: 4px; }
+.wy-back-btn { align-self: center; padding: 6px 12px; border: none; background: transparent; color: var(--fg2); font-size: 12px; cursor: pointer; margin-bottom: 12px; border-radius: 6px; transition: all 0.2s; }
+.wy-back-btn:hover { color: var(--accent); background: var(--hover); }
+.wy-current-tag { font-size: 10px; padding: 1px 6px; border-radius: 4px; background: rgba(251,114,153,0.18); color: var(--accent); }
+
+/* 已登录区域 */
+.wy-logged-area { flex: 1; overflow-y: auto; display: flex; flex-direction: column; }
+/* 用户信息栏 */
+.wy-user-bar { display: flex; align-items: center; justify-content: space-between; padding: 8px 0 12px 0; border-bottom: 1px solid var(--border); margin-bottom: 16px; }
+.wy-user-info { display: flex; align-items: center; gap: 10px; }
+.wy-avatar, .wy-avatar-ph { width: 32px; height: 32px; border-radius: 50%; object-fit: cover; flex-shrink: 0; display: flex; align-items: center; justify-content: center; background: var(--surface2); }
+.wy-avatar-ph svg { width: 20px; height: 20px; color: var(--fg2); }
+.wy-user-name { font-size: 14px; font-weight: 500; color: var(--fg); }
+.wy-vip-badge { padding: 2px 8px; border-radius: 4px; background: linear-gradient(135deg, #ffd700, #ffed4e); color: #8b4513; font-size: 11px; font-weight: 700; }
+
+/* 歌单区域 */
+.wy-playlist-tabs { display: flex; gap: 4px; padding: 4px; border-radius: 10px; background: var(--active); margin-bottom: 16px; }
+.wy-pl-tab-btn { padding: 6px 20px; border: none; background: transparent; color: var(--fg2); font-size: 13px; cursor: pointer; border-radius: 8px; transition: all 0.2s; }
+.wy-pl-tab-btn.active { background: var(--surface); color: var(--fg); box-shadow: 0 1px 3px rgba(0,0,0,0.15); }
+.wy-playlist-grid { display: flex; flex-wrap: wrap; gap: 10px; align-content: flex-start; }
+.wy-pl-card { display: flex; align-items: center; gap: 10px; padding: 10px; border-radius: 10px; background: var(--surface); border: 1px solid var(--border); cursor: pointer; transition: all 0.2s; width: calc(33.33% - 7px); min-width: 200px; box-sizing: border-box; }
+.wy-pl-card:hover { border-color: var(--accent); background: var(--hover); }
+.wy-pl-cover { width: 50px; height: 50px; border-radius: 8px; overflow: hidden; flex-shrink: 0; background: var(--surface2); display: flex; align-items: center; justify-content: center; }
+.wy-pl-cover img { width: 100%; height: 100%; object-fit: cover; }
+.wy-pl-cover-ph svg { width: 24px; height: 24px; color: var(--fg3); }
+.wy-pl-info { flex: 1; min-width: 0; }
+.wy-pl-name { font-size: 13px; font-weight: 500; color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wy-pl-count { font-size: 11px; color: var(--fg2); margin-top: 2px; }
+.wy-loading-hint { color: var(--fg2); font-size: 13px; text-align: center; padding: 24px; width: 100%; }
+
+/* 曲目列表 */
+.wy-track-list-wrap { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+.wy-track-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.wy-track-title { font-size: 15px; font-weight: 500; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wy-tracks-head-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.wy-quality-select { padding: 6px 24px 6px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--fg); font-size: 12px; cursor: pointer; outline: none; appearance: none; -webkit-appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 6px center; }
+.wy-quality-select:focus { border-color: var(--accent); }
+.wy-table-wrap { flex: 1; overflow-y: auto; }
+.wy-track-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.wy-track-table thead { position: sticky; top: 0; z-index: 1; background: var(--bg2); }
+.wy-track-table th { padding: 8px 6px; text-align: left; font-weight: 500; color: var(--fg2); font-size: 12px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.wy-track-table td { padding: 6px; border-bottom: 1px solid var(--border); color: var(--fg); }
+.wy-track-table tbody tr:hover { background: var(--hover); }
+.wy-track-table .col-cover { width: 40px; }
+.wy-track-table .col-title { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wy-track-table .col-artist { max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg2); }
+.wy-track-table .col-album { max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg2); }
+.wy-track-table .col-duration { width: 60px; text-align: center; color: var(--fg2); }
+.wy-track-table .col-tags { width: 100px; white-space: nowrap; }
+.wy-track-table .col-action { width: 130px; text-align: center; white-space: nowrap; }
+
+/* 单首导入按钮 */
+.wy-import-one { padding: 3px 10px; font-size: 12px; }
+.wy-import-one:disabled { opacity: 0.5; cursor: not-allowed; }
+.wy-copy-name { padding: 3px 6px; }
+.wy-copy-name svg { width: 14px; height: 14px; display: block; }
+
+/* 点击交互 */
+.wy-clickable { cursor: pointer; transition: opacity 0.15s; }
+.wy-clickable:hover { opacity: 0.7; }
+.wy-song-cover { width: 32px; height: 32px; border-radius: 4px; object-fit: cover; }
+.wy-song-cover-ph { width: 32px; height: 32px; border-radius: 4px; background: var(--surface2); }
+.wy-loading-cell, .wy-error-cell { text-align: center; padding: 20px; color: var(--fg2); }
+
+/* 标签 */
+.wy-tag { display: inline-block; padding: 2px 8px; border-radius: 8px; font-size: 11px; margin-right: 4px; }
+.wy-tag-vip { background: rgba(212, 160, 23, 0.15); color: #d4a017; }
+.wy-tag-album { background: rgba(229, 62, 62, 0.15); color: #e53e3e; }
+
+/* 导入进度条 */
+.wy-progress { margin-top: 10px; padding: 10px 0; }
+.wy-progress-bar { height: 6px; background: var(--active); border-radius: 3px; overflow: hidden; }
+.wy-progress-bar > div { height: 100%; background: var(--accent); border-radius: 3px; transition: width 0.3s ease; }
+.wy-progress-text { font-size: 12px; color: var(--fg2); margin-top: 6px; text-align: center; }

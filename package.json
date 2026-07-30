@@ -1,0 +1,71 @@
+{
+  "name": "wuu-music",
+  "version": "1.0.0",
+  "description": "简洁现代化的音乐播放器",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder",
+    "build:dir": "electron-builder --dir",
+    "postinstall": "node scripts/patch-kugoumusicapi.js"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0"
+  },
+  "dependencies": {
+    "jpeg-js": "^0.4.4",
+    "sql.js": "^1.12.0"
+  },
+  "build": {
+    "appId": "com.wuu.music",
+    "productName": "Wuu Music",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "core/**/*",
+      "audio/**/*",
+      "soda/**/*",
+      "cover/**/*",
+      "window/**/*",
+      "download/**/*",
+      "repair/**/*",
+      "free-music/**/*",
+      "kugou/**/*",
+      "qishui/**/*",
+      "server/**/*",
+      "playlist/**/*",
+      "renderer/**/*",
+      "parsers/**/*",
+      "go-music-dl-main/**/*",
+      "music-dl.exe",
+      "node_modules/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "config/",
+        "to": "config/",
+        "filter": [
+          "*.json"
+        ]
+      }
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "go-music-dl-main/desktop/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "installerIcon": "go-music-dl-main/desktop/icon.ico",
+      "uninstallerIcon": "go-music-dl-main/desktop/icon.ico",
+      "installerHeaderIcon": "go-music-dl-main/desktop/icon.ico"
+    }
+  }
+}
