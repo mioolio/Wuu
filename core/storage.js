@@ -14,11 +14,34 @@ function ensureConfigDir() {
 }
 
 // ---- userdata.json ----
+function _emptyUserData() {
+  return { likes: [], dislikes: [], collections: [], stats: {}, progress: {}, lastSession: null, actualDuration: {}, settings: {} };
+}
+
+// 备份损坏的 userdata 文件, 便于事后恢复 (不覆盖已有备份)
+function _backupCorruptFile(reason) {
+  try {
+    const ts = new Date().toISOString().replace(/[:.]/g, '-');
+    const backupFile = path.join(configDir, `userdata.json.corrupt-${ts}`);
+    fs.copyFileSync(userDataFile, backupFile);
+    console.error(`[storage] userdata.json 解析失败(${reason}), 已备份到 ${backupFile}`);
+  } catch (e) {
+    console.error(`[storage] userdata.json 解析失败(${reason}), 备份也失败:`, e.message);
+  }
+}
+
 function readUserData() {
   ensureConfigDir();
-  if (!fs.existsSync(userDataFile)) return { likes: [], dislikes: [], collections: [], stats: {}, progress: {}, lastSession: null, actualDuration: {}, settings: {} };
+  if (!fs.existsSync(userDataFile)) return _emptyUserData();
+  let raw;
   try {
-    const data = JSON.parse(fs.readFileSync(userDataFile, 'utf-8'));
+    raw = fs.readFileSync(userDataFile, 'utf-8');
+  } catch (e) {
+    console.error('[storage] 读取 userdata.json 失败:', e.message);
+    return _emptyUserData();
+  }
+  try {
+    const data = JSON.parse(raw);
     return {
       likes: Array.isArray(data.likes) ? data.likes : [],
       // 不推荐(倒点赞)列表: [{ path, ts }]
@@ -33,13 +56,18 @@ function readUserData() {
       settings: data.settings && typeof data.settings === 'object' ? data.settings : {},
     };
   } catch (e) {
-    return { likes: [], dislikes: [], collections: [], stats: {}, progress: {}, lastSession: null, actualDuration: {}, settings: {} };
+    // 解析失败: 文件损坏(多半是写盘被中断导致截断)
+    // 先备份损坏文件, 再返回空默认值, 避免下次 saveUserData 直接覆写导致原始数据彻底丢失
+    _backupCorruptFile(e.message);
+    return _emptyUserData();
   }
 }
 
+// 原子写: 先写到 .tmp 临时文件, 写成功后再 rename 覆盖目标文件
+// 避免写盘过程中被中断(崩溃/断电/任务管理器杀进程)导致 userdata.json 截断损坏
 function writeUserData(data) {
   ensureConfigDir();
-  fs.writeFileSync(userDataFile, JSON.stringify({
+  const payload = JSON.stringify({
     likes: Array.isArray(data.likes) ? data.likes : [],
     dislikes: Array.isArray(data.dislikes) ? data.dislikes : [],
     collections: Array.isArray(data.collections) ? data.collections : [],
@@ -48,7 +76,17 @@ function writeUserData(data) {
     lastSession: data.lastSession && typeof data.lastSession === 'object' ? data.lastSession : null,
     actualDuration: data.actualDuration && typeof data.actualDuration === 'object' ? data.actualDuration : {},
     settings: data.settings && typeof data.settings === 'object' ? data.settings : {},
-  }, null, 2), 'utf-8');
+  }, null, 2);
+  const tmpFile = userDataFile + '.tmp';
+  try {
+    fs.writeFileSync(tmpFile, payload, 'utf-8');
+    // rename 在同分区下是原子操作, Windows 上也能保证目标文件不会处于半写状态
+    fs.renameSync(tmpFile, userDataFile);
+  } catch (e) {
+    // 即便 rename 失败, 也尝试清理临时文件
+    try { if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile); } catch (_) {}
+    console.error('[storage] writeUserData 失败:', e.message);
+  }
 }
 
 // ---- duration_cache.json ----

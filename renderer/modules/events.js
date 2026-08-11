@@ -1037,6 +1037,7 @@ window.addEventListener('beforeunload', () => {
   if (typeof window.musicAPI.saveUserDataSync === 'function') {
     window.musicAPI.saveUserDataSync({
       likes: [...likedSet.entries()].map(([path, ts]) => ({ path, ts })),
+      dislikes: [...dislikedSet.entries()].map(([path, ts]) => ({ path, ts })),
       collections: (typeof _serializeCollections === 'function') ? _serializeCollections() : [],
       stats: stats,
       progress: progress, lastSession: lastSession,

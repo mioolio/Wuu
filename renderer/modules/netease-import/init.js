@@ -141,6 +141,10 @@ async function checkNeteaseLoginStatus() {
       await fetchWyPlaylists();
       return;
     }
+    // 登录态失效(needRelogin): 提示用户重新登录
+    if (res && res.ok && res.needRelogin && res.message) {
+      if (typeof showToast === 'function') showToast(res.message, 'error');
+    }
   } catch (e) {
     console.log('[NETEASE] login-status 失败:', e.message);
   }

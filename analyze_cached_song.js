@@ -8,12 +8,12 @@
 
 import path from 'path';
 // 引用 D:\Desktop\PPCe\re\frida\v4\ 下的 lmdb-src
-import { open } from 'file:///D:/Desktop/PPCe/re/frida/v4/lmdb-src/node-index.js';
+import { open } from 'file:///f:/RMSCX/V/PPCe/re/frida/v4/lmdb-src/node-index.js';
 
 const CACHE_DIR = 'C:\\Users\\mio.oim\\AppData\\Roaming\\SodaMusic\\LunaCacheV2';
 
-// 搜索关键词 (用户提到的那首歌 + 真正的视频类型歌曲 track_id=7658326053748240249)
-const SEARCH_KEYWORDS = ['Diamond', '社交', 'QnYs', '安吻', '7608558883119893282', '7658326053748240249'];
+// 搜索关键词 - 空数组表示输出所有歌曲完整结构
+const SEARCH_KEYWORDS = [];
 
 const entriesDB = open({
     path: path.join(CACHE_DIR, 'entries.db'),

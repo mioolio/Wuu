@@ -38,14 +38,34 @@ ipcMain.handle('netease-login-status', async () => {
   }
   try {
     const resp = await neteaseApi.login_status({ cookie: cookieStr });
-    const data = (pickBody(resp).data) || {};
+    const body = pickBody(resp);
+    const data = (body && body.data) || {};
+    const apiCode = data.code;
+    const hasAccount = !!data.account;
+    const hasProfile = !!data.profile;
+    // 注意: body.code 是 NeteaseCloudMusicApi 返回的外层 body 中的 code
+    const outerCode = body && body.code;
+    // 301 = 用户未登录
+    const is301 = outerCode === 301 || apiCode === 301;
     dbgLog('[NETEASE] login_status 响应:', JSON.stringify({
-      dataCode: data.code,
-      hasAccount: !!data.account,
-      hasProfile: !!data.profile,
+      outerCode, dataCode: apiCode, hasAccount, hasProfile,
       profileUserId: data.profile && data.profile.userId,
+      is301,
     }));
-    if (data.code === 200 && data.profile) {
+
+    // 明确的未登录信号: 301 或 account/profile 都为 null (即使 code=200)
+    const needRelogin = is301 || (!hasAccount && !hasProfile);
+    if (needRelogin) {
+      dbgLog('[NETEASE] login-status: 登录态已失效(301或account/profile为null), 返回未登录');
+      return {
+        ok: true,
+        loggedIn: false,
+        needRelogin: true,
+        message: '登录态已失效，请重新扫码登录或导入Cookie',
+      };
+    }
+
+    if (apiCode === 200 && hasProfile) {
       // 更新当前账号信息并持久化
       if (acc) {
         acc.nickname = data.profile.nickname || acc.nickname || '';
@@ -67,13 +87,16 @@ ipcMain.handle('netease-login-status', async () => {
   } catch (e) {
     dbgErr('[NETEASE] login-status 异常:', e.message);
   }
-  // cookie 存在但获取用户信息失败, 可能 cookie 过期
-  dbgLog('[NETEASE] login-status: login_status 失败, 但 cookie 存在, 返回已登录');
+  // cookie 存在但 login_status 异常: 保守起见返回未登录，避免使用失效cookie导致VIP试听
+  dbgLog('[NETEASE] login-status: login_status失败, 保守返回未登录, 请重新登录');
   return {
-    ok: true, loggedIn: true,
+    ok: true,
+    loggedIn: false,
+    needRelogin: true,
+    message: '登录验证失败，请重新登录',
     userInfo: {
       userId: (acc && acc.userid) || '',
-      nickname: (acc && acc.nickname) || '已登录',
+      nickname: (acc && acc.nickname) || '',
       pic: (acc && acc.pic) || '',
       vipType: (acc && acc.vipType) || 0,
     },
@@ -331,6 +354,29 @@ ipcMain.handle('netease-preview', async (event, { songId, quality }) => {
     const cookieStr = getCurrentNeteaseCookie(config);
     dbgLog('[NETEASE] preview 调用, songId:', songId, 'quality:', quality || 'standard');
 
+    // 0. 先获取歌曲详情(判断 fee 是否为 VIP)
+    let coverUrl = '';
+    let songTitle = '未知歌曲';
+    let artistName = '';
+    let albumName = '';
+    let duration = 0;
+    let songFee = 0;
+    try {
+      const detailResp = await neteaseApi.song_detail({ ids: String(songId), cookie: cookieStr });
+      const detailBody = pickBody(detailResp);
+      const s = (detailBody.songs || [])[0];
+      if (s) {
+        songTitle = s.name || songTitle;
+        artistName = (s.ar || []).map(a => a.name).filter(Boolean).join(', ');
+        albumName = (s.al && s.al.name) || '';
+        coverUrl = (s.al && s.al.picUrl) || '';
+        duration = s.dt || 0;
+        songFee = s.fee || 0; // 0=免费, 1=VIP, 4=专辑, 8=低音质免费
+      }
+    } catch (e) {
+      dbgLog('[NETEASE] preview 详情获取异常:', e.message || e);
+    }
+
     // 1. 获取音频直链
     // level: standard(128k) / higher(192k) / exhigh(320k) / lossless / hires
     const level = quality || 'standard';
@@ -343,11 +389,60 @@ ipcMain.handle('netease-preview', async (event, { songId, quality }) => {
       hasUrl: !!(urlData && urlData.url),
       urlType: urlData && urlData.type,
       br: urlData && urlData.br,
+      size: urlData && urlData.size,
+      fee: songFee,
+      freeTrialInfo: urlData && urlData.freeTrialInfo ? '存在!' : null,
     }));
+
+    // 试听检测: 多种迹象表明可能是试听版本
+    let isPreviewVersion = false;
+    let previewReason = '';
+    if (urlData && urlData.url) {
+      const urlLower = urlData.url.toLowerCase();
+      // 迹象1: URL包含 preview 字样
+      if (urlLower.includes('preview')) {
+        isPreviewVersion = true;
+        previewReason = 'URL包含preview标记';
+      }
+      // 迹象2: 有 freeTrialInfo
+      if (urlData.freeTrialInfo) {
+        isPreviewVersion = true;
+        previewReason = previewReason || '包含freeTrialInfo试听信息';
+      }
+      // 迹象3: VIP歌曲(fee=1)但码率异常低 (例如请求exhigh但只返回128k且size明显偏小)
+      // exhigh标准应该是320k左右, 如果只有128000且是VIP歌曲, 很可能是试听
+      const brKbps = urlData.br ? Math.round(urlData.br / 1000) : 0;
+      const expectMap = { standard: 128, higher: 192, exhigh: 320, lossless: 800, hires: 2000 };
+      const expectBr = expectMap[level] || 128;
+      if (songFee === 1 && brKbps < expectBr && brKbps <= 128) {
+        isPreviewVersion = true;
+        previewReason = previewReason || `VIP歌曲仅获得${brKbps}kbps(期望≥${expectBr}kbps), 疑似试听/登录态失效`;
+      }
+    }
+    if (isPreviewVersion) {
+      dbgLog('[NETEASE] ⚠️ 检测到试听版本! 原因:', previewReason);
+    }
+
     if (!urlData || !urlData.url) {
-      throw new Error('无可用音频链接(可能需要VIP或歌曲下架)');
+      // 尝试给出更精确的错误
+      let errMsg = '无可用音频链接(可能需要VIP或歌曲下架)';
+      if (urlData) {
+        if (urlData.code === -110) errMsg = '此歌曲仅黑胶专享(VIP权限不足或登录态失效)';
+        else if (urlData.code === -1) errMsg = '该歌曲无版权或已下架';
+        else if (urlData.code === 404) errMsg = '资源不存在(VIP未生效或需重新登录)';
+      }
+      // 如果是VIP歌曲拿不到URL, 提示重登录
+      if (songFee === 1) errMsg += '(VIP歌曲请确认登录态有效, 可尝试重新扫码登录)';
+      throw new Error(errMsg);
     }
     const audioUrl = urlData.url;
+
+    // 如果检测到是试听 + VIP歌曲, 额外在返回值中标记, 前端可以提示用户
+    const vipWarning = (songFee === 1 && isPreviewVersion)
+      ? `VIP歌曲仅获得试听版本(${previewReason}), 登录态可能已失效, 请重新扫码登录`
+      : '';
+    // VIP歌曲试听 = 登录态失效的信号, 标记需要重新登录
+    const needRelogin = songFee === 1 && isPreviewVersion;
 
     // 2. 获取歌词(LRC 文本; 网易云 klyric 逐字歌词经常为空, 暂不使用)
     let lrcText = '';
@@ -360,28 +455,7 @@ ipcMain.handle('netease-preview', async (event, { songId, quality }) => {
       dbgLog('[NETEASE] preview 歌词获取异常:', e.message || e);
     }
 
-    // 3. 获取歌曲详情(封面/艺人/专辑)
-    let coverUrl = '';
-    let songTitle = '未知歌曲';
-    let artistName = '';
-    let albumName = '';
-    let duration = 0;
-    try {
-      const detailResp = await neteaseApi.song_detail({ ids: String(songId), cookie: cookieStr });
-      const detailBody = pickBody(detailResp);
-      const s = (detailBody.songs || [])[0];
-      if (s) {
-        songTitle = s.name || songTitle;
-        artistName = (s.ar || []).map(a => a.name).filter(Boolean).join(', ');
-        albumName = (s.al && s.al.name) || '';
-        coverUrl = (s.al && s.al.picUrl) || '';
-        duration = s.dt || 0;
-      }
-    } catch (e) {
-      dbgLog('[NETEASE] preview 详情获取异常:', e.message || e);
-    }
-
-    // 4. 构建 info (复用酷狗的 buildInfoFromTexts, 但网易云无 krc, krcText 传空)
+    // 3. 构建 info (复用酷狗的 buildInfoFromTexts, 但网易云无 krc, krcText 传空)
     const info = buildInfoFromTexts({
       title: songTitle,
       artist: artistName,
@@ -400,6 +474,10 @@ ipcMain.handle('netease-preview', async (event, { songId, quality }) => {
         url: audioUrl,
         rawText: '',              // 网易云无逐字 krc, rawText 为空
         lrcText: info.lrc || '',  // 统一格式的 LRC 文本
+        isPreview: isPreviewVersion,
+        previewReason,
+        vipWarning,
+        needRelogin,
         meta: {
           title: info.title,
           artist: info.artist,
@@ -408,6 +486,9 @@ ipcMain.handle('netease-preview', async (event, { songId, quality }) => {
           duration: info.duration,
           lyricist: info.lyricist,
           composer: info.composer,
+          brKbps: urlData.br ? Math.round(urlData.br / 1000) : 0,
+          size: urlData.size || 0,
+          fee: songFee,
         },
       },
     };
@@ -427,9 +508,18 @@ ipcMain.handle('netease-import-song', async (event, { songId, quality, songMeta,
     const cookieStr = getCurrentNeteaseCookie(config);
     dbgLog('[NETEASE] import-song 调用, songId:', songId, 'quality:', quality || 'lossless');
 
+    // 0. 获取歌曲详情, 判断 fee 是否为 VIP
+    let songFee = 0;
+    try {
+      const detailResp = await neteaseApi.song_detail({ ids: String(songId), cookie: cookieStr });
+      const s = (pickBody(detailResp).songs || [])[0];
+      if (s) songFee = s.fee || 0;
+    } catch (e) {}
+
     // 1. 获取音频直链 (带降级链)
     //    用户传入 quality 通常为 lossless; 若该音质不可用则按等级降级直到取到 url
     const FALLBACK_CHAIN = ['lossless', 'hires', 'exhigh', 'higher', 'standard'];
+    const expectBrMap = { standard: 128, higher: 192, exhigh: 320, lossless: 800, hires: 2000 };
     const startLevel = quality || 'lossless';
     const startIdx = FALLBACK_CHAIN.indexOf(startLevel);
     const chain = startIdx >= 0
@@ -438,13 +528,26 @@ ipcMain.handle('netease-import-song', async (event, { songId, quality, songMeta,
     let audioUrl = '';
     let usedLevel = '';
     let urlData = null;
+    // 记录第一次降级时是否遇到试听痕迹
+    let previewHits = [];
     for (const lv of chain) {
       try {
         const urlResp = await neteaseApi.song_url_v1({ id: String(songId), level: lv, cookie: cookieStr });
         const urlBody = pickBody(urlResp);
         const d = (urlBody.data || [])[0];
-        dbgLog('[NETEASE] import-song 尝试 level=' + lv + ', hasUrl=' + !!(d && d.url) + ', code=' + (d && d.code));
+        dbgLog('[NETEASE] import-song 尝试 level=' + lv + ', hasUrl=' + !!(d && d.url) + ', code=' + (d && d.code) + ', br=' + (d && d.br) + ', freeTrialInfo=' + (d && d.freeTrialInfo ? '有' : '无'));
         if (d && d.url) {
+          // 试听检测
+          let hit = null;
+          if (d.url.toLowerCase().includes('preview')) hit = 'URL含preview';
+          else if (d.freeTrialInfo) hit = '含freeTrialInfo';
+          // VIP歌曲: 如果码率低于该level的期望且只有128k, 视为试听
+          else if (songFee === 1) {
+            const brKbps = Math.round((d.br || 0) / 1000);
+            const exp = expectBrMap[lv] || 128;
+            if (brKbps < exp && brKbps <= 128) hit = `VIP仅${brKbps}kbps<${exp}kbps`;
+          }
+          if (hit) previewHits.push(`${lv}:${hit}`);
           audioUrl = d.url;
           usedLevel = lv;
           urlData = d;
@@ -455,9 +558,23 @@ ipcMain.handle('netease-import-song', async (event, { songId, quality, songMeta,
       }
     }
     if (!audioUrl) {
-      throw new Error('无可用音频链接(可能需要VIP或歌曲下架)');
+      // 更具体的错误提示
+      let msg = '无可用音频链接(可能需要VIP或歌曲下架)';
+      if (songFee === 1) msg += '(VIP歌曲请确认登录态是否有效, 可尝试重新扫码登录)';
+      throw new Error(msg);
     }
     dbgLog('[NETEASE] import-song 最终采用 level=' + usedLevel + ', url=' + audioUrl.slice(0, 80));
+    // 最终拿到的也是试听且是VIP歌曲: 额外警告日志(但不阻断, 让用户自行决定)
+    if (previewHits.length) {
+      dbgLog('[NETEASE] import-song ⚠️ 疑似试听版本, 检测到: ' + previewHits.join(' | '));
+    }
+    if (songFee === 1 && urlData) {
+      const brKbps = Math.round((urlData.br || 0) / 1000);
+      const exp = expectBrMap[usedLevel] || 128;
+      if (brKbps <= 128 && exp > 192) {
+        dbgLog(`[NETEASE] import-song ⚠️ VIP歌曲仅获得 ${brKbps}kbps, 降级到${usedLevel}未达到${exp}kbps, 登录态可能失效!`);
+      }
+    }
 
     // 2. 获取歌词
     let lrcText = '';
@@ -484,6 +601,14 @@ ipcMain.handle('netease-import-song', async (event, { songId, quality, songMeta,
       krcText: '',
       lrcText,
     });
+    // 附带下载诊断信息
+    info._neteaseMeta = {
+      fee: songFee,
+      usedLevel,
+      brKbps: urlData ? Math.round((urlData.br || 0) / 1000) : 0,
+      previewHits,
+      size: urlData ? urlData.size || 0 : 0,
+    };
 
     // 4. 下载到本地(复用 downloadParsedSong)
     const TIMEOUT_MS = 60000;

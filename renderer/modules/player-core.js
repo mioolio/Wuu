@@ -201,7 +201,28 @@ audio.addEventListener('ended', () => {
 });
 audio.addEventListener('error', (e) => {
   dbgAudio('error');
-  console.error('[AUDIO:error]', audio.error);
+  // 详细错误信息: code/message 能区分解码失败(MEDIA_ERR_DECODE=3) / 网络失败 / 源不支持等
+  const err = audio.error || {};
+  const errCodeMap = {
+    1: 'MEDIA_ERR_ABORTED',
+    2: 'MEDIA_ERR_NETWORK',
+    3: 'MEDIA_ERR_DECODE',
+    4: 'MEDIA_ERR_SRC_NOT_SUPPORTED',
+  };
+  const s = songs[curIdx];
+  console.error('[AUDIO:error]', {
+    code: err.code,
+    codeName: errCodeMap[err.code] || '(unknown)',
+    message: err.message || '',
+    song: s ? `${s.songName} - ${s.artist}` : '(null)',
+    audioSrc: audio.src ? audio.src.slice(0, 120) : '(empty)',
+    audioPath: s ? s.audioPath : '(null)',
+    fmPreviewMode,
+    fmPreviewSong: fmPreviewSong ? `${fmPreviewSong.name} - ${fmPreviewSong.artist} (source=${fmPreviewSong.source})` : '(null)',
+    readyState: audio.readyState,
+    networkState: audio.networkState,
+    duration: audio.duration,
+  });
   isPlaying = false; btnPlay.innerHTML = ICON_PLAY; stopLrcRAF(); stopDesktopLyricRAF();
   // 试听模式: 触发换源回退
   if (fmPreviewMode && typeof handleFmAudioError === 'function') handleFmAudioError();

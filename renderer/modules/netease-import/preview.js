@@ -27,10 +27,15 @@ async function playWyPreview(idx) {
       const msg = (res && res.message) || '试听失败';
       throw new Error(msg);
     }
-    // 后端返回 { ok, data: { url, rawText, lrcText, meta: {title, artist, album, cover, duration, lyricist, composer} } }
+    // 后端返回 { ok, data: { url, rawText, lrcText, meta, isPreview, vipWarning, needRelogin } }
     const data = res.data || {};
     const url = data.url || '';
     if (!url) throw new Error('未获取到试听地址(可能需要VIP或已下架)');
+
+    // VIP歌曲试听检测: 登录态可能失效, 提示用户重新登录
+    if (data.needRelogin && data.vipWarning) {
+      if (typeof showToast === 'function') showToast(data.vipWarning, 'error');
+    }
 
     // 进入试听模式
     fmPreviewMode = true;
@@ -183,6 +188,10 @@ async function importSingleWyTrack(idx) {
       // 如果是当前试听的歌曲, 更新收藏按钮状态 (+ → 红心)
       if (wyPreviewIdx === idx && typeof updLikeBtn === 'function') updLikeBtn();
       if (typeof showToast === 'function') showToast('已导入: ' + (song.name || '未知歌曲'), 'success');
+      // 如果导入的是试听版本(VIP登录态失效), 额外提示用户
+      if (res.info && res.info._neteaseMeta && res.info._neteaseMeta.previewHits && res.info._neteaseMeta.previewHits.length) {
+        if (typeof showToast === 'function') showToast('警告: 导入的可能是试听版本, 建议重新登录后再次导入', 'error');
+      }
     } else {
       const msg = (res && res.message) || '未知错误';
       if (btn) { btn.disabled = false; btn.textContent = '导入'; }

@@ -3,8 +3,42 @@ config/
 output/
 node_modules/
 
+# 用户数据与下载的音乐(体积大,不入库)
+data/downloads/
+data/settings.db
+
 # 抓取工具产生的浏览器缓存与数据
 tools/netease-capture/
 
+# 构建产物
+dist/
+dist-electron/
+release/
+*.log
+
+# 调试 / Frida hook 临时产物
+cache_analysis.txt
+frida_hook_log.txt
+soda_hook_log.txt
+log.txt
+
+# Soda 解密逆向研究脚本(不属于应用本体,不随重构提交)
+analyze_cache_bin.js
+compare_decrypt_impl.js
+decrypt_official_cache.js
+hook_diag_exports.js
+hook_soda_decrypt.js
+hook_soda_full.js
+launch_soda_hook.py
+run_frida_hook.py
+soda_main.js
+soda_main_bundle.js
+soda_player.js
+test_spade_decrypt.js
+try_all_decrypt.js
+verify_spade_source.js
+
 # IDE
 .vs/
+.idea/
+
