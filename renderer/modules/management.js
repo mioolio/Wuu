@@ -188,9 +188,9 @@ async function calcDislikedTotalSize(songArr) {
   for (const s of songArr) {
     try {
       // 估算: 取父文件夹大小 (需要 IPC), 这里简化为单文件大小
-      // 通过 music:// 协议 fetch HEAD 获取 Content-Length
+      // 通过 file:// 协议 fetch HEAD 获取 Content-Length
       const url = toUrl(s.audioPath);
-      if (!url || !url.startsWith('music://')) continue;
+      if (!url || !url.startsWith('file://')) continue;
       const resp = await fetch(url, { method: 'HEAD' });
       const len = parseInt(resp.headers.get('Content-Length') || '0', 10);
       if (len > 0) { totalBytes += len; counted++; }

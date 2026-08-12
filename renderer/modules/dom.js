@@ -90,6 +90,7 @@ const settingPublicPort = $('setting-public-port');
 
 // 网络服务设置 DOM
 const settingServerEnabled = $('setting-server-enabled');
+const settingMobileEnabled = $('setting-mobile-enabled');
 const settingServerPort = $('setting-server-port');
 const serverStatusText = $('server-status-text');
 // 高级网络设置: 可折叠菜单 + IP 绑定 + 白名单 + 频率限制 + 日志开关

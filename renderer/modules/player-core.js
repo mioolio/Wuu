@@ -210,7 +210,22 @@ audio.addEventListener('error', (e) => {
     4: 'MEDIA_ERR_SRC_NOT_SUPPORTED',
   };
   const s = songs[curIdx];
-  console.error('[AUDIO:error]', {
+  // 字符串化输出: F12 console 中直接可见, 无需展开 Object
+  const errInfo = [
+    'code=' + err.code,
+    'name=' + (errCodeMap[err.code] || '(unknown)'),
+    'msg=' + (err.message || '(empty)'),
+    'song=' + (s ? `${s.songName} - ${s.artist}` : '(null)'),
+    'path=' + (s ? s.audioPath : '(null)'),
+    'src=' + (audio.src ? audio.src.slice(0, 120) : '(empty)'),
+    'readyState=' + audio.readyState,
+    'networkState=' + audio.networkState,
+    'duration=' + audio.duration,
+    'fmPreview=' + fmPreviewMode,
+  ].join(' | ');
+  console.error('[AUDIO:error] ' + errInfo);
+  // 同时保留 Object 形式, 便于在 F12 中展开查看完整上下文
+  console.error('[AUDIO:error:detail]', {
     code: err.code,
     codeName: errCodeMap[err.code] || '(unknown)',
     message: err.message || '',

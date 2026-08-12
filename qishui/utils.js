@@ -80,6 +80,28 @@ function qishuiExtractSessionid(resp) {
   return m ? m[1] : '';
 }
 
+// 从响应中提取完整 cookie 字符串(所有 Set-Cookie 头, 拼接为 Cookie 格式)
+function qishuiExtractFullCookie(resp) {
+  const cookies = [];
+  try {
+    if (typeof resp.headers.getSetCookie === 'function') {
+      const setCookies = resp.headers.getSetCookie();
+      for (const sc of setCookies) {
+        const m = sc.match(/^([^=;\s]+=[^;]+)/);
+        if (m) cookies.push(m[1]);
+      }
+    } else {
+      const setCookie = resp.headers.get('set-cookie') || '';
+      const parts = setCookie.split(/,\s*(?=[^=;\s]+=)/);
+      for (const part of parts) {
+        const m = part.match(/^([^=;\s]+=[^;]+)/);
+        if (m) cookies.push(m[1]);
+      }
+    }
+  } catch (e) {}
+  return cookies.length > 0 ? cookies.join('; ') : '';
+}
+
 // 获取艺人名(对齐 PopDownloader getArtistName: 优先 user_info.nickname)
 function qishuiGetArtists(source) {
   const artists = Array.isArray(source?.artists) ? source.artists : [];
@@ -195,7 +217,44 @@ async function qishuiFetchLyrics(trackId, trackPayload) {
     return { krcObj: lyricsData, lrcText, krcRaw };
   }
 
-  // 3. 回退: 抓取 track 页面 HTML 解析 _ROUTER_DATA
+  // 3. 回退: 调用 music.douyin.com SSR 接口获取歌词 (稳定可靠, 不依赖登录)
+  try {
+    const ssrUrl = `https://music.douyin.com/qishui/share/track?__loader=track_page&__ssrDirect=true&track_id=${trackId}`;
+    dbgLog('[QISHUI] 歌词回退: 调用 SSR 接口, url=' + ssrUrl);
+    const ssrResp = await fetch(ssrUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/json,text/html',
+        'Referer': 'https://www.qishui.com/',
+      },
+    });
+    if (ssrResp.ok) {
+      const ssrText = await ssrResp.text();
+      try {
+        const ssrJson = JSON.parse(ssrText);
+        const audioOpt = ssrJson.audioWithLyricsOption;
+        if (audioOpt && audioOpt.lyrics) {
+          dbgLog('[QISHUI] 歌词获取成功: 从 SSR 接口提取, lyricType=' + (audioOpt.lyrics.lyricType || 'unknown') + ' sentences=' + (audioOpt.lyrics.sentences?.length || 0));
+          if (audioOpt.lyrics.content) {
+            krcRaw = audioOpt.lyrics.content;
+            lrcText = qishuiKrcContentToLrc(audioOpt.lyrics.content);
+          } else if (audioOpt.lyrics.sentences && audioOpt.lyrics.sentences.length > 0) {
+            krcRaw = krcToRaw(audioOpt.lyrics);
+            lrcText = parseLrcFromKrc(audioOpt.lyrics);
+          }
+          if (krcRaw || lrcText) {
+            return { krcObj: audioOpt.lyrics, lrcText, krcRaw };
+          }
+        }
+      } catch (parseErr) {
+        dbgLog('[QISHUI] 歌词 SSR 响应 JSON 解析失败:', parseErr.message);
+      }
+    }
+  } catch (e) {
+    dbgLog('[QISHUI] 歌词 SSR 回退异常:', e.message);
+  }
+
+  // 4. 回退: 抓取 track 页面 HTML 解析 _ROUTER_DATA
   try {
     const shareUrl = trackPayload?.track?.share_url || trackPayload?.track?.web_url || `https://www.qishui.com/track/${trackId}`;
     dbgLog('[QISHUI] 歌词回退: 抓取页面 HTML, url=' + shareUrl);
@@ -234,7 +293,7 @@ module.exports = {
   qishuiFixed, qishuiEndpoints,
   qishuiDownloadTrackMedia, getSessionIdFromSodaMusicCookies, readSessionIdFromCookieDatabase, readAllCookiesFromDatabase,
   getQishuiSession, setQishuiSession,
-  qishuiGetImageUrl, qishuiFormatDuration, qishuiBuildUrl, qishuiExtractSessionid,
+  qishuiGetImageUrl, qishuiFormatDuration, qishuiBuildUrl, qishuiExtractSessionid, qishuiExtractFullCookie,
   qishuiGetArtists, qishuiGetLyricist, qishuiGetComposer, qishuiGetSpadeA, qishuiGetCover,
   qishuiIsVipTrack, qishuiIsUnavailable, qishuiKrcContentToLrc, qishuiFetchLyrics,
 };

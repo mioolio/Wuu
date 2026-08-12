@@ -13,7 +13,7 @@ const {
   qishuiFixed, qishuiEndpoints,
   qishuiDownloadTrackMedia, getSessionIdFromSodaMusicCookies, readSessionIdFromCookieDatabase, readAllCookiesFromDatabase,
   getQishuiSession, setQishuiSession,
-  qishuiGetImageUrl, qishuiFormatDuration, qishuiBuildUrl, qishuiExtractSessionid,
+  qishuiGetImageUrl, qishuiFormatDuration, qishuiBuildUrl, qishuiExtractSessionid, qishuiExtractFullCookie,
   qishuiGetArtists, qishuiGetLyricist, qishuiGetComposer, qishuiGetSpadeA, qishuiGetCover,
   qishuiIsVipTrack, qishuiFetchLyrics,
 } = require('./utils');
@@ -81,6 +81,8 @@ ipcMain.handle('qishui-check-qrcode', async (event, { token }) => {
 
     // 从 Set-Cookie 头提取 sessionid
     const sessionid = qishuiExtractSessionid(resp);
+    // 从 Set-Cookie 头提取完整 cookie (含 passport_csrf_token, ttwid 等风控敏感字段)
+    const fullCookie = qishuiExtractFullCookie(resp);
 
     // 映射状态
     const rawStatus = json?.data?.status;
@@ -90,13 +92,13 @@ ipcMain.handle('qishui-check-qrcode', async (event, { token }) => {
     else if (rawStatus === 2 || rawStatus === 9) status = 'confirmed';
     else if (rawStatus === 3 || rawStatus === 5) status = 'expired';
 
-    dbgLog('[QISHUI] check-qrcode 响应: rawStatus=' + rawStatus + ' status=' + status + ' hasSessionid=' + !!sessionid);
+    dbgLog('[QISHUI] check-qrcode 响应: rawStatus=' + rawStatus + ' status=' + status + ' hasSessionid=' + !!sessionid + ' fullCookie长度=' + fullCookie.length);
 
     // 登录成功, 保存会话
     if (status === 'confirmed' && sessionid) {
       const aid = String(json?.data?.user_id || json?.data?.uid || json?.data?.aid || qishuiFixed.aid);
-      setQishuiSession({ aid, sessionid });
-      dbgLog('[QISHUI] 二维码登录成功, aid=' + aid);
+      setQishuiSession({ aid, sessionid, cookie: fullCookie || `sessionid=${sessionid};` });
+      dbgLog('[QISHUI] 二维码登录成功, aid=' + aid + ' cookie长度=' + (fullCookie || '').length);
     }
 
     const session = getQishuiSession();
@@ -136,10 +138,11 @@ ipcMain.handle('qishui-peek-profile', async () => {
     if (!result.supported || !result.sessionid) {
       return { ok: false, reason: result.reason || '未找到本地汽水音乐 Cookie' };
     }
-    // 用临时 sessionid 拉取用户信息
+    // 用临时 sessionid 拉取用户信息, 使用完整 cookie (含 passport_csrf_token 等)
     const url = qishuiBuildUrl(qishuiEndpoints.me, { aid: qishuiFixed.aid });
+    const cookieHeader = result.cookie || `sessionid=${result.sessionid};`;
     const resp = await fetch(url, {
-      headers: { Cookie: `sessionid=${result.sessionid};` },
+      headers: { Cookie: cookieHeader },
     });
     const json = await resp.json();
     const info = json?.my_info || json?.data?.my_info || json?.data || {};
@@ -192,11 +195,14 @@ ipcMain.handle('qishui-file-login', async (event, { fileName, fileContentBase64 
 // IPC: 获取用户信息
 ipcMain.handle('qishui-get-profile', async (event, { aid, sessionid }) => {
   try {
-    // 参考 PopDownloader auth-profile.js: 只需 aid 参数, Cookie 头带 sessionid
+    // 参考 PopDownloader auth-profile.js: 只需 aid 参数, Cookie 头带完整 cookie
     const url = qishuiBuildUrl(qishuiEndpoints.me, { aid });
-    dbgLog('[QISHUI] get-profile 请求, aid=' + aid);
+    // 使用会话中的完整 cookie (含 passport_csrf_token 等), 保证风控敏感接口可用
+    const session = getQishuiSession();
+    const cookieHeader = session.cookie || `sessionid=${sessionid};`;
+    dbgLog('[QISHUI] get-profile 请求, aid=' + aid + ' cookie长度=' + cookieHeader.length);
     const resp = await fetch(url, {
-      headers: { Cookie: `sessionid=${sessionid};` },
+      headers: { Cookie: cookieHeader },
     });
     const json = await resp.json();
     // 详细日志: 输出完整响应结构, 便于排查头像/名称缺失问题
@@ -252,7 +258,8 @@ ipcMain.handle('qishui-get-profile', async (event, { aid, sessionid }) => {
 // IPC: 获取用户歌单列表(创建 + 收藏, 并行请求)
 ipcMain.handle('qishui-get-playlists', async (event, { aid, sessionid }) => {
   try {
-    const cookie = { Cookie: `sessionid=${sessionid};` };
+    const session = getQishuiSession();
+    const cookie = { Cookie: session.cookie || `sessionid=${sessionid};` };
     // 创建的歌单需要 iid + version_code, 收藏的歌单只需要 aid
     const createdUrl = qishuiBuildUrl(qishuiEndpoints.mePlaylists, { aid, iid: '27960026095955', version_code: '30020100' });
     const collectedUrl = qishuiBuildUrl(qishuiEndpoints.meCollectionMixed, { aid });
@@ -319,9 +326,11 @@ ipcMain.handle('qishui-get-playlist-detail', async (event, { aid, sessionid, pla
       cursor: cursor || '',
       count: 15,
     });
-    dbgLog('[QISHUI] get-playlist-detail 请求, playlistId=' + playlistId + ' cursor=' + (cursor || ''));
+    const session = getQishuiSession();
+    const cookieHeader = session.cookie || `sessionid=${sessionid};`;
+    dbgLog('[QISHUI] get-playlist-detail 请求, playlistId=' + playlistId + ' cursor=' + (cursor || '') + ' cookie长度=' + cookieHeader.length);
     const resp = await fetch(url, {
-      headers: { Cookie: `sessionid=${sessionid};` },
+      headers: { Cookie: cookieHeader },
     });
     const json = await resp.json();
     dbgLog('[QISHUI] get-playlist-detail respKeys=' + JSON.stringify(Object.keys(json || {})));

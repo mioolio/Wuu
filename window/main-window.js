@@ -123,6 +123,13 @@ function createWindow() {
     }
   });
 
+  // [DEBUG] 转发渲染进程 console 到主进程终端, 便于在不打开 F12 时排查问题
+  mainWindow.webContents.on('console-message', (event) => {
+    const levelTag = ['LOG', 'WARN', 'ERROR'][event.level] || 'LOG';
+    const src = event.sourceId ? event.sourceId.replace(/^file:\/\/\/[^:]*\/renderer\//, '') : '';
+    console.log(`[renderer:${levelTag}] ${event.message}${src ? ` (${src}:${event.line})` : ''}`);
+  });
+
   // 窗口就绪后恢复 Windows 11 圆角
   mainWindow.once('ready-to-show', () => {
     setWindowRoundedCorners(mainWindow);

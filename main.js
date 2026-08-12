@@ -1,10 +1,11 @@
 // =========== Wuu 音乐 - 主进程入口 ===========
 // 仅负责: 协议注册 / 菜单移除 / 模块装配 / music:// 协议处理 / 应用生命周期
 // 所有功能逻辑已拆分到各功能目录模块, require 即自动注册 IPC handlers
-const { app, Menu, protocol } = require('electron');
+const { app, Menu, protocol, net } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { Readable } = require('stream');
+const { pathToFileURL } = require('url');
 
 // Windows 终端默认 GBK 编码, 中文日志输出乱码 (如 "解析链接失败" → "瑙ｆ瀽閾炬帴澶辫触")
 // 强制 stdout/stderr 以 UTF-8 编码输出, 让 console.error 在 PowerShell/CMD 中正确显示中文
@@ -20,8 +21,10 @@ if (process.platform === 'win32') {
 }
 
 // 注册 music:// 协议为特权协议, 必须在 app.whenReady() 之前调用
+// corsEnabled: Electron 43 (Chromium 130+) MediaElementAudioSource 要求 CORS-clean,
+// 即使 webSecurity:false 也会检查, 不加此标志 WebAudio 会静音并触发 PIPELINE_ERROR_READ
 protocol.registerSchemesAsPrivileged([
-  { scheme: 'music', privileges: { stream: true, supportFetchAPI: true, bypassCSP: true } }
+  { scheme: 'music', privileges: { stream: true, supportFetchAPI: true, bypassCSP: true, corsEnabled: true } }
 ]);
 
 // 移除顶部 File/Edit 等原生菜单 (应用不需要这些)
@@ -67,20 +70,26 @@ require('./playlist/share');
 
 // =========== music:// 协议处理 ===========
 // 用 Node.js fs 读取文件, 绕过 Chromium file:/// 的 MAX_PATH 260 限制
+// Electron 41+ (Chromium 130+) 媒体栈对自定义协议返回的 stream Response 无法正确消费,
+// 报 PIPELINE_ERROR_READ: FFmpegDemuxer: data source error (code 2)
+// 对应 Electron issue #51442。解决: 读取文件到 Buffer 返回, 补 CORS + Accept-Ranges 头
 app.whenReady().then(() => {
-  protocol.handle('music', (request) => {
+  protocol.handle('music', async (request) => {
     // music:///F:/path/to/file.aac → 解码出本地路径
     let urlStr = request.url;
-    // 去掉协议前缀, 保留路径
     if (urlStr.startsWith('music:///')) {
       urlStr = urlStr.slice('music:///'.length);
     } else if (urlStr.startsWith('music://')) {
       urlStr = urlStr.slice('music://'.length);
     }
-    let filePath = decodeURIComponent(urlStr);
-    // 还原 Windows 路径分隔符
+    let filePath;
+    try {
+      filePath = decodeURIComponent(urlStr);
+    } catch (e) {
+      filePath = urlStr;
+    }
     filePath = filePath.replace(/\//g, '\\');
-    // 根据扩展名设置 Content-Type
+
     const ext = path.extname(filePath).toLowerCase();
     const mimeTypes = {
       '.aac': 'audio/aac',
@@ -88,48 +97,61 @@ app.whenReady().then(() => {
       '.wav': 'audio/wav',
       '.flac': 'audio/flac',
       '.m4a': 'audio/mp4',
+      '.ogg': 'audio/ogg',
+      '.mp4': 'video/mp4',
+      '.webm': 'video/webm',
       '.jpg': 'image/jpeg',
       '.jpeg': 'image/jpeg',
       '.png': 'image/png',
       '.gif': 'image/gif',
+      '.webp': 'image/webp',
     };
     const contentType = mimeTypes[ext] || 'application/octet-stream';
+
     try {
+      // [DEBUG] 记录所有请求, 追踪 Chromium 媒体管道的请求模式 (Range/次数)
+      const rangeHeader = request.headers.get('range') || request.headers.get('Range');
+      console.log(`[music] req path=${filePath.slice(-60)} range=${rangeHeader || '(none)'}`);
+
       if (!fs.existsSync(filePath)) {
+        console.error('[music] 文件不存在:', filePath);
         return new Response(null, { status: 404, statusText: 'File not found' });
       }
-      const stat = fs.statSync(filePath);
-      const fileSize = stat.size;
-      // 解析 Range 请求: <audio> 元素缓冲/跳转时发送 Range: bytes=start-end
-      const rangeHeader = request.headers.get('range') || request.headers.get('Range');
+      const fileSize = fs.statSync(filePath).size;
+
+      // 读取整个文件到 Buffer: Electron 43 媒体栈无法消费 stream Response
+      // Buffer 作为 Response body 可被 Chromium 正确读取, 支持 seek (Range 请求)
+      const buf = fs.readFileSync(filePath);
+
       if (rangeHeader) {
         const match = /bytes=(\d*)-(\d*)/.exec(rangeHeader);
         if (match) {
           const start = match[1] ? parseInt(match[1]) : 0;
           const end = match[2] ? parseInt(match[2]) : fileSize - 1;
-          const chunkSize = end - start + 1;
-          const stream = fs.createReadStream(filePath, { start, end });
-          return new Response(Readable.toWeb(stream), {
+          const chunk = buf.subarray(start, end + 1);
+          return new Response(chunk, {
             status: 206,
+            statusText: 'Partial Content',
             headers: {
               'Content-Type': contentType,
               'Content-Range': `bytes ${start}-${end}/${fileSize}`,
-              'Content-Length': String(chunkSize),
+              'Content-Length': String(chunk.length),
               'Accept-Ranges': 'bytes',
+              'Access-Control-Allow-Origin': '*',
             }
           });
         }
       }
-      // 无 Range 头: 返回完整文件
-      const stream = fs.createReadStream(filePath);
-      return new Response(Readable.toWeb(stream), {
+      return new Response(buf, {
         headers: {
           'Content-Type': contentType,
           'Content-Length': String(fileSize),
           'Accept-Ranges': 'bytes',
+          'Access-Control-Allow-Origin': '*',
         }
       });
     } catch (e) {
+      console.error('[music] 读取失败:', filePath, e.message);
       return new Response(null, { status: 500, statusText: e.message });
     }
   });
@@ -141,7 +163,8 @@ app.whenReady().then(() => {
   try {
     const { readUserData } = require('./core/storage');
     const ud = readUserData();
-    if (ud.settings && ud.settings.serverEnabled === true) {
+    // 服务器在 歌单分享 或 手机版 任一开启时启动
+    if (ud.settings && (ud.settings.serverEnabled === true || ud.settings.mobileEnabled === true)) {
       startServer(
         ud.settings.serverPort || 30967,
         ud.settings.serverBindIP || '0.0.0.0',

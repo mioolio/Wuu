@@ -81,6 +81,7 @@ let appSettings = {
   serverWhitelist: [],  // 客户端IP白名单 (空数组=允许所有, 非空=仅允许白名单内IP, 支持通配符 192.168.*.*)
   serverRateLimit: 0,  // 频率限制: 每IP每分钟最大请求数 (0=不限制, 本机始终放行)
   serverAccessLog: false,  // 是否开启访问日志记录 (开启后记录哪些IP下载了哪些歌曲)
+  mobileEnabled: false,  // 手机版开关(默认关闭, 开启后可通过浏览器访问移动端 UI)
   coverUnify: true,  // 封面统一性(默认开启, 试听模式下换源时保持原封面不更新, 切歌时正常更新)
   desktopLyricPersist: false,  // 桌面歌词持久化(开启后重启软件自动打开桌面歌词)
   desktopLyricBounds: null,  // 桌面歌词窗口位置 [x, y], null 表示使用默认位置

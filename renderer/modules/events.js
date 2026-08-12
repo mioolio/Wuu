@@ -756,8 +756,8 @@ document.addEventListener('keydown', (e) => {
 settingServerEnabled.addEventListener('change', async () => {
   appSettings.serverEnabled = settingServerEnabled.checked;
   saveUserData();
-  if (appSettings.serverEnabled) {
-    // 开启: 用配置端口 + 绑定IP + 白名单 + 频率限制 + 日志开关启动服务器
+  // 服务器在 歌单分享 或 手机版 任一开启时运行
+  if (appSettings.serverEnabled || appSettings.mobileEnabled) {
     await window.playlistAPI.startServer(
       appSettings.serverPort,
       appSettings.serverBindIP,
@@ -766,7 +766,23 @@ settingServerEnabled.addEventListener('change', async () => {
       appSettings.serverAccessLog
     );
   } else {
-    // 关闭: 停止服务器
+    await window.playlistAPI.stopServer();
+  }
+  updServerStatusText();
+});
+// 手机版开关
+settingMobileEnabled.addEventListener('change', async () => {
+  appSettings.mobileEnabled = settingMobileEnabled.checked;
+  saveUserData();
+  if (appSettings.serverEnabled || appSettings.mobileEnabled) {
+    await window.playlistAPI.startServer(
+      appSettings.serverPort,
+      appSettings.serverBindIP,
+      appSettings.serverWhitelist,
+      appSettings.serverRateLimit,
+      appSettings.serverAccessLog
+    );
+  } else {
     await window.playlistAPI.stopServer();
   }
   updServerStatusText();
@@ -781,7 +797,7 @@ settingServerPort.addEventListener('change', async () => {
   }
   appSettings.serverPort = port;
   saveUserData();
-  if (appSettings.serverEnabled) {
+  if (appSettings.serverEnabled || appSettings.mobileEnabled) {
     await window.playlistAPI.stopServer();
     await window.playlistAPI.startServer(port, appSettings.serverBindIP, appSettings.serverWhitelist, appSettings.serverRateLimit, appSettings.serverAccessLog);
     updServerStatusText();
@@ -798,7 +814,7 @@ settingServerAdvancedToggle.addEventListener('click', () => {
 settingServerBindIP.addEventListener('change', async () => {
   appSettings.serverBindIP = settingServerBindIP.value;
   saveUserData();
-  if (appSettings.serverEnabled) {
+  if (appSettings.serverEnabled || appSettings.mobileEnabled) {
     await window.playlistAPI.stopServer();
     await window.playlistAPI.startServer(appSettings.serverPort, appSettings.serverBindIP, appSettings.serverWhitelist, appSettings.serverRateLimit, appSettings.serverAccessLog);
     updServerStatusText();
@@ -811,7 +827,7 @@ settingServerWhitelist.addEventListener('change', async () => {
     .filter(s => s.length > 0);
   appSettings.serverWhitelist = lines;
   saveUserData();
-  if (appSettings.serverEnabled) {
+  if (appSettings.serverEnabled || appSettings.mobileEnabled) {
     await window.playlistAPI.stopServer();
     await window.playlistAPI.startServer(appSettings.serverPort, appSettings.serverBindIP, appSettings.serverWhitelist, appSettings.serverRateLimit, appSettings.serverAccessLog);
     updServerStatusText();
@@ -827,7 +843,7 @@ settingServerRateLimit.addEventListener('change', async () => {
   }
   appSettings.serverRateLimit = rl;
   saveUserData();
-  if (appSettings.serverEnabled) {
+  if (appSettings.serverEnabled || appSettings.mobileEnabled) {
     await window.playlistAPI.stopServer();
     await window.playlistAPI.startServer(appSettings.serverPort, appSettings.serverBindIP, appSettings.serverWhitelist, appSettings.serverRateLimit, appSettings.serverAccessLog);
     updServerStatusText();
@@ -837,7 +853,7 @@ settingServerRateLimit.addEventListener('change', async () => {
 settingServerAccessLog.addEventListener('change', async () => {
   appSettings.serverAccessLog = settingServerAccessLog.checked;
   saveUserData();
-  if (appSettings.serverEnabled) {
+  if (appSettings.serverEnabled || appSettings.mobileEnabled) {
     await window.playlistAPI.stopServer();
     await window.playlistAPI.startServer(appSettings.serverPort, appSettings.serverBindIP, appSettings.serverWhitelist, appSettings.serverRateLimit, appSettings.serverAccessLog);
     updServerStatusText();

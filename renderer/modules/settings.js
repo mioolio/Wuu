@@ -56,6 +56,7 @@ function applySettings() {
 
   // 网络服务
   settingServerEnabled.checked = appSettings.serverEnabled === true;
+  if (settingMobileEnabled) settingMobileEnabled.checked = appSettings.mobileEnabled === true;
   settingServerPort.value = appSettings.serverPort || 30967;
   // 高级网络设置: IP 绑定 + 白名单 + 频率限制 + 日志开关 (可折叠菜单栏, 默认收起)
   if (settingServerBindIP) settingServerBindIP.value = appSettings.serverBindIP || '0.0.0.0';
@@ -109,7 +110,9 @@ function applyProgressColor() {
 // 更新网络服务状态文本
 async function updServerStatusText() {
   if (!serverStatusText) return;
-  if (appSettings.serverEnabled) {
+  // 服务器在 歌单分享 或 手机版 任一开启时运行
+  const serverShouldRun = appSettings.serverEnabled || appSettings.mobileEnabled;
+  if (serverShouldRun) {
     try {
       const st = await window.playlistAPI.serverStatus();
       if (st.ok && st.running) {

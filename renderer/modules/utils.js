@@ -30,7 +30,10 @@ function fmtDurationCompact(sec) {
 function toUrl(p) {
   if (!p) return '';
   const n = p.replace(/\\/g, '/');
-  return 'music:///' + n.split('/').map((x, i) => i === 0 ? x : encodeURIComponent(x)).join('/');
+  // 用 file:// 而非 music://: Electron 43 (Chromium 130+) 的 MediaElementAudioSource
+  // 对自定义协议执行 CORS 检查, 即使 webSecurity:false 也会静音并触发 PIPELINE_ERROR_READ。
+  // file:// 与页面(file://)同源, 不触发 CORS, 且 Chromium 内部支持 seek(文件映射)。
+  return 'file:///' + n.split('/').map((x, i) => i === 0 ? x : encodeURIComponent(x)).join('/');
 }
 
 function rgbToHsl(r, g, b) {

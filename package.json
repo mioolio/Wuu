@@ -5,6 +5,10 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
+    "dev": "cd mobile_UI && npm.cmd run dev",
+    "dev:all": "node scripts/dev.js",
+    "build:mobile": "cd mobile_UI && npm.cmd run build",
+    "build:full": "npm.cmd run build:mobile && npm.cmd start",
     "build": "electron-builder",
     "build:dir": "electron-builder --dir",
     "postinstall": "node scripts/patch-kugoumusicapi.js"

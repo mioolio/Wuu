@@ -42,3 +42,10 @@ verify_spade_source.js
 .vs/
 .idea/
 
+# 分析数据（不属于应用本体）
+soda_analysis/
+
+# mobile_UI 构建产物与依赖
+mobile_UI/dist/
+mobile_UI/node_modules/
+

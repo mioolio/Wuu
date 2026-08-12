@@ -47,7 +47,506 @@ function getTrackV2Payload(reqBody) {
   }
 }
 
-async function fetchTrackPayload({ aid = fixed.aid, sessionid, track_id, mediaType = 'track' }) {
+// 从 cookie 字符串中提取指定名称的值
+function extractCookieValue(cookieStr, name) {
+  if (!cookieStr) return ''
+  const m = cookieStr.match(new RegExp('(?:^|;\\s*)' + name + '=([^;]*)'))
+  return m ? decodeURIComponent(m[1]) : ''
+}
+
+// 从 SSR 页面 HTML 中解析 _ROUTER_DATA (复用 qishui.js 逻辑)
+function parseRouterDataFromHtml(html) {
+  const scriptRe = /<script[^>]*>([\s\S]*?)<\/script>/gi
+  let m
+  while ((m = scriptRe.exec(html)) !== null) {
+    const content = m[1]
+    if (!content.includes('_ROUTER_DATA')) continue
+    const dataMatch = content.match(/_ROUTER_DATA\s*=\s*(\{[\s\S]*?\});/)
+    if (dataMatch && dataMatch[1]) {
+      try { return JSON.parse(dataMatch[1]) } catch (e) {}
+    }
+  }
+  return null
+}
+
+// 通过外部后端获取 track 信息 (第三级回退)
+const PARSE_BACKEND = 'http://qiuyu520.fun/qishuiParse/api/track/v2'
+async function fetchTrackPayloadFromBackend({ track_id }) {
+  dbgLog('fetchTrackPayloadFromBackend 请求: track_id=' + track_id)
+  const body = JSON.stringify({
+    track_id: String(track_id),
+    media_type: 'track',
+    queue_type: 'favorite_track_playlist',
+    scene_name: 'undefined',
+  })
+  const resp = await fetch(PARSE_BACKEND, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body,
+  })
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => '')
+    throw new Error('后端请求失败: HTTP ' + resp.status + ' - ' + text.slice(0, 200))
+  }
+  const json = await resp.json()
+  dbgLog('fetchTrackPayloadFromBackend 响应: ok=' + json.ok + ' keys=' + JSON.stringify(Object.keys(json || {})))
+  if (!json.ok || !json.data) throw new Error(json.message || '外部后端返回错误')
+  const data = json.data
+  dbgLog('fetchTrackPayloadFromBackend data keys=' + JSON.stringify(Object.keys(data || {})))
+  dbgLog('fetchTrackPayloadFromBackend 成功: url=' + (data.url ? '有' : '无') + ' title=' + (data.title || '') + ' artistName=' + (data.artistName || '') + ' contentType=' + (data.contentType || '未知'))
+
+  // 尝试提取加密信息: 后端可能返回 spade_a 或 playAuth (两者等效, playAuth 可直接作为 spade_a 使用)
+  const spadeA = data.spade_a || data.playAuth || (data.encrypt_info && data.encrypt_info.spade_a) || ''
+  const encryptInfo = data.encrypt_info || (data.playAuth ? { spade_a: data.playAuth } : null)
+  dbgLog('fetchTrackPayloadFromBackend spade_a=' + (spadeA ? '有 (长度=' + spadeA.length + ')' : '无') + ' encryptInfo=' + (encryptInfo ? '有' : '无') + ' playAuth=' + (data.playAuth ? '有 (长度=' + data.playAuth.length + ')' : '无'))
+
+  // 构造兼容 payload
+  const payload = {
+    track: {
+      id: String(track_id),
+      name: data.title || '未知歌曲',
+      duration: data.duration || 0,
+      album: { name: data.album || data.albumName || '', id: '' },
+      artists: data.artistName ? [{ simple_display_name: data.artistName }] : [],
+      label_info: data.label_info || {},
+      bit_rates: data.bit_rates || [],
+      status: data.status || 0,
+    },
+    track_player: {
+      video_model: data.url ? JSON.stringify({
+        video_list: [{
+          video_meta: { quality: data.quality || 'standard', vtype: data.vtype || 'm4a' },
+          main_url: data.url,
+          encrypt_info: encryptInfo || { spade_a: spadeA },
+        }],
+      }) : '',
+      lyrics: data.lyrics || null,
+    },
+    __fromBackend: true,
+    __directMainUrl: data.url || '',
+    __directContentType: data.contentType || 'audio/mp4',
+    __spadeA: spadeA,
+    __encryptInfo: encryptInfo,
+  }
+  return payload
+}
+
+// 从 HTML 中查找 SSR 数据 (支持多种变量名)
+function findSSRDataInHtml(html) {
+  // 可能的 SSR 数据变量名
+  const patterns = [
+    { name: '_ROUTER_DATA', regex: /_ROUTER_DATA\s*=\s*(\{[\s\S]*?\})\s*[;\n]|_ROUTER_DATA\s*=\s*(\[[\s\S]*?\])\s*[;\n]/ },
+    { name: '__INITIAL_STATE__', regex: /__INITIAL_STATE__\s*=\s*(\{[\s\S]*?\})\s*[;\n]/ },
+    { name: '__NEXT_DATA__', regex: /<script[^>]*id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/ },
+    { name: '__SERVER_DATA__', regex: /__SERVER_DATA__\s*=\s*(\{[\s\S]*?\})\s*[;\n]/ },
+    { name: '__SSR_DATA__', regex: /__SSR_DATA__\s*=\s*(\{[\s\S]*?\})\s*[;\n]/ },
+    { name: '__NUXT__', regex: /__NUXT__\s*=\s*(\{[\s\S]*?\})\s*[;\n]/ },
+    { name: 'window.__DATA__', regex: /window\.__DATA__\s*=\s*(\{[\s\S]*?\})\s*[;\n]/ },
+    { name: 'window.__TRACK_DATA__', regex: /window\.__TRACK_DATA__\s*=\s*(\{[\s\S]*?\})\s*[;\n]/ },
+    { name: 'audioWithLyricsOption', regex: /"audioWithLyricsOption"\s*:\s*(\{[\s\S]*?\})\s*[,}]/ },
+    { name: 'audioOpt', regex: /"audioOpt"\s*:\s*(\{[\s\S]*?\})\s*[,}]/ },
+    { name: 'trackInfo', regex: /"trackInfo"\s*:\s*(\{[\s\S]*?\})\s*[,}]/ },
+  ]
+
+  // 先尝试精确匹配的脚本块
+  const scriptRe = /<script[^>]*>([\s\S]*?)<\/script>/gi
+  let m
+  const foundScripts = []
+  while ((m = scriptRe.exec(html)) !== null) {
+    const content = m[1]
+    if (content.trim().length > 50) foundScripts.push(content.trim())
+  }
+  dbgLog('findSSRDataInHtml 找到 ' + foundScripts.length + ' 个脚本块, 总字符数=' + html.length)
+  if (foundScripts.length > 0) {
+    dbgLog('findSSRDataInHtml 第一个脚本块前200字符: ' + foundScripts[0].slice(0, 200))
+  }
+
+  // 尝试每个模式
+  for (const pat of patterns) {
+    // 先在脚本块中搜索
+    for (const script of foundScripts) {
+      const match = script.match(pat.regex)
+      if (match) {
+        const jsonStr = (match[1] || match[2] || '').trim()
+        if (jsonStr) {
+          try {
+            const data = JSON.parse(jsonStr)
+            dbgLog('findSSRDataInHtml 成功匹配 ' + pat.name + ' (脚本块中)')
+            return { source: pat.name, data }
+          } catch (e) {
+            // 可能 JSON 被截断, 尝试在全文中搜索
+          }
+        }
+      }
+    }
+    // 再在全文中搜索
+    const match2 = html.match(pat.regex)
+    if (match2) {
+      const jsonStr = (match2[1] || match2[2] || '').trim()
+      if (jsonStr) {
+        try {
+          const data = JSON.parse(jsonStr)
+          dbgLog('findSSRDataInHtml 成功匹配 ' + pat.name + ' (全文中)')
+          return { source: pat.name, data }
+        } catch (e) {
+          dbgLog('findSSRDataInHtml 匹配 ' + pat.name + ' 但 JSON 解析失败: ' + e.message + ' 前100字符=' + jsonStr.slice(0, 100))
+        }
+      }
+    }
+  }
+
+  // 最后尝试: 搜索任何包含 track_id 或 trackName 的 JSON 对象
+  const trackIdMatch = html.match(/"track_id"\s*:\s*"?(\d+)"?/)
+  const trackNameMatch = html.match(/"trackName"\s*:\s*"([^"]+)"/)
+  const audioUrlMatch = html.match(/"url"\s*:\s*"(https?:\/\/[^"]+)"/)
+  if (trackNameMatch) {
+    dbgLog('findSSRDataInHtml 找到 trackName=' + trackNameMatch[1])
+  }
+  if (audioUrlMatch) {
+    dbgLog('findSSRDataInHtml 找到 audio url=' + audioUrlMatch[1].slice(0, 80))
+  }
+
+  return null
+}
+
+// 通过分享页 SSR 获取 track 信息 (不依赖风控敏感的 track_v2 API)
+// 关键: music.douyin.com 的 SSR 接口不需要 cookie/签名, 直接返回 JSON 数据
+async function fetchTrackPayloadFromSSR({ track_id }) {
+  // 优先级: music.douyin.com (直接返回 JSON) > qishui.com (SPA shell, 已不可用)
+  const urls = [
+    {
+      // 首选: music.douyin.com SSR 接口, 与视频 SSR 接口同源, 稳定可靠
+      url: `https://music.douyin.com/qishui/share/track?__loader=track_page&__ssrDirect=true&track_id=${track_id}`,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/json,text/html',
+        'Referer': 'https://www.qishui.com/',
+      },
+      label: 'music.douyin.com/share/track',
+    },
+    {
+      // 备选: 使用 id 参数
+      url: `https://music.douyin.com/qishui/share/track?__loader=track_page&__ssrDirect=true&id=${track_id}`,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/json,text/html',
+        'Referer': 'https://www.qishui.com/',
+      },
+      label: 'music.douyin.com/share/track?id=',
+    },
+    {
+      // 备选: 不带 __loader 参数
+      url: `https://music.douyin.com/qishui/share/track?__ssrDirect=true&track_id=${track_id}`,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/json,text/html',
+        'Referer': 'https://www.qishui.com/',
+      },
+      label: 'music.douyin.com/share/track(no_loader)',
+    },
+    {
+      // 备选: qishui.com 分享页 (新版返回 SPA shell, 通常无数据, 但仍尝试)
+      url: `https://www.qishui.com/track/${track_id}`,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml',
+        'Referer': 'https://www.qishui.com/',
+      },
+      label: 'qishui.com/track/{id}',
+    },
+  ]
+
+  let lastError = null
+
+  for (const { url, headers, label } of urls) {
+    dbgLog('fetchTrackPayloadFromSSR 尝试: ' + label + ' url=' + url)
+    try {
+      const resp = await fetch(url, { method: 'GET', headers })
+      const text = await resp.text()
+      const ct = resp.headers.get('content-type') || 'unknown'
+      dbgLog('fetchTrackPayloadFromSSR [' + label + '] HTTP=' + resp.status + ' len=' + text.length + ' contentType=' + ct)
+
+      if (!resp.ok) {
+        lastError = new Error('HTTP ' + resp.status)
+        continue
+      }
+
+      // 统一尝试 JSON 解析 (无论 content-type, 因为 SSR 可能返回 text/html 但内容是 JSON)
+      // 方法1: 直接 JSON 解析 (适用于 music.douyin.com 返回的纯 JSON)
+      try {
+        const json = JSON.parse(text)
+        dbgLog('fetchTrackPayloadFromSSR [' + label + '] JSON keys=' + JSON.stringify(Object.keys(json || {})))
+
+        // 尝试多种提取策略
+        const extracted = extractTrackDataFromJSON(json)
+        if (extracted) {
+          dbgLog('fetchTrackPayloadFromSSR [' + label + '] JSON 提取成功: title=' + extracted.title + ' url=' + (extracted.url ? '有' : '无'))
+          return buildTrackPayloadFromExtracted(extracted)
+        }
+
+        // 特殊处理: music.douyin.com 可能返回 { trackOptions: {...} } 格式
+        if (json.trackOptions && json.trackOptions.url) {
+          const to = json.trackOptions
+          dbgLog('fetchTrackPayloadFromSSR [' + label + '] 从 trackOptions 提取成功')
+          return buildTrackPayloadFromExtracted({
+            title: to.trackName || to.title || '未知歌曲',
+            artist: to.artistName || to.artist || '未知歌手',
+            album: to.albumName || to.album || '',
+            duration: parseInt(to.duration || '0'),
+            trackId: String(to.trackId || to.track_id || track_id),
+            url: to.url,
+            spadeA: (to.encrypt_info && to.encrypt_info.spade_a) || to.spade_a || to.playAuth || json.playAuth || '',
+          })
+        }
+
+        // 特殊处理: { data: { track: {...} } } 格式
+        if (json.data?.track) {
+          const t = json.data.track
+          const url = t.track_player?.video_model?.video_list?.[0]?.main_url || t.audio_url || ''
+          if (url) {
+            dbgLog('fetchTrackPayloadFromSSR [' + label + '] 从 data.track 提取成功')
+            return buildTrackPayloadFromExtracted({
+              title: t.name || '未知歌曲',
+              artist: t.artists?.[0]?.simple_display_name || '未知歌手',
+              album: t.album?.name || '',
+              duration: t.duration || 0,
+              trackId: String(t.id || track_id),
+              url,
+              spadeA: t.track_player?.video_model?.video_list?.[0]?.encrypt_info?.spade_a || t.playAuth || json.playAuth || '',
+            })
+          }
+        }
+
+        dbgLog('fetchTrackPayloadFromSSR [' + label + '] JSON 解析成功但未找到音频数据')
+        lastError = new Error('JSON 响应中未找到音频数据')
+        continue
+      } catch (jsonErr) {
+        // 不是 JSON, 继续尝试 HTML 解析
+        dbgLog('fetchTrackPayloadFromSSR [' + label + '] 非 JSON 响应, 尝试 HTML 解析')
+      }
+
+      // 方法2: 从 HTML 中查找 SSR 数据
+      const ssrData = findSSRDataInHtml(text)
+      if (ssrData) {
+        dbgLog('fetchTrackPayloadFromSSR [' + label + '] SSR 数据来源=' + ssrData.source)
+        const extracted = extractTrackDataFromSSR(ssrData.data)
+        if (extracted) {
+          dbgLog('fetchTrackPayloadFromSSR [' + label + '] SSR 提取成功')
+          return buildTrackPayloadFromExtracted(extracted)
+        }
+      }
+
+      // 方法3: 正则提取 (兜底方案)
+      const trackNameMatch = text.match(/"trackName"\s*:\s*"([^"]+)"/)
+      const audioUrlMatch = text.match(/"url"\s*:\s*"(https?:\/\/[^"]+)"/)
+      if (trackNameMatch && audioUrlMatch) {
+        dbgLog('fetchTrackPayloadFromSSR [' + label + '] 正则提取成功: trackName=' + trackNameMatch[1])
+        return buildTrackPayloadFromExtracted({
+          title: trackNameMatch[1],
+          artist: text.match(/"artistName"\s*:\s*"([^"]+)"/)?.[1] || '未知歌手',
+          album: text.match(/"albumName"\s*:\s*"([^"]+)"/)?.[1] || '',
+          duration: parseInt(text.match(/"duration"\s*:\s*(\d+)/)?.[1] || '0'),
+          trackId: text.match(/"track_id"\s*:\s*"?(\d+)"?/)?.[1] || track_id,
+          url: audioUrlMatch[1],
+        })
+      }
+
+      lastError = new Error('未找到可解析的 SSR 数据')
+    } catch (e) {
+      dbgLog('fetchTrackPayloadFromSSR [' + label + '] 异常: ' + e.message)
+      lastError = e
+    }
+  }
+
+  throw lastError || new Error('所有 SSR URL 均失败')
+}
+
+// 从 SSR/JSON 数据中提取音频信息
+function extractTrackDataFromSSR(data) {
+  // 尝试多种数据结构
+  const candidates = [
+    data?.loaderData?.track_page?.audioWithLyricsOption,
+    data?.loaderData?.track_page?.audioOpt,
+    data?.data?.track_page?.audioWithLyricsOption,
+    data?.data?.trackPage?.audioWithLyricsOption,
+    data?.audioWithLyricsOption,
+    data?.audioOpt,
+    data?.track,
+  ]
+
+  for (const opt of candidates) {
+    if (opt && (opt.url || opt.trackName || opt.title)) {
+      const trackId = data?.loaderData?.track_page?.track_id || data?.data?.track_page?.track_id || data?.track_id || opt.id || ''
+      const duration = opt.duration || (opt.trackInfo && opt.trackInfo.duration) || 0
+      const albumName = (opt.trackInfo && opt.trackInfo.album && opt.trackInfo.album.name) || ''
+      return {
+        title: opt.trackName || opt.title || opt.name || '未知歌曲',
+        artist: opt.artistName || opt.artist || opt.artist_name || '未知歌手',
+        album: albumName,
+        duration,
+        trackId: String(trackId),
+        url: opt.url || opt.audioUrl || '',
+        spadeA: (opt.encrypt_info && opt.encrypt_info.spade_a) || opt.spade_a || opt.playAuth || data?.playAuth || '',
+      }
+    }
+  }
+
+  // 尝试 video_list 结构
+  const videoList = data?.track_player?.video_model || data?.video_model
+  if (videoList) {
+    let vm = videoList
+    if (typeof vm === 'string') { try { vm = JSON.parse(vm) } catch (e) {} }
+    if (Array.isArray(vm?.video_list)) {
+      const first = vm.video_list.find(v => v?.main_url)
+      if (first) {
+        return {
+          title: data?.track?.name || '未知歌曲',
+          artist: getArtistNameFromTrack(data?.track) || '未知歌手',
+          album: data?.track?.album?.name || '',
+          duration: data?.track?.duration || 0,
+          trackId: String(data?.track?.id || ''),
+          url: first.main_url,
+          spadeA: first?.encrypt_info?.spade_a || data?.playAuth || first?.playAuth || '',
+        }
+      }
+    }
+  }
+
+  return null
+}
+
+// 从 JSON 响应中提取数据
+function extractTrackDataFromJSON(json) {
+  if (!json) return null
+
+  // 可能的 JSON结构 (按优先级排序)
+  const candidates = [
+    json?.trackOptions,      // music.douyin.com SSR 返回 { trackOptions: {...} }
+    json?.audioOptions,      // 类似 videoOptions 的音频格式
+    json?.data?.track,       // { data: { track: {...} } }
+    json?.data,              // { data: { ... } }
+    json?.track,             // { track: {...} }
+    json?.track_page,        // { track_page: {...} }
+    json?.trackPage,         // { trackPage: {...} }
+    json?.loaderData?.track_page, // { loaderData: { track_page: {...} } }
+    json?.result,            // { result: {...} }
+  ]
+
+  for (const c of candidates) {
+    if (!c) continue
+    if (c?.audioWithLyricsOption || c?.audioOpt || c?.url || c?.trackName || c?.title) {
+      // 这是一个包含音频信息的对象
+      const opt = c.audioWithLyricsOption || c.audioOpt || c
+      if (opt) {
+        return {
+          title: opt.trackName || opt.title || opt.name || c.title || c.name || '未知歌曲',
+          artist: opt.artistName || opt.artist || c.artistName || c.artist || '未知歌手',
+          album: (opt.trackInfo && opt.trackInfo.album && opt.trackInfo.album.name) || c.album_name || c.album || '',
+          duration: opt.duration || (opt.trackInfo && opt.trackInfo.duration) || c.duration || 0,
+          trackId: String(c.track_id || opt.id || c.id || ''),
+          url: opt.url || c.url || opt.audioUrl || '',
+          spadeA: (opt.encrypt_info && opt.encrypt_info.spade_a) || opt.spade_a || c.spade_a || opt.playAuth || c.playAuth || '',
+        }
+      }
+    }
+
+    // 如果有 video_list
+    if (c?.video_model || c?.track_player?.video_model) {
+      const vm = c?.video_model || c?.track_player?.video_model
+      let parsed = vm
+      if (typeof parsed === 'string') { try { parsed = JSON.parse(parsed) } catch (e) {} }
+      if (Array.isArray(parsed?.video_list)) {
+        const first = parsed.video_list.find(v => v?.main_url)
+        if (first) {
+          return {
+            title: c?.track?.name || c?.name || '未知歌曲',
+            artist: getArtistNameFromTrack(c?.track) || '未知歌手',
+            album: c?.track?.album?.name || '',
+            duration: c?.track?.duration || 0,
+            trackId: String(c?.track?.id || ''),
+            url: first.main_url,
+            spadeA: first?.encrypt_info?.spade_a || c?.playAuth || first?.playAuth || '',
+          }
+        }
+      }
+    }
+  }
+
+  return null
+}
+
+// 从 track 数据获取艺人名
+function getArtistNameFromTrack(track) {
+  const artists = Array.isArray(track?.artists) ? track.artists : []
+  const first = artists[0]
+  return first?.simple_display_name || first?.user_info?.nickname || first?.name || ''
+}
+
+// 构建最终的 track payload
+function buildTrackPayloadFromExtracted(extracted) {
+  const payload = {
+    track: {
+      id: extracted.trackId || '',
+      name: extracted.title,
+      duration: extracted.duration || 0,
+      album: { name: extracted.album || '', id: '' },
+      artists: extracted.artist ? [{ simple_display_name: extracted.artist }] : [],
+      label_info: {},
+      bit_rates: [],
+      status: 0,
+    },
+    track_player: {
+      video_model: extracted.url ? JSON.stringify({
+        video_list: [{
+          video_meta: { quality: 'standard', vtype: 'm4a' },
+          main_url: extracted.url,
+          encrypt_info: { spade_a: extracted.spadeA || '' },
+        }],
+      }) : '',
+    },
+    __fromSSR: true,
+    __directMainUrl: extracted.url,
+    __directContentType: 'audio/mp4',
+    __spadeA: extracted.spadeA || '',
+    __encryptInfo: extracted.spadeA ? { spade_a: extracted.spadeA } : null,
+  }
+  dbgLog('buildTrackPayloadFromExtracted: title=' + extracted.title + ' url=' + (extracted.url ? '有' : '无') + ' spadeA=' + (extracted.spadeA ? '有 (长度=' + extracted.spadeA.length + ')' : '无'))
+  return payload
+}
+
+// 三级回退链: SSR 页面 → 外部后端
+async function tryTrackPayloadFallback(track_id, reason) {
+  dbgLog('tryTrackPayloadFallback 开始: track_id=' + track_id + ' reason=' + reason)
+
+  // 第一级: SSR 页面解析
+  try {
+    const ssrPayload = await fetchTrackPayloadFromSSR({ track_id: String(track_id) })
+    if (ssrPayload && ssrPayload.__directMainUrl) {
+      dbgLog('tryTrackPayloadFallback SSR 回退成功')
+      return ssrPayload
+    }
+    dbgLog('tryTrackPayloadFallback SSR 返回无 directMainUrl, 继续后端回退')
+  } catch (ssrErr) {
+    dbgLog('tryTrackPayloadFallback SSR 回退失败: ' + ssrErr.message)
+  }
+
+  // 第二级: 外部后端
+  try {
+    const backendPayload = await fetchTrackPayloadFromBackend({ track_id: String(track_id) })
+    if (backendPayload && backendPayload.__directMainUrl) {
+      dbgLog('tryTrackPayloadFallback 外部后端回退成功')
+      return backendPayload
+    }
+    dbgLog('tryTrackPayloadFallback 外部后端返回无 directMainUrl')
+  } catch (beErr) {
+    dbgLog('tryTrackPayloadFallback 外部后端回退失败: ' + beErr.message)
+  }
+
+  dbgLog('tryTrackPayloadFallback 所有回退均失败')
+  return null
+}
+
+async function fetchTrackPayload({ aid = fixed.aid, sessionid, track_id, mediaType = 'track', cookie }) {
   // 加入完整 query 参数(对齐其他汽水数据端点), aid 在 query, sessionid 在 Cookie + body
   const trackV2Url = buildUrl(endpoints.trackV2, {
     aid,
@@ -59,14 +558,27 @@ async function fetchTrackPayload({ aid = fixed.aid, sessionid, track_id, mediaTy
   })
   dbgLog('fetchTrackPayload 请求: track_id=' + track_id + ' media_type=' + mediaType + ' aid=' + aid + ' url=' + trackV2Url)
   dbgLog('fetchTrackPayload sessionid 长度=' + (sessionid ? sessionid.length : 0) + ' 前8字符=' + (sessionid ? sessionid.slice(0, 8) : '(空)'))
+  const cookieHeader = cookie || `sessionid=${sessionid};`
+  dbgLog('fetchTrackPayload cookie 长度=' + cookieHeader.length)
+
+  // 从 cookie 提取 CSRF token 并添加到请求头 (新版风控要求)
+  const csrfToken = extractCookieValue(cookieHeader, 'passport_csrf_token')
+  const headers = {
+    Cookie: cookieHeader,
+    'Content-Type': 'application/json; charset=utf-8',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Referer': 'https://www.qishui.com/',
+    'Origin': 'https://www.qishui.com',
+  }
+  if (csrfToken) {
+    headers['x-passport-csrf-token'] = csrfToken
+    headers['x-csrf-token'] = csrfToken
+    dbgLog('fetchTrackPayload CSRF token=' + csrfToken.slice(0, 8) + '...')
+  }
+
   const trackV2Response = await fetch(trackV2Url, {
     method: 'POST',
-    headers: {
-      Cookie: `sessionid=${sessionid};`,
-      'Content-Type': 'application/json; charset=utf-8',
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'Referer': 'https://www.qishui.com/',
-    },
+    headers,
     body: JSON.stringify({
       aid,
       sessionid,
@@ -77,7 +589,40 @@ async function fetchTrackPayload({ aid = fixed.aid, sessionid, track_id, mediaTy
     }),
   })
 
-  const trackPayload = await trackV2Response.json()
+  // 先读取文本再解析, 避免 .json() 在空响应时抛 "Unexpected end of JSON input"
+  const respText = await trackV2Response.text()
+
+  // 诊断日志: 输出响应头, 便于排查空响应/重定向问题
+  if (!respText || !respText.trim()) {
+    const responseHeaders = {}
+    try {
+      for (const [key, value] of trackV2Response.headers) {
+        if (['content-type', 'content-length', 'location', 'set-cookie', 'server', 'x-cache', 'x-response-cache'].includes(key.toLowerCase())) {
+          responseHeaders[key] = value.length > 200 ? value.slice(0, 200) + '...' : value
+        }
+      }
+    } catch (e) {}
+    dbgLog('fetchTrackPayload 空响应诊断: HTTP=' + trackV2Response.status + ' headers=' + JSON.stringify(responseHeaders))
+    dbgLog('fetchTrackPayload 响应体为空 (HTTP ' + trackV2Response.status + '), 可能被风控拦截, 尝试三级回退')
+
+    // 三级回退链: SSR → 外部后端 → 抛出错误
+    const fallbackPayload = await tryTrackPayloadFallback(track_id, '空响应')
+    if (fallbackPayload) return fallbackPayload
+
+    const error = new Error('汽水音乐 track_v2 返回空响应 (HTTP ' + trackV2Response.status + '), 可能被风控拦截, 请稍后重试 [track_id=' + track_id + ']')
+    error.status = trackV2Response.status
+    throw error
+  }
+
+  let trackPayload
+  try {
+    trackPayload = JSON.parse(respText)
+  } catch (e) {
+    dbgLog('fetchTrackPayload JSON 解析失败: ' + e.message + ' 响应前500字符=' + respText.slice(0, 500))
+    const error = new Error('汽水音乐 track_v2 返回非 JSON 响应: ' + respText.slice(0, 200) + ' [track_id=' + track_id + ']')
+    error.status = trackV2Response.status
+    throw error
+  }
 
   // 详细日志: 输出 HTTP 状态和响应结构, 便于排查"无可用音频"问题
   dbgLog('fetchTrackPayload HTTP status=' + trackV2Response.status)
@@ -88,7 +633,12 @@ async function fetchTrackPayload({ aid = fixed.aid, sessionid, track_id, mediaTy
   // 检测错误响应: 如果只有 status_code/status_info 而没有 track 数据, 说明请求失败
   if (trackPayload && trackPayload.status_code && !trackPayload.track && !trackPayload.track_player) {
     const statusInfo = trackPayload.status_info || {}
-    dbgLog('fetchTrackPayload 错误: status_code=' + trackPayload.status_code + ' status_info=' + JSON.stringify(statusInfo))
+    dbgLog('fetchTrackPayload 错误: status_code=' + trackPayload.status_code + ' status_info=' + JSON.stringify(statusInfo) + ' 尝试三级回退')
+
+    // 三级回退链: SSR → 外部后端 → 抛出错误
+    const fallbackPayload = await tryTrackPayloadFallback(track_id, 'status_code=' + trackPayload.status_code)
+    if (fallbackPayload) return fallbackPayload
+
     const errMsg = (statusInfo.message || statusInfo.error || `汽水音乐 API 返回错误 (status_code=${trackPayload.status_code})`) +
       ` [track_id=${track_id}]`
     const error = new Error(errMsg)
@@ -99,6 +649,9 @@ async function fetchTrackPayload({ aid = fixed.aid, sessionid, track_id, mediaTy
 
   if (!trackV2Response.ok) {
     dbgLog('fetchTrackPayload 失败响应=' + JSON.stringify(trackPayload, null, 2))
+    // HTTP 错误也尝试回退
+    const fallbackPayload = await tryTrackPayloadFallback(track_id, 'HTTP ' + trackV2Response.status)
+    if (fallbackPayload) return fallbackPayload
     const error = new Error(trackPayload?.error || trackPayload?.message || `获取音频信息失败 (HTTP ${trackV2Response.status})`)
     error.status = trackV2Response.status
     error.payload = trackPayload
@@ -250,18 +803,27 @@ async function fetchVideoPayload({ aid = fixed.aid, sessionid, video_id, vid, co
   let lastError = null
   let videoPayload = null
 
+  // 从 cookie 提取 CSRF token (风控敏感接口需要)
+  const csrfToken = extractCookieValue(cookieHeader, 'passport_csrf_token')
+
   for (let i = 0; i < variants.length; i++) {
     const { url, label, body } = variants[i]
     dbgLog('fetchVideoPayload 尝试格式 #' + (i + 1) + ' (' + label + '): ' + JSON.stringify(body))
     try {
+      const headers = {
+        Cookie: cookieHeader,
+        'Content-Type': 'application/json; charset=utf-8',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Referer': 'https://www.qishui.com/',
+        'Origin': 'https://www.qishui.com',
+      }
+      if (csrfToken) {
+        headers['x-passport-csrf-token'] = csrfToken
+        headers['x-csrf-token'] = csrfToken
+      }
       const resp = await fetch(url, {
         method: 'POST',
-        headers: {
-          Cookie: cookieHeader,
-          'Content-Type': 'application/json; charset=utf-8',
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          'Referer': 'https://www.qishui.com/',
-        },
+        headers,
         body: JSON.stringify(body),
       })
       const json = await resp.json()
@@ -304,48 +866,213 @@ async function fetchVideoPayload({ aid = fixed.aid, sessionid, video_id, vid, co
 // 直接从 SSR 提供的 main_url 下载视频 (跳过 video_model 解析)
 // SSR 接口返回的是 douyinvod.com 直链, 无需解密, 直接下载即可
 async function downloadFromDirectMainUrl({ directMainUrl, contentType, trackPayload, track_id, quality, vid, isRealVideo }) {
-  dbgLog('downloadFromDirectMainUrl 开始: url=' + directMainUrl.slice(0, 100) + '... contentType=' + contentType)
+  dbgLog('downloadFromDirectMainUrl 开始: url=' + directMainUrl.slice(0, 100) + '... contentType=' + contentType + ' isRealVideo=' + isRealVideo)
 
-  // 抓包确认: douyinvod.com 直链需要特定请求头才能成功下载
-  // - Range: bytes=0- (必需, 否则服务器拒绝)
-  // - User-Agent: Cronet/TTNet (抖音系客户端 UA)
-  // - Accept-Encoding: identity (禁用 gzip, 避免二进制流被压缩)
-  const mediaResponse = await fetch(directMainUrl, {
-    headers: {
-      'User-Agent': 'Cronet/TTNetVersion:3cd4fda3 2025-07-21 QuicVersion:52c2b40d 2025-04-03',
-      'Range': 'bytes=0-',
-      'Accept-Encoding': 'identity',
-      'Connection': 'keep-alive',
-    },
+  // 直链下载 (SSR/后端返回的 URL 通常是 douyinvod.com 或其他 CDN 直链)
+  // 关键: douyinvod.com 需要正确的 Referer 头, 否则返回 200 但内容为空/错误
+  const isDouyinVod = directMainUrl.includes('douyinvod.com') || directMainUrl.includes('bytevcloud.com') || directMainUrl.includes('bytedance.com')
+  const downloadHeaders = {
+    'User-Agent': 'Cronet/TTNetVersion:3cd4fda3 2025-07-21 QuicVersion:52c2b40d 2025-04-03',
+    'Range': 'bytes=0-',
+    'Accept-Encoding': 'identity',
+    'Connection': 'keep-alive',
+    'Accept': '*/*',
+  }
+  if (isDouyinVod) {
+    downloadHeaders['Referer'] = 'https://www.qishui.com/'
+    downloadHeaders['Origin'] = 'https://www.qishui.com'
+    dbgLog('downloadFromDirectMainUrl 检测到字节 CDN URL, 添加 Referer/Origin 头')
+  }
+
+  let mediaResponse = await fetch(directMainUrl, {
+    headers: downloadHeaders,
     redirect: 'follow',
   })
 
+  // 如果用 Cronet UA 失败 (非 OK, 或 200 OK 但 content-length 为 0), 回退到 Chrome UA 重试
+  const contentLen = mediaResponse.headers.get('content-length')
+  const needFallback = !mediaResponse.ok || (mediaResponse.status === 200 && (!contentLen || contentLen === '0'))
+  if (needFallback) {
+    dbgLog('downloadFromDirectMainUrl Cronet UA 失败 (HTTP=' + mediaResponse.status + ' content-length=' + (contentLen || 'none') + '), 尝试 Chrome UA 回退')
+    const chromeHeaders = {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Range': 'bytes=0-',
+      'Accept-Encoding': 'identity',
+      'Accept': '*/*',
+      'Connection': 'keep-alive',
+    }
+    if (isDouyinVod) {
+      chromeHeaders['Referer'] = 'https://www.qishui.com/'
+      chromeHeaders['Origin'] = 'https://www.qishui.com'
+    }
+    const retryResp = await fetch(directMainUrl, { headers: chromeHeaders, redirect: 'follow' })
+    if (!retryResp.ok) {
+      const errorText = await retryResp.text().catch(() => '')
+      dbgLog('downloadFromDirectMainUrl 所有 UA 均失败: HTTP ' + retryResp.status + ' body=' + errorText.slice(0, 200))
+      const error = new Error(errorText || `upstream status ${retryResp.status}`)
+      error.status = retryResp.status
+      throw error
+    }
+    mediaResponse = retryResp
+    dbgLog('downloadFromDirectMainUrl Chrome UA 回退成功: HTTP=' + mediaResponse.status)
+  }
+
   if (!mediaResponse.ok) {
     const errorText = await mediaResponse.text().catch(() => '')
-    dbgLog('downloadFromDirectMainUrl 错误: 视频下载失败 HTTP ' + mediaResponse.status + ' body=' + errorText.slice(0, 200))
+    dbgLog('downloadFromDirectMainUrl 错误: 下载失败 HTTP ' + mediaResponse.status + ' body=' + errorText.slice(0, 200))
     const error = new Error(errorText || `upstream status ${mediaResponse.status}`)
     error.status = mediaResponse.status
     throw error
   }
 
   const buffer = Buffer.from(await mediaResponse.arrayBuffer())
-  dbgLog('downloadFromDirectMainUrl 视频下载完成, size=' + buffer.length)
+  dbgLog('downloadFromDirectMainUrl 下载完成, size=' + buffer.length + ' HTTP=' + mediaResponse.status + ' content-length=' + (mediaResponse.headers.get('content-length') || 'unknown'))
 
-  // 从 SSR 响应提取元数据
-  const videoOptions = trackPayload?.video || {}
-  const title = videoOptions.title || 'unknown'
-  const artist = Array.isArray(videoOptions.artists) ? (videoOptions.artists[0]?.user_info?.nickname || 'unknown') : 'unknown'
+  // 验证音频有效性: 检查文件头魔数
+  if (buffer.length < 100) {
+    dbgLog('downloadFromDirectMainUrl 错误: 文件太小 (' + buffer.length + ' bytes), 无效')
+    throw new Error('下载文件太小 (' + buffer.length + ' bytes), 可能是错误响应')
+  }
+  // 检查是否为有效的 m4a/mp3/flac 文件
+  const headerStr = buffer.slice(0, 16).toString('hex')
+  const asciiHeader = buffer.slice(0, 16).toString('ascii')
+  dbgLog('downloadFromDirectMainUrl 文件头: hex=' + headerStr + ' ascii="' + asciiHeader.replace(/[^\x20-\x7E]/g, '.') + '"')
+  // 常见音频文件头: fLaC(flac), ID3(mp3), ....ftyp(m4a/mp4), OggS(ogg), RIFF(wav)
+  // m4a/mp4 的特征: 前4字节是 size, 然后是 "ftyp" (hex: 000000...66747970)
+  const hasFtyp = /ftyp/.test(asciiHeader)
+  const hasFlac = /fLaC/.test(asciiHeader)
+  const hasMp3 = /ID3/.test(asciiHeader) || /^fff[0-9a-f]/.test(headerStr)
+  const hasOgg = /OggS/.test(asciiHeader)
+  const hasRiff = /RIFF/.test(asciiHeader)
+  const isLikelyAudio = hasFtyp || hasFlac || hasMp3 || hasOgg || hasRiff
 
-  const ext = '.mp4'
+  // 检查是否为 HTML/JSON 错误页面
+  if (asciiHeader.startsWith('<!doc') || asciiHeader.startsWith('<html')) {
+    dbgLog('downloadFromDirectMainUrl 错误: 下载到 HTML 错误页面')
+    throw new Error('下载到 HTML 错误页面而非音频数据, URL 可能已过期或需要认证')
+  }
+  if (asciiHeader.startsWith('{') || asciiHeader.startsWith('[')) {
+    dbgLog('downloadFromDirectMainUrl 错误: 下载到 JSON 数据 (可能是 API 错误响应)')
+    throw new Error('下载到 JSON 数据而非音频, 可能是风控拦截或 URL 已失效')
+  }
+
+  if (!isLikelyAudio && buffer.length > 200) {
+    // 可能是加密的 m4a (encv/enca 盒头), 继续尝试解密流程
+    dbgLog('downloadFromDirectMainUrl 警告: 文件头不匹配已知音频格式, 可能是加密数据, 继续尝试解密')
+  } else if (isLikelyAudio) {
+    dbgLog('downloadFromDirectMainUrl 文件头验证通过: ' + (hasFtyp ? 'mp4/m4a' : hasFlac ? 'flac' : hasMp3 ? 'mp3' : hasOgg ? 'ogg' : hasRiff ? 'wav' : 'unknown'))
+  }
+
+  // 根据 isRealVideo 从不同字段提取元数据
+  let title, artist
+  if (isRealVideo) {
+    // 真正视频: video SSR payload
+    const videoOptions = trackPayload?.video || {}
+    title = videoOptions.title || videoOptions.videoName || 'unknown'
+    artist = Array.isArray(videoOptions.artists) ? (videoOptions.artists[0]?.user_info?.nickname || 'unknown') : (videoOptions.artistName || 'unknown')
+  } else {
+    // 普通歌曲: track SSR payload 或 track_v2 payload
+    const track = trackPayload?.track || {}
+    title = track.name || track.title || 'unknown'
+    const artists = track.artists || []
+    if (Array.isArray(artists) && artists.length > 0) {
+      artist = artists[0].simple_display_name || artists[0].name || artists[0].nickname || 'unknown'
+    } else {
+      artist = 'unknown'
+    }
+  }
+
+  // 根据 contentType 决定扩展名
+  let ext = '.mp4'
+  let finalContentType = 'video/mp4'
+  if (contentType) {
+    if (contentType.includes('audio/flac')) { ext = '.flac'; finalContentType = 'audio/flac' }
+    else if (contentType.includes('audio/mpeg')) { ext = '.mp3'; finalContentType = 'audio/mpeg' }
+    else if (contentType.includes('audio/mp4') || contentType.includes('m4a')) { ext = '.m4a'; finalContentType = 'audio/mp4' }
+    else if (contentType.includes('video/mp4')) { ext = '.mp4'; finalContentType = 'video/mp4' }
+    else if (contentType.includes('video')) { ext = '.mp4'; finalContentType = 'video/mp4' }
+    else if (contentType.includes('audio')) { ext = '.m4a'; finalContentType = 'audio/mp4' }
+  } else if (!isRealVideo) {
+    ext = '.m4a'
+    finalContentType = 'audio/mp4'
+  }
+
   const fileName = `${title} - ${artist}${ext}`.replace(/[<>:"/\\|?*]/g, '_')
 
-  dbgLog('downloadFromDirectMainUrl 完成, ext=' + ext + ' size=' + buffer.length + ' fileName=' + fileName)
+  // 获取 spade_a 加密信息 (从多个可能位置)
+  let spadeA = ''
+  const encryptInfo = trackPayload?.__encryptInfo
+  if (trackPayload?.__spadeA) {
+    spadeA = trackPayload.__spadeA
+    dbgLog('downloadFromDirectMainUrl spade_a 来自 __spadeA: 长度=' + spadeA.length)
+  } else if (encryptInfo?.spade_a) {
+    spadeA = encryptInfo.spade_a
+    dbgLog('downloadFromDirectMainUrl spade_a 来自 __encryptInfo: 长度=' + spadeA.length)
+  } else {
+    // 尝试从 video_model 中提取
+    const vm = trackPayload?.track_player?.video_model
+    if (vm) {
+      try {
+        const parsed = typeof vm === 'string' ? JSON.parse(vm) : vm
+        const firstItem = parsed?.video_list?.[0]
+        if (firstItem?.encrypt_info?.spade_a) {
+          spadeA = firstItem.encrypt_info.spade_a
+          dbgLog('downloadFromDirectMainUrl spade_a 来自 video_model: 长度=' + spadeA.length)
+        }
+      } catch (e) {}
+    }
+  }
 
-  return {
-    buffer,
-    fileName,
-    contentType: 'video/mp4',
-    trackPayload,
+  // 检测加密: 即使没有 spade_a, 也检查文件是否包含加密标记
+  if (!spadeA && buffer.length > 1000) {
+    // 加密的 m4a 文件 stsd 盒中包含 "enca" 而非 "mp4a"
+    // 搜索前 1MB 数据是否包含 "enca" 和 "senc" 标记
+    const searchLen = Math.min(buffer.length, 1048576) // 1MB
+    const headSlice = buffer.slice(0, searchLen).toString('latin1')
+    const hasEnca = headSlice.includes('enca')
+    const hasSenc = headSlice.includes('senc')
+    if (hasEnca || hasSenc) {
+      dbgLog('downloadFromDirectMainUrl 警告: 文件包含加密标记 (enca=' + hasEnca + ' senc=' + hasSenc + ') 但无 spade_a, 音频可能无法播放')
+    }
+  }
+
+  // 无 spade_a: 跳过解密, 直接返回原始 buffer
+  if (!spadeA) {
+    dbgLog('downloadFromDirectMainUrl 无 spade_a, 跳过解密')
+    dbgLog('downloadFromDirectMainUrl 完成, ext=' + ext + ' size=' + buffer.length + ' fileName=' + fileName)
+    return {
+      buffer,
+      fileName,
+      contentType: finalContentType,
+      trackPayload,
+    }
+  }
+
+  // 有 spade_a: 解密音频
+  dbgLog('downloadFromDirectMainUrl 有 spade_a (长度=' + spadeA.length + '), 开始解密')
+  try {
+    const decryptor = new TrackDecryptor()
+    const decResult = decryptor.decrypt({
+      encryptedBuffer: buffer,
+      spadeA,
+      media: { title, artist },
+    })
+    dbgLog('downloadFromDirectMainUrl 解密完成, ext=' + decResult.extension + ' size=' + decResult.buffer.length)
+    return {
+      buffer: decResult.buffer,
+      fileName: decResult.fileName,
+      contentType: decResult.extension === '.flac' ? 'audio/flac' : 'audio/mp4',
+      trackPayload,
+    }
+  } catch (decErr) {
+    dbgLog('downloadFromDirectMainUrl 解密失败: ' + decErr.message + ' 返回原始 buffer')
+    // 解密失败, 返回原始 buffer (可能是未加密的)
+    return {
+      buffer,
+      fileName,
+      contentType: finalContentType,
+      trackPayload,
+    }
   }
 }
 
@@ -379,11 +1106,11 @@ async function downloadTrackMedia({ sessionid, track_id, quality, aid = fixed.ai
       // 真正视频: vid 是字符串格式, 直接走 video_v2 (内部会优先尝试 SSR 接口)
       try {
         trackPayload = await fetchVideoPayload({ aid, sessionid, video_id: String(track_id), vid, cookie })
-        // SSR 接口返回 __fromSSR 标记, 直接带 main_url, 不需要解析 video_model
-        if (trackPayload?.__fromSSR && trackPayload?.__directMainUrl) {
-          dbgLog('downloadTrackMedia SSR 直链模式, 跳过 video_model 解析')
+        // SSR 接口返回 __fromSSR/__fromBackend 标记, 直接带 main_url, 不需要解析 video_model
+        if ((trackPayload?.__fromSSR || trackPayload?.__fromBackend) && trackPayload?.__directMainUrl) {
+          dbgLog('downloadTrackMedia SSR/后端直链模式, 跳过 video_model 解析 source=' + (trackPayload?.__fromSSR ? 'SSR' : 'backend'))
           isRealVideo = true
-          // 直接用 SSR 返回的 main_url 下载视频
+          // 直接用直链下载视频
           return await downloadFromDirectMainUrl({
             directMainUrl: trackPayload.__directMainUrl,
             contentType: trackPayload.__directContentType || 'video/mp4',
@@ -399,7 +1126,7 @@ async function downloadTrackMedia({ sessionid, track_id, quality, aid = fixed.ai
       } catch (e) {
         dbgLog('downloadTrackMedia video_v2 失败: ' + e.message + ', 回退到 track_v2 + ugc_clip')
         // 回退到 track_v2 + ugc_clip
-        trackPayload = await fetchTrackPayload({ aid, sessionid, track_id: String(track_id), mediaType: 'ugc_clip' })
+        trackPayload = await fetchTrackPayload({ aid, sessionid, track_id: String(track_id), mediaType: 'ugc_clip', cookie })
       }
     } else {
       // UGC 创作: vid 是数字字符串, 先尝试 track_v2 + ugc_clip
@@ -409,7 +1136,7 @@ async function downloadTrackMedia({ sessionid, track_id, quality, aid = fixed.ai
       for (const mt of mediaTypeVariants) {
         try {
           dbgLog('downloadTrackMedia UGC 尝试 track_v2: track_id=' + track_id + ' media_type=' + mt)
-          trackPayload = await fetchTrackPayload({ aid, sessionid, track_id: String(track_id), mediaType: mt })
+          trackPayload = await fetchTrackPayload({ aid, sessionid, track_id: String(track_id), mediaType: mt, cookie })
           found = true
           dbgLog('downloadTrackMedia UGC 成功: media_type=' + mt)
           break
@@ -436,7 +1163,20 @@ async function downloadTrackMedia({ sessionid, track_id, quality, aid = fixed.ai
   } else {
     // 普通歌曲: 用 track_id + media_type='track'
     try {
-      trackPayload = await fetchTrackPayload({ aid, sessionid, track_id: String(track_id) })
+      trackPayload = await fetchTrackPayload({ aid, sessionid, track_id: String(track_id), cookie })
+      // SSR/后端直链模式: fetchTrackPayload 内部回退成功, 直接带 main_url, 跳过 video_model 解析
+      if ((trackPayload?.__fromSSR || trackPayload?.__fromBackend) && trackPayload?.__directMainUrl) {
+        dbgLog('downloadTrackMedia 普通歌曲 SSR/后端直链模式, source=' + (trackPayload?.__fromSSR ? 'SSR' : 'backend') + ' 跳过 video_model 解析')
+        return await downloadFromDirectMainUrl({
+          directMainUrl: trackPayload.__directMainUrl,
+          contentType: trackPayload.__directContentType || 'audio/mp4',
+          trackPayload,
+          track_id,
+          quality,
+          vid,
+          isRealVideo: false,
+        })
+      }
     } catch (e) {
       const isNotFound = (e.payload && e.payload.status_code === 1000005) ||
                          /ERR_RESOURCE_NOT_FOUND/i.test(e.message || '')

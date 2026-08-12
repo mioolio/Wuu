@@ -124,6 +124,7 @@
     appSettings.serverRateLimit = typeof userData.settings.serverRateLimit === 'number'
       ? userData.settings.serverRateLimit : 0;
     appSettings.serverAccessLog = userData.settings.serverAccessLog === true;
+    appSettings.mobileEnabled = userData.settings.mobileEnabled === true;
     appSettings.coverUnify = userData.settings.coverUnify !== false;
     appSettings.desktopLyricPersist = userData.settings.desktopLyricPersist === true;
     if (Array.isArray(userData.settings.desktopLyricBounds) && userData.settings.desktopLyricBounds.length === 2) {
