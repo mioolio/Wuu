@@ -3,16 +3,7 @@
 function _applyDurUpdate(idx, duration) {
   if (idx < 0 || idx >= songs.length) return;
   const s = songs[idx];
-  const _old = s.realDuration;
   s.realDuration = duration;
-  // 调试: 后台解析推送的时长覆盖了原有值
-  console.log('[DBG:onDurationUpdate]', {
-    idx,
-    song: `${s.songName} - ${s.artist}`,
-    oldRealDuration: _old,
-    newDuration: duration,
-    isCurrent: idx === curIdx,
-  });
   if (idx === curIdx) {
     const dur = getDuration();
     tEnd.textContent = fmt(dur);
@@ -269,16 +260,18 @@ function getDuration() {
   const ad = (audio.duration && isFinite(audio.duration) && audio.duration > 0) ? audio.duration : 0;
   // 优先用 AAC/MP3/FLAC 帧解析的真实时长
   if (s.realDuration && s.realDuration > 0 && isFinite(s.realDuration)) {
-    // 修复: 当 audio.duration 明显大于 realDuration 时(差>30秒),
-    // 说明 realDuration 解析错误(如 FLAC 被误当 AAC/MP3 解析),
-    // 应信任 Chromium 实际解码的 audio.duration
-    if (ad > 0 && ad - s.realDuration > 30) {
-      console.warn('[DBG:getDuration] realDuration 可疑, 改用 audio.duration', {
+    // 修复: 与 audio.duration 偏差 >30 秒时信任 realDuration (帧解析只统计真实音频帧)。
+    // Chromium 对 ADTS 流的时长是"文件大小÷码率"估算, 文件尾部带非音频数据(封面/垃圾)
+    // 时会严重虚高(实例: 3:20 的歌被估成 6612s/110 分钟), 进度条刻度错误 + 拖动越界
+    // → seek 落进垃圾数据区 → 引擎停止 → "莫名暂停"。FLAC/OGG 已在解析端魔数排除,
+    // AAC/MP3 帧计数只统计真实同步帧, 可信。
+    if (ad > 0 && Math.abs(ad - s.realDuration) > 30 && !s._durMismatchWarned) {
+      s._durMismatchWarned = true; // 每首歌只告警一次 (getDuration 高频调用, 防刷屏)
+      console.warn('[DBG:getDuration] audio.duration 可疑(文件可能含尾部非音频数据), 信任 realDuration', {
         song: `${s.songName} - ${s.artist}`,
         realDuration: s.realDuration,
         audioDuration: ad,
       });
-      return ad;
     }
     return s.realDuration;
   }

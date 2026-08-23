@@ -129,9 +129,32 @@ async function _deleteDislikedSong(s, liEl) {
     if (stats[s.audioPath]) delete stats[s.audioPath];
     if (progress[s.audioPath]) delete progress[s.audioPath];
     if (actualDuration[s.audioPath]) delete actualDuration[s.audioPath];
-    // 从 songs 数组移除
+    // 从 songs 数组移除 (并修正播放状态相关索引)
     const idx = songs.findIndex(x => x && x.audioPath === s.audioPath);
-    if (idx >= 0) songs.splice(idx, 1);
+    if (idx >= 0) {
+      // 是否删除的是当前正在播放的歌曲 (试听模式播放的是网络流, 与本地列表无关)
+      const wasCurrent = idx === curIdx && !fmPreviewMode;
+      songs.splice(idx, 1);
+      // 修正 curIdx: 删除位置在当前播放歌曲之前时, 数组整体前移, curIdx 需同步 -1
+      // 否则 songs[curIdx] 错位指向下一首, onTick 的播放越界检测
+      // (currTime > 错位歌曲的 realDuration + 0.5) 会误触发 onEnd() 导致瞬间切歌,
+      // 进度/播放时长也会记入错误的歌
+      if (idx < curIdx) {
+        curIdx--;
+      } else if (wasCurrent) {
+        // 删除的正是当前播放歌曲(文件已从磁盘移除): curIdx 顺势指向原下一首, 越界时回退
+        if (curIdx >= songs.length) curIdx = Math.max(0, songs.length - 1);
+      }
+      // 修正随机播放队列索引: splice 前移导致 > idx 的索引全部错位一首
+      for (const q of [shuffleQueue, shuffleQueueLiked]) {
+        for (let i = q.length - 1; i >= 0; i--) {
+          if (q[i] === idx) q.splice(i, 1);
+          else if (q[i] > idx) q[i]--;
+        }
+      }
+      // 删除的是正在播放的歌: 切到下一首 (play 内部会处理越界/空列表)
+      if (wasCurrent) play(curIdx, true, false);
+    }
     saveUserData();
     if (typeof showToast === 'function') {
       const txt = result.removed === 'file' ? '已删除文件' : '已删除文件夹';

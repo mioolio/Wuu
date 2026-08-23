@@ -1,12 +1,13 @@
 <!-- =========== 移动端 App 根组件 =========== -->
-<!-- 布局: 底部导航(推荐/歌单) + 播放器(右滑歌词) + 首次点击随机播放 -->
+<!-- 布局: 底部导航(推荐/歌单/我的) + 播放器(右滑歌词) + 首次点击随机播放 -->
 <script setup>
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, onUnmounted } from 'vue';
 import { usePlayer } from './composables/usePlayer.js';
 import { fetchSongsPage, coverUrl } from './api.js';
 import Player from './components/Player.vue';
 import LyricsView from './components/LyricsView.vue';
 import SongList from './components/SongList.vue';
+import Collections from './components/Collections.vue';
 import BottomNav from './components/BottomNav.vue';
 
 const {
@@ -15,15 +16,17 @@ const {
   isPlaying,
   playSong,
   playRandom,
+  startDesktopSync,
+  stopDesktopSync,
 } = usePlayer();
 
 // ===== 音频元素 =====
 const audioRef = ref(null);
 
 // ===== 视图状态 =====
-const activeTab = ref('recommend');   // 'recommend' | 'list'
+const activeTab = ref('recommend');   // 'recommend' | 'list' | 'collections'
 const showLyrics = ref(false);        // 播放器内: false=封面, true=歌词
-const hasStarted = ref(false);        // 是否已开始过播放 (首次点击触发)
+const isSyncing = ref(true);          // 是否正在同步桌面端状态
 
 // ===== 歌单列表 (歌单页用, 服务端分页) =====
 const songs = ref([]);
@@ -42,12 +45,18 @@ onMounted(() => {
     init(audioRef.value);
   }
   loadSongs();
+  // 启动桌面端状态同步
+  startDesktopSync().finally(() => {
+    isSyncing.value = false;
+  });
 });
 
-// ===== 首次点击: 随机播放 (绕过浏览器自动播放限制) =====
+onUnmounted(() => {
+  stopDesktopSync();
+});
+
+// ===== 首次点击: 随机播放 (仅在同步模式为 isolated 或桌面端无状态时使用) =====
 function onFirstClick() {
-  if (hasStarted.value) return;
-  hasStarted.value = true;
   playRandom();
 }
 
@@ -105,7 +114,20 @@ async function loadMore() {
 function playFromList(song) {
   playSong(song);
   activeTab.value = 'recommend';
-  hasStarted.value = true;
+}
+
+// ===== 我的歌单: 点击歌曲播放 =====
+function playFromCollection(song) {
+  playSong(song);
+  activeTab.value = 'recommend';
+}
+
+// ===== 我的歌单: 播放全部 =====
+function playAll(songsList) {
+  if (songsList && songsList.length > 0) {
+    playSong(songsList[0]);
+    activeTab.value = 'recommend';
+  }
 }
 </script>
 
@@ -119,12 +141,21 @@ function playFromList(song) {
       <!-- 推荐页 (播放器) -->
       <div v-show="activeTab === 'recommend'" class="view-container">
         <!-- 首次进入: 点击开始随机播放 -->
-        <div v-if="!hasStarted && !currentSong" class="start-screen" @click="onFirstClick">
+        <div v-if="!currentSong && !isSyncing" class="start-screen" @click="onFirstClick">
           <div class="start-disc">
             <div class="start-cover">♪</div>
           </div>
           <div class="start-title">Wuu 音乐</div>
-          <div class="start-hint">点击开始随机播放</div>
+          <div class="start-hint">点击开始播放</div>
+        </div>
+
+        <!-- 同步中状态 -->
+        <div v-else-if="!currentSong && isSyncing" class="start-screen">
+          <div class="start-disc syncing">
+            <div class="start-cover">♪</div>
+          </div>
+          <div class="start-title">Wuu 音乐</div>
+          <div class="start-hint">正在同步电脑端播放状态...</div>
         </div>
 
         <!-- 播放器 (封面 / 歌词切换) -->
@@ -156,6 +187,13 @@ function playFromList(song) {
         @play="playFromList"
         @retry="loadSongs"
         @loadMore="loadMore"
+      />
+
+      <!-- 我的歌单页 -->
+      <Collections
+        v-show="activeTab === 'collections'"
+        @play="playFromCollection"
+        @playAll="playAll"
       />
     </main>
 

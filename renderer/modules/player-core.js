@@ -1,3 +1,36 @@
+// =========== 桌面端播放状态同步 (推送到主进程, 供移动端查询) ===========
+let _lastSyncTime = 0;   // 上次同步时间戳 (用于节流)
+const SYNC_THROTTLE_MS = 3000;  // 同步节流: 至少间隔 3 秒
+
+function syncDesktopState() {
+  try {
+    const now = Date.now();
+    if (now - _lastSyncTime < SYNC_THROTTLE_MS) return;
+    _lastSyncTime = now;
+    const s = songs[curIdx];
+    const songInfo = s ? {
+      songName: s.songName || '',
+      artist: s.artist || '',
+      album: s.album || '',
+      hasCover: !!s.coverPath,
+      coverPath: s.coverPath || '',
+      audioPath: s.audioPath || '',
+    } : null;
+    if (window.stateAPI && typeof window.stateAPI.updateDesktopState === 'function') {
+      window.stateAPI.updateDesktopState({
+        index: curIdx,
+        playMode: playMode,
+        isPlaying: isPlaying,
+        currentTime: audio.currentTime || 0,
+        duration: getDuration() || 0,
+        songInfo,
+      });
+    }
+  } catch (e) {
+    // 静默忽略同步失败, 不影响播放
+  }
+}
+
 // =========== Video 元素(兼容音频) + 事件 + RAF + 播放核心 + 进度条 + Tick ===========
 // 使用 <video> 元素而非 <audio>: 视频类型歌曲可在 .cover 区域显示画面
 // 音频模式时不挂载到 DOM, 行为等同于 audio 元素
@@ -162,17 +195,6 @@ audio.addEventListener('loadedmetadata', () => {
   seekInProgress = false;
   lastSeekTarget = -1;
   const dur = getDuration();
-  // 调试: loadedmetadata 是 audio.duration 可用的时刻, 可能覆盖 realDuration
-  const s = songs[curIdx];
-  console.log('[DBG:loadedmetadata]', {
-    song: s ? `${s.songName} - ${s.artist}` : '(null)',
-    audioPath: s ? s.audioPath : '(null)',
-    audioSrc: audio.src ? audio.src.slice(0, 80) : '(empty)',
-    audioDuration: audio.duration,
-    realDuration: s ? s.realDuration : '(null)',
-    getDurationResult: dur,
-    fmPreviewMode,
-  });
   tEnd.textContent = fmt(dur);
 });
 audio.addEventListener('timeupdate', onTick);
@@ -182,14 +204,18 @@ audio.addEventListener('play', () => {
   startDesktopLyricRAF();
   lastTickWall = performance.now();
   if (coverEl) coverEl.classList.add('playing');
+  syncDesktopState();
 });
 audio.addEventListener('pause', () => {
   dbgAudio('pause');
+  // 诊断插桩: 暴露触发本次 pause 的完整调用栈 (拖动 bug 定位用, F12 Console 过滤 [SEEK-DIAG])
+  console.trace('[SEEK-DIAG] audio.pause 触发, 调用栈:');
   isPlaying = false; btnPlay.innerHTML = ICON_PLAY; stopLrcRAF();
   stopDesktopLyricRAF();
   flushDuration();
   saveCurrentProgress();
   if (coverEl) coverEl.classList.remove('playing');
+  syncDesktopState();
 });
 audio.addEventListener('ended', () => {
   dbgAudio('ended');
@@ -245,7 +271,14 @@ audio.addEventListener('error', (e) => {
 audio.addEventListener('seeking', () => dbgAudio('seeking'));
 audio.addEventListener('seeked', () => {
   dbgAudio('seeked');
-  if (lastSeekTarget >= 0 && audio.currentTime > lastSeekTarget + 0.5) {
+  // 诊断插桩: seek 落地后输出目标与实际落地位置偏差 (异常时两者差距大)
+  if (lastSeekTarget >= 0 && Math.abs(audio.currentTime - lastSeekTarget) > 1) {
+    console.warn('[SEEK-DIAG] seek 落地偏差: 目标=' + lastSeekTarget.toFixed(1) + 's, 落地=' + audio.currentTime.toFixed(1) + 's (可能被 Chromium clamp 到音频末尾)');
+  }
+  // 拖动中: seeked 可能滞后于最新 mousemove 的目标(旧 seek 完成事件晚到),
+  // currentTime > lastSeekTarget 属正常滞后而非"跳到结尾", 跳过 snap-back 检测
+  // (否则倒退拖动会误触发 snapEndedPending + 二次 seek, 残留标记会吞掉自然 ended)
+  if (!dragging && lastSeekTarget >= 0 && audio.currentTime > lastSeekTarget + 0.5) {
     snapEndedPending = true;
     const dur = getDuration();
     if (dur > 0 && lastSeekTarget <= dur) {
@@ -334,15 +367,8 @@ async function play(idx, autoResume = true, updateContext = true) {
     try {
       const txt = await window.musicAPI.getLyrics(s.rawPath);
       const p = parseRaw(txt);
-      // [DEBUG] 诊断 rawPath 解析
-      console.log('[RAW LRC DEBUG] rawPath=' + s.rawPath +
-        ' txtLen=' + (txt ? txt.length : 0) +
-        ' parsedLen=' + p.length +
-        ' firstLine="' + (txt ? txt.split('\n')[0].slice(0, 80) : '') + '"');
       if (p.length) { newLrc = p; newLrcRaw = true; }
-    } catch (e) {
-      console.log('[RAW LRC DEBUG] rawPath 读取异常: ' + e.message);
-    }
+    } catch (e) {}
   }
   if (!newLrcRaw && s.lrcPath) {
     try {
@@ -437,14 +463,6 @@ async function play(idx, autoResume = true, updateContext = true) {
   const src = toUrl(s.audioPath);
   const srcChanged = audio.src !== src;
   if (srcChanged) audio.src = src;
-  // 调试: 切歌时记录关键信息
-  console.log('[DBG:play]', {
-    song: `${s.songName} - ${s.artist}`,
-    audioPath: s.audioPath,
-    src: src.slice(0, 80),
-    realDuration: s.realDuration,
-    fmPreviewMode,
-  });
 
   const savedT = autoResume && progress[s.audioPath] ? progress[s.audioPath] : 0;
   const doPlay = () => {
@@ -464,6 +482,7 @@ async function play(idx, autoResume = true, updateContext = true) {
   }
 
   if (srcChanged) incrPlay(s);
+  syncDesktopState();
   syncLrc(audio.currentTime || 0);
   // 切歌时立即重置进度条显示, 避免残留上一首的进度 (onTick 尚未触发时尤为重要)
   {
@@ -514,7 +533,18 @@ function seekFromEvent(e) {
   if (!dur || !isFinite(dur)) return;
   const r = pTrack.getBoundingClientRect();
   const pct = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
-  const targetT = pct * dur;
+  // 双保险: seek 目标不越过 realDuration 与 audio.duration 中较短的一方
+  // (文件含尾部非音频数据时 audio.duration 虚高, 按真实时长 clamp;
+  //  反之 realDuration 异常偏长时按 audio.duration clamp, 保证不越界 seek)
+  const ad = (audio.duration && isFinite(audio.duration) && audio.duration > 0) ? audio.duration : 0;
+  const safeDur = (ad > 0 && ad < dur) ? ad : dur;
+  const targetT = pct * safeDur;
+  // 与歌词点击一致: 记录用户 seek 时间戳, 豁免 onTick 播放跳变检测 500ms
+  // (跳变检测用于捕获异常播放位置突进, 不能误伤用户主动拖动导致 pause+切歌)
+  lastLyricClickTime = performance.now();
+  // 清除残留的 snapEndedPending: 新的用户 seek 使旧的"跳到结尾"标记失效,
+  // 避免残留标记吞掉本首歌的自然 ended 事件 → 歌曲播完后暂停不切歌
+  snapEndedPending = false;
   seekInProgress = true;
   lastSeekTarget = targetT;
   audio.currentTime = targetT;
@@ -524,6 +554,7 @@ function seekFromEvent(e) {
 
 // =========== Tick ===========
 function onTick() {
+  syncDesktopState();
   // 自恢复: 如果 audio 在播放但 RAF 歌词循环停了(异常/后台节流), 重新启动
   if (isPlaying && rafId === null) {
     startLrcRAF();
@@ -549,6 +580,8 @@ function onTick() {
     if (sinceUserJump > 500) {
       const jump = currTime - lastAudioTime;
       if (jump > 2 || currTime > dur + 0.5) {
+        // 诊断插桩: 记录误触发跳变检测的完整上下文, 便于区分 seek 误伤 vs 真实播放异常
+        console.warn('[SEEK-DIAG] 跳变检测触发: jump=' + jump.toFixed(1) + 's, currTime=' + currTime.toFixed(1) + 's, lastAudioTime=' + lastAudioTime.toFixed(1) + 's, dur=' + dur.toFixed(1) + 's, 距上次用户seek=' + Math.round(sinceUserJump) + 'ms');
         audio.pause();
         onEnd();
         lastAudioTime = 0;

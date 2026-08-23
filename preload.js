@@ -69,7 +69,10 @@ contextBridge.exposeInMainWorld('lyricReceiver', {
   onUpdate: (cb) => ipcRenderer.on('lyric-update', (e, payload) => cb(payload)),
 });
 
-// ===== 免费听音乐专区 API (调用 music-dl.exe web 服务) =====
+// ===== 桌面端播放状态同步 API (供 renderer 推送状态到主进程) =====
+contextBridge.exposeInMainWorld('stateAPI', {
+  updateDesktopState: (patch) => ipcRenderer.invoke('desktop-state-update', patch),
+});
 contextBridge.exposeInMainWorld('freeMusicAPI', {
   // 检查免责声明是否已接受
   checkDisclaimer: () => ipcRenderer.invoke('free-music-disclaimer-check'),

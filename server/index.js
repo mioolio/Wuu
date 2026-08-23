@@ -6,7 +6,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const { Worker } = require('worker_threads');
-const { configDir } = require('../core/storage');
+const { configDir, ensureConfigDir, readUserData, writeUserData } = require('../core/storage');
 const { dbgLog, dbgErr } = require('../core/logger');
 
 const DEFAULT_PORT = 30967;
@@ -21,6 +21,29 @@ const MAX_ACCESS_LOGS = 500;
 // 频率限制计数: Map<ip, number[]>  每个 IP 维护最近请求时间戳数组
 let _rateBuckets = new Map();
 const RATE_WINDOW_MS = 60 * 1000;  // 1 分钟滚动窗口
+
+// =========== 桌面端播放状态同步 ===========
+// 移动端连接时同步桌面端当前播放状态, 避免随机播放
+let _desktopState = {
+  audioPath: null,       // 当前播放歌曲的 audioPath
+  index: -1,             // 当前歌曲索引
+  playMode: 1,           // 0=单曲循环, 1=列表循环, 2=随机 (默认列表循环)
+  isPlaying: false,      // 是否在播放
+  currentTime: 0,        // 当前播放进度 (秒)
+  duration: 0,           // 歌曲总时长 (秒)
+  songInfo: null,        // 当前歌曲信息 { songName, artist, hasCover, ... }
+  updatedAt: 0,          // 更新时间戳
+};
+
+// 更新桌面端播放状态 (由桌面渲染进程通过 IPC 调用)
+function updateDesktopState(patch) {
+  Object.assign(_desktopState, patch || {});
+  // 同步 songInfo 中的 audioPath 到顶层字段, 方便 /api/state 返回
+  if (_desktopState.songInfo && _desktopState.songInfo.audioPath) {
+    _desktopState.audioPath = _desktopState.songInfo.audioPath;
+  }
+  _desktopState.updatedAt = Date.now();
+}
 
 // 移动端 UI 静态文件目录 (Vue 构建产物)
 const mobileDir = path.join(__dirname, '..', 'mobile_UI', 'dist');
@@ -41,12 +64,127 @@ const STATIC_MIME_TYPES = {
   '.png': 'image/png', '.gif': 'image/gif', '.webp': 'image/webp',
 };
 
+// =========== 移动端数据同步存储 ===========
+// 合并模式: 读写 userdata.json (与桌面端共享数据)
+// 分桶模式: 读写 userdata_mobile.json (移动端数据隔离)
+const mobileDataFile = path.join(configDir, 'userdata_mobile.json');
+
+function readMobileData() {
+  try {
+    if (fs.existsSync(mobileDataFile)) {
+      const data = JSON.parse(fs.readFileSync(mobileDataFile, 'utf-8'));
+      return {
+        collections: Array.isArray(data.collections) ? data.collections : [],
+        stats: data.stats && typeof data.stats === 'object' ? data.stats : {},
+        progress: data.progress && typeof data.progress === 'object' ? data.progress : {},
+      };
+    }
+  } catch (e) {
+    console.error('[server] readMobileData 失败:', e.message);
+  }
+  return { collections: [], stats: {}, progress: {} };
+}
+
+function writeMobileData(data) {
+  ensureConfigDir();
+  const payload = JSON.stringify({
+    collections: Array.isArray(data.collections) ? data.collections : [],
+    stats: data.stats && typeof data.stats === 'object' ? data.stats : {},
+    progress: data.progress && typeof data.progress === 'object' ? data.progress : {},
+  }, null, 2);
+  const tmpFile = mobileDataFile + '.tmp';
+  try {
+    fs.writeFileSync(tmpFile, payload, 'utf-8');
+    fs.renameSync(tmpFile, mobileDataFile);
+  } catch (e) {
+    try { if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile); } catch (_) {}
+    console.error('[server] writeMobileData 失败:', e.message);
+  }
+}
+
+// 获取同步模式: 'merged' (合并) | 'isolated' (分桶)
+function getSyncMode() {
+  const data = readUserData();
+  return (data.settings && data.settings.syncMode) === 'isolated' ? 'isolated' : 'merged';
+}
+
+// 读取同步数据 (根据模式自动选择数据源)
+function readSyncData() {
+  const mode = getSyncMode();
+  if (mode === 'isolated') {
+    const mobile = readMobileData();
+    return { mode, data: mobile, isIsolated: true };
+  }
+  return { mode, data: readUserData(), isIsolated: false };
+}
+
+// 写入同步数据 (根据模式写入对应文件)
+function writeSyncData(syncData, isIsolated) {
+  if (isIsolated) {
+    writeMobileData({
+      collections: syncData.collections || [],
+      stats: syncData.stats || {},
+      progress: syncData.progress || {},
+    });
+  } else {
+    writeUserData(syncData);
+  }
+}
+
+// 通过歌曲索引获取 audioPath (从缓存数组, O(1))
+function indexToAudioPath(index) {
+  if (!isCacheValid() || index < 0 || index >= _rawSongsCache.length) return null;
+  return _rawSongsCache[index] ? _rawSongsCache[index].audioPath : null;
+}
+
+// 通过 audioPath 查找歌曲索引 (Map O(1) 查找, 避免线性扫描)
+function audioPathToIndex(audioPath) {
+  if (!audioPath || !isCacheValid() || !_pathIndexMap) return -1;
+  const i = _pathIndexMap.get(audioPath);
+  return i === undefined ? -1 : i;
+}
+
+// 通过索引数组获取脱敏歌曲信息
+function indicesToSongInfo(indices) {
+  const songs = getSafeSongsSync();
+  if (!songs) return [];
+  return indices.map(i => {
+    const s = songs[i];
+    if (!s) return null;
+    return { id: s.id, songName: s.songName, artist: s.artist, hasCover: s.hasCover, coverPath: s.coverPath || '', audioPath: s.audioPath || '', hasLyric: s.hasLyric, realDuration: s.realDuration };
+  }).filter(Boolean);
+}
+
+// 查找或创建"我喜欢"歌单
+function findOrCreateLikedCollection(collections) {
+  let col = collections.find(c => c.name === '我喜欢' || c.id === 'mobile-liked');
+  if (!col) {
+    col = { id: 'mobile-liked', name: '我喜欢', songs: [], createdAt: Date.now() };
+    collections.push(col);
+  }
+  if (!Array.isArray(col.songs)) col.songs = [];
+  return col;
+}
+
+// POST 请求体解析
+function parseBody(req) {
+  return new Promise((resolve) => {
+    let body = '';
+    req.on('data', chunk => { body += chunk; if (body.length > 1e6) { body = ''; req.destroy(); } });
+    req.on('end', () => {
+      try { resolve(body ? JSON.parse(body) : {}); }
+      catch (e) { resolve({}); }
+    });
+  });
+}
+
 // =========== 歌曲列表缓存 (模块作用域, 所有请求共享) ===========
 // 缓存: 避免每次请求都重新扫描 1968 个文件夹 (同步 I/O 阻塞主进程 3-4 秒)
 // 统一缓存: scanMusicFiles() 只调用一次, 同时生成脱敏列表和原始列表
 // Worker 线程: 扫描在子线程执行, 不阻塞主进程 (电脑端播放不受影响)
 let _rawSongsCache = null;
 let _safeSongsCache = null;
+let _pathIndexMap = null;  // Map<audioPath, index>, O(1) 反查避免线性扫描
 let _songsCacheTime = 0;
 const SONGS_CACHE_TTL = 10 * 60 * 1000;  // 10 分钟自动刷新
 let _scanWorker = null;
@@ -98,42 +236,39 @@ function getRawSongsSync() {
   return isCacheValid() ? _rawSongsCache : null;
 }
 
-// 异步获取缓存 (缓存为空时触发 worker 扫描)
-async function getSafeSongsAsync() {
-  if (isCacheValid()) return _safeSongsCache;
-  const raw = await scanSongsAsync();
+// 填充缓存: 脱敏列表 + audioPath→index 映射 (一次遍历生成三份索引)
+function _populateSongsCache(raw) {
   _rawSongsCache = raw;
   _safeSongsCache = raw.map(s => ({
     id: s.id,
     songName: s.songName || '',
     artist: s.artist || '',
     album: s.album || '',
+    audioPath: s.audioPath || '',
     realDuration: s.realDuration || 0,
     lyricist: s.lyricist || '',
     composer: s.composer || '',
     hasCover: !!s.coverPath,
+    coverPath: s.coverPath || '',
     hasLyric: !!(s.rawPath || s.lrcPath),
   }));
+  _pathIndexMap = new Map();
+  for (let i = 0; i < raw.length; i++) {
+    if (raw[i] && raw[i].audioPath) _pathIndexMap.set(raw[i].audioPath, i);
+  }
   _songsCacheTime = Date.now();
+}
+
+// 异步获取缓存 (缓存为空时触发 worker 扫描)
+async function getSafeSongsAsync() {
+  if (isCacheValid()) return _safeSongsCache;
+  _populateSongsCache(await scanSongsAsync());
   return _safeSongsCache;
 }
 
 async function getRawSongsAsync() {
   if (isCacheValid()) return _rawSongsCache;
-  const raw = await scanSongsAsync();
-  _rawSongsCache = raw;
-  _safeSongsCache = raw.map(s => ({
-    id: s.id,
-    songName: s.songName || '',
-    artist: s.artist || '',
-    album: s.album || '',
-    realDuration: s.realDuration || 0,
-    lyricist: s.lyricist || '',
-    composer: s.composer || '',
-    hasCover: !!s.coverPath,
-    hasLyric: !!(s.rawPath || s.lrcPath),
-  }));
-  _songsCacheTime = Date.now();
+  _populateSongsCache(await scanSongsAsync());
   return _rawSongsCache;
 }
 
@@ -141,6 +276,7 @@ async function getRawSongsAsync() {
 async function refreshSongList() {
   _rawSongsCache = null;
   _safeSongsCache = null;
+  _pathIndexMap = null;
   _songsCacheTime = 0;
   _scanPromise = null;
   const safe = await getSafeSongsAsync();
@@ -497,6 +633,8 @@ function startServer(port, bindIP, whitelist, rateLimit, accessLogEnabled) {
         return;
       }
       const html = fs.readFileSync(indexPath);
+      // index.html 引用带哈希的 assets, 本身需每次校验新鲜度
+      res.setHeader('Cache-Control', 'no-cache');
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
       res.end(html);
       return;
@@ -515,6 +653,8 @@ function startServer(port, bindIP, whitelist, rateLimit, accessLogEnabled) {
       }
       const ext = path.extname(filePath).toLowerCase();
       const mime = STATIC_MIME_TYPES[ext] || 'application/octet-stream';
+      // Vite 构建产物文件名带内容哈希, 可永久缓存 (刷新页面无需重复下载 JS/CSS)
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
       const stream = fs.createReadStream(filePath);
       res.writeHead(200, { 'Content-Type': mime });
       stream.pipe(res);
@@ -557,9 +697,8 @@ function startServer(port, bindIP, whitelist, rateLimit, accessLogEnabled) {
     if (pathname === '/api/songs' && req.method === 'GET') {
       try {
         const safe = await getSafeSongsAsync();
-        const urlObj = new URL(req.url, 'http://localhost');
-        const page = parseInt(urlObj.searchParams.get('page') || '0', 10);
-        const pageSize = parseInt(urlObj.searchParams.get('pageSize') || '0', 10);
+        const page = parseInt(url.searchParams.get('page') || '0', 10);
+        const pageSize = parseInt(url.searchParams.get('pageSize') || '0', 10);
         if (page > 0 && pageSize > 0) {
           const start = (page - 1) * pageSize;
           const end = start + pageSize;
@@ -631,6 +770,57 @@ function startServer(port, bindIP, whitelist, rateLimit, accessLogEnabled) {
       return;
     }
 
+    // GET /api/stream-by-path?path=... → 直接按音频文件路径流式返回 (用于桌面端状态同步, 保证音频正确)
+    if (pathname === '/api/stream-by-path' && req.method === 'GET') {
+      try {
+        const audioPath = url.searchParams.get('path');
+        if (!audioPath || !fs.existsSync(audioPath)) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, message: '音频文件不存在' }));
+          return;
+        }
+        // 安全: 只允许从 output 目录读取
+        const outputDir = path.join(__dirname, '..', 'output');
+        if (!audioPath.startsWith(outputDir)) {
+          res.writeHead(403, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, message: '禁止访问' }));
+          return;
+        }
+        const stat = fs.statSync(audioPath);
+        const ext = path.extname(audioPath).toLowerCase();
+        const contentType = STATIC_MIME_TYPES[ext] || 'application/octet-stream';
+        logAccess(req, '播放歌曲(按路径)', path.basename(audioPath));
+        const rangeHeader = req.headers['range'];
+        if (rangeHeader) {
+          const match = /bytes=(\d*)-(\d*)/.exec(rangeHeader);
+          if (match) {
+            const start = match[1] ? parseInt(match[1]) : 0;
+            const end = match[2] ? parseInt(match[2]) : stat.size - 1;
+            const stream = fs.createReadStream(audioPath, { start, end });
+            res.writeHead(206, {
+              'Content-Type': contentType,
+              'Content-Range': `bytes ${start}-${end}/${stat.size}`,
+              'Content-Length': end - start + 1,
+              'Accept-Ranges': 'bytes',
+            });
+            stream.pipe(res);
+            return;
+          }
+        }
+        const stream = fs.createReadStream(audioPath);
+        res.writeHead(200, {
+          'Content-Type': contentType,
+          'Content-Length': stat.size,
+          'Accept-Ranges': 'bytes',
+        });
+        stream.pipe(res);
+      } catch (e) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, message: e.message }));
+      }
+      return;
+    }
+
     // GET /api/cover/:index → 返回封面图片
     const apiCoverMatch = pathname.match(/^\/api\/cover\/(\d+)$/);
     if (apiCoverMatch && req.method === 'GET') {
@@ -644,6 +834,30 @@ function startServer(port, bindIP, whitelist, rateLimit, accessLogEnabled) {
         const ext = path.extname(song.coverPath).toLowerCase();
         const mime = STATIC_MIME_TYPES[ext] || 'image/jpeg';
         const stream = fs.createReadStream(song.coverPath);
+        res.writeHead(200, { 'Content-Type': mime });
+        stream.pipe(res);
+      } catch (e) {
+        res.writeHead(500); res.end();
+      }
+      return;
+    }
+
+    // GET /api/cover-by-path?path=... → 直接按路径返回封面图片 (用于桌面端状态同步)
+    if (pathname === '/api/cover-by-path' && req.method === 'GET') {
+      try {
+        const coverPath = url.searchParams.get('path');
+        if (!coverPath || !fs.existsSync(coverPath)) {
+          res.writeHead(404); res.end(); return;
+        }
+        // 安全: 只允许从 output 目录或 config 目录读取
+        const outputDir = path.join(__dirname, '..', 'output');
+        const configDir = path.join(__dirname, '..', 'config');
+        if (!coverPath.startsWith(outputDir) && !coverPath.startsWith(configDir)) {
+          res.writeHead(403); res.end(); return;
+        }
+        const ext = path.extname(coverPath).toLowerCase();
+        const mime = STATIC_MIME_TYPES[ext] || 'image/jpeg';
+        const stream = fs.createReadStream(coverPath);
         res.writeHead(200, { 'Content-Type': mime });
         stream.pipe(res);
       } catch (e) {
@@ -673,6 +887,237 @@ function startServer(port, bindIP, whitelist, rateLimit, accessLogEnabled) {
         res.end(text);
       } catch (e) {
         res.writeHead(500); res.end();
+      }
+      return;
+    }
+
+    // =========== 移动端数据同步 API ===========
+
+    // GET /api/state → 获取桌面端当前播放状态 (移动端同步用)
+    if (pathname === '/api/state' && req.method === 'GET') {
+      try {
+        const state = {
+          playMode: _desktopState.playMode,
+          isPlaying: _desktopState.isPlaying,
+          index: _desktopState.index,
+          audioPath: _desktopState.songInfo ? (_desktopState.songInfo.audioPath || _desktopState.audioPath) : _desktopState.audioPath,
+          currentTime: _desktopState.currentTime,
+          duration: _desktopState.duration,
+          songInfo: _desktopState.songInfo,
+          updatedAt: _desktopState.updatedAt,
+        };
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ ok: true, state }));
+      } catch (e) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, message: e.message }));
+      }
+      return;
+    }
+
+    // GET /api/sync-mode → 获取同步模式
+    if (pathname === '/api/sync-mode' && req.method === 'GET') {
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ ok: true, mode: getSyncMode() }));
+      return;
+    }
+
+    // POST /api/sync-mode → 设置同步模式 { mode: 'merged' | 'isolated' }
+    if (pathname === '/api/sync-mode' && req.method === 'POST') {
+      try {
+        const body = await parseBody(req);
+        const mode = body.mode === 'isolated' ? 'isolated' : 'merged';
+        const userData = readUserData();
+        if (!userData.settings) userData.settings = {};
+        userData.settings.syncMode = mode;
+        writeUserData(userData);
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ ok: true, mode }));
+      } catch (e) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, message: e.message }));
+      }
+      return;
+    }
+
+    // GET /api/collections → 获取用户歌单 (含"我喜欢"和自建歌单)
+    if (pathname === '/api/collections' && req.method === 'GET') {
+      try {
+        const { data } = readSyncData();
+        const collections = (data.collections || []).map(col => {
+          const songIndices = (col.songs || []).map(audioPathToIndex).filter(i => i >= 0);
+          return {
+            id: col.id,
+            name: col.name || '未命名歌单',
+            songCount: songIndices.length,
+            songs: indicesToSongInfo(songIndices),
+            createdAt: col.createdAt || 0,
+          };
+        });
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ ok: true, collections }));
+      } catch (e) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, message: e.message }));
+      }
+      return;
+    }
+
+    // GET /api/liked → 获取已喜欢的歌曲索引列表
+    if (pathname === '/api/liked' && req.method === 'GET') {
+      try {
+        const { data } = readSyncData();
+        const allSongs = new Set();
+        (data.collections || []).forEach(col => {
+          (col.songs || []).forEach(p => allSongs.add(p));
+        });
+        const likedIndices = [...allSongs].map(audioPathToIndex).filter(i => i >= 0);
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ ok: true, likedIndices }));
+      } catch (e) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, message: e.message }));
+      }
+      return;
+    }
+
+    // POST /api/like → 切换点赞 { index: N } (快捷添加到"我喜欢")
+    if (pathname === '/api/like' && req.method === 'POST') {
+      try {
+        const body = await parseBody(req);
+        const audioPath = indexToAudioPath(body.index);
+        if (!audioPath) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, message: '歌曲不存在' }));
+          return;
+        }
+        const { data, isIsolated } = readSyncData();
+        if (!data.collections) data.collections = [];
+        const likedCol = findOrCreateLikedCollection(data.collections);
+        const idx = likedCol.songs.indexOf(audioPath);
+        let liked;
+        if (idx >= 0) {
+          likedCol.songs.splice(idx, 1);
+          liked = false;
+        } else {
+          likedCol.songs.push(audioPath);
+          liked = true;
+        }
+        writeSyncData(data, isIsolated);
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ ok: true, liked }));
+      } catch (e) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, message: e.message }));
+      }
+      return;
+    }
+
+    // POST /api/like-collection → 添加/移除歌曲到指定歌单 { index, collectionId, add: true/false }
+    if (pathname === '/api/like-collection' && req.method === 'POST') {
+      try {
+        const body = await parseBody(req);
+        const audioPath = indexToAudioPath(body.index);
+        if (!audioPath) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, message: '歌曲不存在' }));
+          return;
+        }
+        const collectionId = body.collectionId;
+        const add = body.add !== false;  // 默认添加
+        const { data, isIsolated } = readSyncData();
+        if (!data.collections) data.collections = [];
+        const col = data.collections.find(c => c.id === collectionId);
+        if (!col) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, message: '歌单不存在' }));
+          return;
+        }
+        if (add) {
+          if (!col.songs) col.songs = [];
+          if (!col.songs.includes(audioPath)) {
+            col.songs.push(audioPath);
+          }
+        } else {
+          if (col.songs) {
+            const i = col.songs.indexOf(audioPath);
+            if (i >= 0) col.songs.splice(i, 1);
+          }
+        }
+        writeSyncData(data, isIsolated);
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ ok: true, inCollection: add }));
+      } catch (e) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, message: e.message }));
+      }
+      return;
+    }
+
+    // POST /api/play-count → 上报播放次数 { index: N }
+    if (pathname === '/api/play-count' && req.method === 'POST') {
+      try {
+        const body = await parseBody(req);
+        const audioPath = indexToAudioPath(body.index);
+        if (!audioPath) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, message: '歌曲不存在' }));
+          return;
+        }
+        const { data, isIsolated } = readSyncData();
+        if (!data.stats) data.stats = {};
+        data.stats[audioPath] = (data.stats[audioPath] || 0) + 1;
+        writeSyncData(data, isIsolated);
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ ok: true, count: data.stats[audioPath] }));
+      } catch (e) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, message: e.message }));
+      }
+      return;
+    }
+
+    // POST /api/progress → 上报播放进度 { index: N, time: seconds }
+    if (pathname === '/api/progress' && req.method === 'POST') {
+      try {
+        const body = await parseBody(req);
+        const audioPath = indexToAudioPath(body.index);
+        if (!audioPath) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, message: '歌曲不存在' }));
+          return;
+        }
+        const { data, isIsolated } = readSyncData();
+        if (!data.progress) data.progress = {};
+        data.progress[audioPath] = Math.max(0, body.time || 0);
+        writeSyncData(data, isIsolated);
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ ok: true }));
+      } catch (e) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, message: e.message }));
+      }
+      return;
+    }
+
+    // GET /api/progress/:index → 获取歌曲播放进度
+    const apiProgressMatch = pathname.match(/^\/api\/progress\/(\d+)$/);
+    if (apiProgressMatch && req.method === 'GET') {
+      try {
+        const idx = parseInt(apiProgressMatch[1], 10);
+        const audioPath = indexToAudioPath(idx);
+        if (!audioPath) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, message: '歌曲不存在' }));
+          return;
+        }
+        const { data } = readSyncData();
+        const savedTime = (data.progress || {})[audioPath] || 0;
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ ok: true, progress: savedTime }));
+      } catch (e) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, message: e.message }));
       }
       return;
     }
@@ -756,8 +1201,15 @@ ipcMain.handle('server-clear-access-logs', async () => {
   return { ok: true };
 });
 
+// IPC: 桌面端渲染进程推送播放状态更新
+ipcMain.handle('desktop-state-update', async (event, patch) => {
+  updateDesktopState(patch);
+  return { ok: true };
+});
+
 module.exports = {
   startServer, stopServer, getPort, getBindIP, getWhitelist,
   getRateLimit, isAccessLogEnabled, getAccessLogs, clearAccessLogs,
   isRunning, sharedDir, ensureSharedDir, DEFAULT_PORT,
+  updateDesktopState,
 };

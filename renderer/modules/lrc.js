@@ -393,19 +393,6 @@ function syncLrc(t) {
   // 缓存歌词行元素, 避免每帧 querySelectorAll (60fps 下每秒 60 次 DOM 查询)
   if (!_cachedLineEls) _cachedLineEls = lyricsInner.querySelectorAll('.lyric-line');
   const lineEls = _cachedLineEls;
-  // [DEBUG] syncLrc 首次调用时输出关键状态
-  if (!syncLrc._dbgLogged) {
-    syncLrc._dbgLogged = true;
-    const firstStart = lrc[0] ? (lrc[0].start !== undefined ? lrc[0].start : lrc[0].time) : null;
-    const firstHasChars = lrc[0] ? !!(lrc[0].chars && lrc[0].chars.length) : null;
-    console.log('[SYNCLRC DEBUG] lrcLength=' + lrc.length +
-      ' lrcRaw=' + lrcRaw +
-      ' lineElsCount=' + lineEls.length +
-      ' firstStart=' + firstStart +
-      ' firstHasChars=' + firstHasChars +
-      ' lyricsInnerWidth=' + lyricsInner.clientWidth +
-      ' curT=' + t);
-  }
 
   if (lrcRaw) {
     let curLineIdx = -1;
@@ -490,20 +477,6 @@ function syncLrc(t) {
         && textWidth > containerW * appSettings.marqueeThreshold
         && containerW > 0
         && textWidth > 0;
-      // [DEBUG] 行切换时输出跑马灯诊断信息
-      if (curLineIdx !== prevCurLine) {
-        const lyricText = lrc[curLineIdx].chars ? lrc[curLineIdx].chars.map(c => c.text).join('').slice(0, 30) : '';
-        console.log('[MARQUEE DEBUG] lineIdx=' + curLineIdx +
-          ' textWidth=' + textWidth +
-          ' containerW=' + containerW +
-          ' elClientWidth=' + curEl.clientWidth +
-          ' threshold=' + appSettings.marqueeThreshold +
-          ' enabled=' + appSettings.marqueeEnabled +
-          ' shouldMarquee=' + shouldMarquee +
-          ' scrollW=' + Math.max(0, textWidth - containerW) +
-          ' fillPx=' + calcFillPx(m, t) +
-          ' text="' + lyricText + '"');
-      }
       if (shouldMarquee) {
         // 启动/更新跑马灯
         // 计算需要滚动的距离 = 文字宽度 - 容器宽度

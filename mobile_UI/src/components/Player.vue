@@ -1,9 +1,10 @@
 <!-- =========== 播放器主界面 =========== -->
 <!-- 功能: 圆形封面(不抠洞) / 播放控制 / 循环模式 / 左滑切歌词 -->
 <script setup>
-import { ref, computed } from 'vue';
+import { ref, computed, watch } from 'vue';
 import { usePlayer } from '../composables/usePlayer.js';
-import { coverUrl } from '../api.js';
+import { coverUrl, coverByPath } from '../api.js';
+import CollectionPicker from './CollectionPicker.vue';
 
 const emit = defineEmits(['swipe-right']);
 
@@ -16,22 +17,46 @@ const {
   playMode,
   playModeName,
   progressPercent,
+  isLiked,
   togglePlay,
   next,
   prev,
   seek,
   cyclePlayMode,
+  refreshLikedSet,
 } = usePlayer();
 
-// ===== 封面 URL =====
+// ===== 封面 URL (优先使用 coverPath 直接路径, 保证封面正确显示) =====
 const cover = computed(() => {
-  return currentSong.value && currentSong.value.hasCover
+  if (!currentSong.value) return '';
+  // 优先使用桌面端同步的 coverPath
+  if (currentSong.value.coverPath && currentSong.value.hasCover) {
+    return coverByPath(currentSong.value.coverPath);
+  }
+  // 回退: 使用歌曲 ID 查询
+  return currentSong.value.hasCover
     ? coverUrl(currentSong.value.id)
     : '';
 });
 
-// ===== 封面加载失败 =====
+// ===== 封面加载失败 (切歌时重置) =====
 const coverError = ref(false);
+watch(() => currentSong.value?.id, () => {
+  coverError.value = false;
+});
+
+// ===== 歌单选择器 =====
+const showPicker = ref(false);
+function openPicker() {
+  if (!currentSong.value) return;
+  showPicker.value = true;
+}
+function closePicker() {
+  showPicker.value = false;
+}
+function onPickerChanged() {
+  refreshLikedSet();
+}
 
 // ===== 时间格式化 =====
 function formatTime(s) {
@@ -180,10 +205,27 @@ function onProgressUp() {
       <button class="ctrl-btn" @click="next">
         <svg viewBox="0 0 24 24"><path d="M16 6h2v12h-2V6zm-2.5 6L5 6v12l8.5-6z"/></svg>
       </button>
-      <!-- 占位 (对称) -->
-      <div class="ctrl-btn placeholder"></div>
+      <!-- 点赞 (打开歌单选择器) -->
+      <button
+        class="ctrl-btn like-btn"
+        :class="{ active: isLiked }"
+        @click="openPicker"
+      >
+        <!-- 已喜欢 (实心) -->
+        <svg v-if="isLiked" viewBox="0 0 24 24"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>
+        <!-- 未喜欢 (空心) -->
+        <svg v-else viewBox="0 0 24 24"><path d="M16.5 3c-1.74 0-3.41.81-4.5 2.09C10.91 3.81 9.24 3 7.5 3 4.42 3 2 5.42 2 8.5c0 3.78 3.4 6.86 8.55 11.54L12 21.35l1.45-1.32C18.6 15.36 22 12.28 22 8.5 22 5.42 19.58 3 16.5 3zm-4.4 15.55l-.1.1-.1-.1C7.14 14.24 4 11.39 4 8.5 4 6.5 5.5 5 7.5 5c1.54 0 3.04.99 3.57 2.36h1.87C13.46 5.99 14.96 5 16.5 5c2 0 3.5 1.5 3.5 3.5 0 2.89-3.14 5.74-7.9 10.05z"/></svg>
+      </button>
     </div>
   </div>
+
+  <!-- 歌单选择器 -->
+  <CollectionPicker
+    :visible="showPicker"
+    :song-index="currentSong?.id ?? -1"
+    @close="closePicker"
+    @changed="onPickerChanged"
+  />
 </template>
 
 <style scoped>
@@ -332,6 +374,9 @@ function onProgressUp() {
 .ctrl-btn.placeholder {
   width: 44px;
   height: 44px;
+}
+.like-btn.active {
+  color: #ff4d4f;
 }
 .mode-btn {
   color: var(--text-secondary);

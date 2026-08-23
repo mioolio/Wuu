@@ -1,5 +1,5 @@
 <!-- =========== 底部导航栏 (网易云音乐风格) =========== -->
-<!-- 标签: 推荐 / 歌单  (预留扩展) -->
+<!-- 标签: 推荐 / 歌单 / 我的 -->
 <script setup>
 defineProps({
   active: { type: String, default: 'recommend' },
@@ -29,13 +29,15 @@ const emit = defineEmits(['switch']);
       </svg>
       <span class="nav-label">歌单</span>
     </button>
-    <!-- 预留扩展位 -->
-    <button class="nav-item disabled" disabled>
+    <button
+      class="nav-item"
+      :class="{ active: active === 'collections' }"
+      @click="emit('switch', 'collections')"
+    >
       <svg viewBox="0 0 24 24" class="nav-icon">
-        <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.5"/>
-        <path d="M12 8v8M8 12h8" stroke="currentColor" stroke-width="1.5"/>
+        <path d="M4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6zm16-4H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H8V4h12v12zm-7-1h5v-5h-5v5zm-4-5h4V6H9v4z"/>
       </svg>
-      <span class="nav-label">更多</span>
+      <span class="nav-label">我的</span>
     </button>
   </nav>
 </template>
@@ -65,9 +67,6 @@ const emit = defineEmits(['switch']);
 }
 .nav-item.active {
   color: var(--accent);
-}
-.nav-item.disabled {
-  opacity: 0.3;
 }
 .nav-icon {
   width: 22px;

@@ -73,6 +73,23 @@ require('./playlist/share');
 // Electron 41+ (Chromium 130+) 媒体栈对自定义协议返回的 stream Response 无法正确消费,
 // 报 PIPELINE_ERROR_READ: FFmpegDemuxer: data source error (code 2)
 // 对应 Electron issue #51442。解决: 读取文件到 Buffer 返回, 补 CORS + Accept-Ranges 头
+// MIME 映射放模块级, 避免每次请求重建对象
+const MUSIC_MIME_TYPES = {
+  '.aac': 'audio/aac',
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav',
+  '.flac': 'audio/flac',
+  '.m4a': 'audio/mp4',
+  '.ogg': 'audio/ogg',
+  '.mp4': 'video/mp4',
+  '.webm': 'video/webm',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.png': 'image/png',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+};
+
 app.whenReady().then(() => {
   protocol.handle('music', async (request) => {
     // music:///F:/path/to/file.aac → 解码出本地路径
@@ -90,58 +107,60 @@ app.whenReady().then(() => {
     }
     filePath = filePath.replace(/\//g, '\\');
 
-    const ext = path.extname(filePath).toLowerCase();
-    const mimeTypes = {
-      '.aac': 'audio/aac',
-      '.mp3': 'audio/mpeg',
-      '.wav': 'audio/wav',
-      '.flac': 'audio/flac',
-      '.m4a': 'audio/mp4',
-      '.ogg': 'audio/ogg',
-      '.mp4': 'video/mp4',
-      '.webm': 'video/webm',
-      '.jpg': 'image/jpeg',
-      '.jpeg': 'image/jpeg',
-      '.png': 'image/png',
-      '.gif': 'image/gif',
-      '.webp': 'image/webp',
-    };
-    const contentType = mimeTypes[ext] || 'application/octet-stream';
+    const contentType = MUSIC_MIME_TYPES[path.extname(filePath).toLowerCase()] || 'application/octet-stream';
 
     try {
-      // [DEBUG] 记录所有请求, 追踪 Chromium 媒体管道的请求模式 (Range/次数)
-      const rangeHeader = request.headers.get('range') || request.headers.get('Range');
-      console.log(`[music] req path=${filePath.slice(-60)} range=${rangeHeader || '(none)'}`);
-
-      if (!fs.existsSync(filePath)) {
+      // 单次 stat 同时完成存在性检查和获取文件大小 (省一次 existsSync 系统调用)
+      let stat;
+      try {
+        stat = await fs.promises.stat(filePath);
+      } catch (e) {
         console.error('[music] 文件不存在:', filePath);
         return new Response(null, { status: 404, statusText: 'File not found' });
       }
-      const fileSize = fs.statSync(filePath).size;
+      const fileSize = stat.size;
 
-      // 读取整个文件到 Buffer: Electron 43 媒体栈无法消费 stream Response
-      // Buffer 作为 Response body 可被 Chromium 正确读取, 支持 seek (Range 请求)
-      const buf = fs.readFileSync(filePath);
+      const rangeHeader = request.headers.get('range') || request.headers.get('Range');
 
       if (rangeHeader) {
         const match = /bytes=(\d*)-(\d*)/.exec(rangeHeader);
         if (match) {
           const start = match[1] ? parseInt(match[1]) : 0;
-          const end = match[2] ? parseInt(match[2]) : fileSize - 1;
-          const chunk = buf.subarray(start, end + 1);
+          const end = Math.min(match[2] ? parseInt(match[2]) : fileSize - 1, fileSize - 1);
+          if (start > end || start >= fileSize) {
+            return new Response(null, {
+              status: 416,
+              statusText: 'Range Not Satisfiable',
+              headers: { 'Content-Range': `bytes */${fileSize}` },
+            });
+          }
+          // Range 请求只读取所需字节区间, 避免 seek 时整文件读入内存
+          const length = end - start + 1;
+          const chunk = Buffer.alloc(length);
+          const fh = await fs.promises.open(filePath, 'r');
+          try {
+            await fh.read(chunk, 0, length, start);
+          } finally {
+            await fh.close();
+          }
           return new Response(chunk, {
             status: 206,
             statusText: 'Partial Content',
             headers: {
               'Content-Type': contentType,
               'Content-Range': `bytes ${start}-${end}/${fileSize}`,
-              'Content-Length': String(chunk.length),
+              'Content-Length': String(length),
               'Accept-Ranges': 'bytes',
               'Access-Control-Allow-Origin': '*',
             }
           });
         }
       }
+
+      // 无 Range: 读取整个文件到 Buffer 返回
+      // Buffer 作为 Response body 可被 Chromium 正确读取, 支持 seek (Range 请求)
+      // 异步读取不阻塞主进程 (IPC/窗口事件不受影响)
+      const buf = await fs.promises.readFile(filePath);
       return new Response(buf, {
         headers: {
           'Content-Type': contentType,

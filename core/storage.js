@@ -30,9 +30,24 @@ function _backupCorruptFile(reason) {
   }
 }
 
+// userdata 读取缓存: 服务器 API 高频调用 readUserData (移动端每 2 秒上报进度触发),
+// 避免每次全量读盘 + JSON.parse (歌库大时文件可达数 MB)
+// 失效策略: writeUserData 主动清空; stat 的 mtime+size 变化时失效 (兜底外部修改)
+let _udCache = null;
+let _udCacheKey = null;  // `${mtimeMs}:${size}`
+
 function readUserData() {
   ensureConfigDir();
-  if (!fs.existsSync(userDataFile)) return _emptyUserData();
+  let stat = null;
+  try { stat = fs.statSync(userDataFile); } catch (e) {}
+  const key = stat ? stat.mtimeMs + ':' + stat.size : null;
+  // 命中缓存: 文件未变化, 直接返回
+  if (_udCache && key && key === _udCacheKey) return _udCache;
+  if (!stat) {
+    _udCache = _emptyUserData();
+    _udCacheKey = null;
+    return _udCache;
+  }
   let raw;
   try {
     raw = fs.readFileSync(userDataFile, 'utf-8');
@@ -42,7 +57,7 @@ function readUserData() {
   }
   try {
     const data = JSON.parse(raw);
-    return {
+    _udCache = {
       likes: Array.isArray(data.likes) ? data.likes : [],
       // 不推荐(倒点赞)列表: [{ path, ts }]
       dislikes: Array.isArray(data.dislikes) ? data.dislikes : [],
@@ -55,6 +70,8 @@ function readUserData() {
       actualDuration: data.actualDuration && typeof data.actualDuration === 'object' ? data.actualDuration : {},
       settings: data.settings && typeof data.settings === 'object' ? data.settings : {},
     };
+    _udCacheKey = key;
+    return _udCache;
   } catch (e) {
     // 解析失败: 文件损坏(多半是写盘被中断导致截断)
     // 先备份损坏文件, 再返回空默认值, 避免下次 saveUserData 直接覆写导致原始数据彻底丢失
@@ -67,6 +84,9 @@ function readUserData() {
 // 避免写盘过程中被中断(崩溃/断电/任务管理器杀进程)导致 userdata.json 截断损坏
 function writeUserData(data) {
   ensureConfigDir();
+  // 写入时立即失效读取缓存 (所有写入都在本进程内, 覆盖渲染进程 IPC / 服务器 API 两条路径)
+  _udCache = null;
+  _udCacheKey = null;
   const payload = JSON.stringify({
     likes: Array.isArray(data.likes) ? data.likes : [],
     dislikes: Array.isArray(data.dislikes) ? data.dislikes : [],

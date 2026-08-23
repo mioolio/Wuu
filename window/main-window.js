@@ -123,11 +123,17 @@ function createWindow() {
     }
   });
 
-  // [DEBUG] 转发渲染进程 console 到主进程终端, 便于在不打开 F12 时排查问题
+  // 转发渲染进程 console 到主进程终端
+  // 过滤掉 undefined/空字符串消息，避免无用日志刷屏
   mainWindow.webContents.on('console-message', (event) => {
+    const msg = event.message;
+    if (msg === undefined || msg === null || msg === '') return;
     const levelTag = ['LOG', 'WARN', 'ERROR'][event.level] || 'LOG';
     const src = event.sourceId ? event.sourceId.replace(/^file:\/\/\/[^:]*\/renderer\//, '') : '';
-    console.log(`[renderer:${levelTag}] ${event.message}${src ? ` (${src}:${event.line})` : ''}`);
+    // 只打印 ERROR 级别日志，过滤 LOG/WARN 级别以减少终端噪音
+    if (event.level === 2) {
+      console.error(`[renderer:${levelTag}] ${msg}${src ? ` (${src}:${event.line})` : ''}`);
+    }
   });
 
   // 窗口就绪后恢复 Windows 11 圆角

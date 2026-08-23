@@ -103,72 +103,59 @@ async function applyCoverBackground(coverPath) {
     return;
   }
 
-  // 4. 生成渐变(对背景色做亮度调整, 避免过亮/过暗)
-  // 按权重过滤: 仅保留占比 >= MIN_WEIGHT_THRESHOLD 的颜色 (默认 3%)
-  // 避免少量异色 (如作者签名红色) 被错误地纳入渐变造成主色调被稀释
-  // 若过滤后只剩 1 种, 则放宽阈值到 1% 以保留至少 2 色渐变
-  const MIN_WEIGHT_THRESHOLD = 0.03;
-  const MIN_WEIGHT_FALLBACK = 0.01;
-  let top = colors.filter(c => c.weight >= MIN_WEIGHT_THRESHOLD);
-  if (top.length < 2) {
-    top = colors.filter(c => c.weight >= MIN_WEIGHT_FALLBACK);
-  }
-  if (top.length === 0) top = colors.slice(0, 1);
-  // 最多取前 4 种, 避免色相过多导致彩虹效果
-  top = top.slice(0, Math.min(4, top.length));
+  // 4. 生成渐变(邻近双色): 主色 + 色相距离 ≤60° 的真实邻近色(无则从主色派生)
+  // 双色恒定 alpha 且色相接近, 从根源上避免远色相 sRGB 插值产生"泥色"分层带
   // 颜色调整: 亮度 clamp + 饱和色保护
   // 问题: 浅粉色 #efcdd7 (HSL 340°, 50%, 87%) 在亮度 85% 下视觉上像脏白, 丢失粉色感
   // 修复: 饱和度 >= 0.2 的有色像素, 亮度上限收紧到 0.72 (浅色主题) / 0.55 (深色主题)
   //       并适度提升饱和度 (×1.15), 让色彩倾向更明显
   // 灰度色 (s < 0.2) 维持原逻辑, 仅做亮度 clamp
-  const adjust = (c) => {
+  // lShift: 亮度偏移, companion 向主色反侧偏移形成同色系明暗层次(差异小, 不产生层感)
+  const adjust = (c, lShift = 0) => {
     const hsl = rgbToHsl(c.r, c.g, c.b);
     if (hsl.s >= 0.2) {
       // 有色彩倾向的像素: 收紧亮度上限, 适度提饱和度
       hsl.s = Math.min(1, hsl.s * 1.15);
       if (isLightTheme()) {
-        hsl.l = Math.min(0.72, Math.max(0.45, hsl.l));
+        hsl.l = Math.min(0.72, Math.max(0.45, hsl.l + lShift));
       } else {
-        hsl.l = Math.min(0.55, Math.max(0.28, hsl.l));
+        hsl.l = Math.min(0.55, Math.max(0.28, hsl.l + lShift));
       }
     } else {
       // 灰度色: 维持原 clamp 范围
       if (isLightTheme()) {
-        hsl.l = Math.min(0.85, Math.max(0.45, hsl.l));
+        hsl.l = Math.min(0.85, Math.max(0.45, hsl.l + lShift));
       } else {
-        hsl.l = Math.min(0.62, Math.max(0.28, hsl.l));
+        hsl.l = Math.min(0.62, Math.max(0.28, hsl.l + lShift));
       }
     }
     return hslToRgb(hsl.h, hsl.s, hsl.l);
   };
-  const adjusted = top.map(c => ({ ...adjust(c), weight: c.weight }));
+  // companion 选择: 优先取封面中真实存在、与主色色相距离 ≤60° 的最大权重色
+  // (weight < 2% 直接停止, colors 已按权重降序, 过滤签名等小色块杂色)
+  let companionHsl = null;
+  for (let i = 1; i < colors.length; i++) {
+    if (colors[i].weight < 0.02) break;
+    const hsl = rgbToHsl(colors[i].r, colors[i].g, colors[i].b);
+    const hueDist = Math.abs(hsl.h - mainHsl.h);
+    if (Math.min(hueDist, 1 - hueDist) * 360 <= 60) { companionHsl = hsl; break; }
+  }
+  if (!companionHsl) {
+    // 无真实邻近色(单色/灰度/色相孤立封面): 从主色派生
+    // 色相随机 ±30° (灰度 s≈0 时旋转无感知, 由亮度差提供过渡), 饱和度略降更柔和
+    companionHsl = {
+      h: (mainHsl.h + (Math.random() < 0.5 ? -30 : 30) / 360 + 1) % 1,
+      s: mainHsl.s * 0.9,
+      l: mainHsl.l,
+    };
+  }
+  // companion 亮度向主色反侧偏移 0.1: 同色系明暗渐变, 有层次但无色相跳跃
+  const lShift = companionHsl.l >= mainHsl.l ? 0.1 : -0.1;
+  const adjustedMain = adjust(colors[0], 0);
+  const adjustedComp = adjust(hslToRgb(companionHsl.h, companionHsl.s, companionHsl.l), lShift);
   const angle = Math.floor(Math.random() * 360);
   const baseAlpha = appSettings.colorIntensity;
-  let stops;
-  if (adjusted.length === 1) {
-    const c = adjusted[0];
-    stops = `rgba(${c.r},${c.g},${c.b},${baseAlpha}) 0%, rgba(${c.r},${c.g},${c.b},${baseAlpha}) 100%`;
-  } else {
-    // 按权重分配位置: 权重大的颜色占据更大区间
-    // 总权重归一化后, 累积分配百分比位置, 避免等分导致低占比色被过度放大
-    const totalWeight = adjusted.reduce((s, c) => s + c.weight, 0);
-    let cumPct = 0;
-    stops = adjusted.map((c, i) => {
-      const w = c.weight / totalWeight;
-      let pct;
-      if (i === 0) {
-        pct = 0;
-      } else if (i === adjusted.length - 1) {
-        pct = 100;
-      } else {
-        cumPct += w;
-        pct = Math.round(cumPct * 100);
-      }
-      const alpha = Math.max(baseAlpha * 0.5, baseAlpha - i * 0.13);
-      return `rgba(${c.r},${c.g},${c.b},${alpha}) ${pct}%`;
-    }).join(', ');
-  }
-  const gradient = `linear-gradient(${angle}deg, ${stops})`;
+  const gradient = `linear-gradient(${angle}deg, rgba(${adjustedMain.r},${adjustedMain.g},${adjustedMain.b},${baseAlpha}) 0%, rgba(${adjustedComp.r},${adjustedComp.g},${adjustedComp.b},${baseAlpha}) 100%)`;
   // 优化: 同一封面不重复 fade (切视图时歌曲未变, 渐变应保持)
   if (_lastAppliedCoverPath === coverPath && _lastAppliedGradient && root.style.getPropertyValue('--cover-opacity') === '1') {
     return;

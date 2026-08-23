@@ -11,6 +11,11 @@ document.addEventListener('mousemove', (e) => {
 });
 document.addEventListener('mouseup', () => {
   dragging = false;
+  // 兜底: 最后一次拖动若落在当前位置(空 seek 不触发 seeked), seekInProgress 会卡在 true,
+  // onTick 永久提前 return → 进度条/时间显示冻结; 同时刷新跳变检测基线,
+  // 避免 seek 完成前后的滞后窗口被误判为播放跳变
+  seekInProgress = false;
+  lastAudioTime = audio.currentTime;
 });
 
 // 播放按钮

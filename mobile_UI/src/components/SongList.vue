@@ -2,7 +2,7 @@
 <!-- 性能: 服务端分页按需加载, 滚动到底部时 emit loadMore 触发父组件请求下一页 -->
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
-import { coverUrl } from '../api.js';
+import { coverUrl, coverByPath } from '../api.js';
 
 const props = defineProps({
   songs: { type: Array, default: () => [] },
@@ -18,6 +18,15 @@ const props = defineProps({
 const emit = defineEmits(['play', 'retry', 'loadMore']);
 
 const scrollContainer = ref(null);
+
+// 计算封面 URL (优先使用 coverPath)
+function getCoverUrl(song) {
+  if (!song) return '';
+  if (song.coverPath && song.hasCover) {
+    return coverByPath(song.coverPath);
+  }
+  return song.hasCover ? coverUrl(song.id) : '';
+}
 
 // 滚动到底部时触发加载更多
 function onScroll() {
@@ -79,7 +88,7 @@ onBeforeUnmount(() => {
       >
         <img
           v-if="song.hasCover"
-          :src="coverUrl(song.id)"
+          :src="getCoverUrl(song)"
           class="song-cover"
           loading="lazy"
           alt=""
