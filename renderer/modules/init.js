@@ -147,6 +147,17 @@
       ? userData.settings.publicHost : '';
     appSettings.publicPort = typeof userData.settings.publicPort === 'number'
       && userData.settings.publicPort > 0 ? userData.settings.publicPort : 0;
+    // 音效设置 (audio-fx.js 管理, 加载时整体替换并做结构兜底)
+    if (userData.settings.audioFx && typeof userData.settings.audioFx === 'object') {
+      const saved = userData.settings.audioFx;
+      appSettings.audioFx = {
+        preset: typeof saved.preset === 'string' ? saved.preset : 'off',
+        eq: Array.isArray(saved.eq) && saved.eq.length === 10 ? saved.eq.map(Number) : [0,0,0,0,0,0,0,0,0,0],
+        customs: Array.isArray(saved.customs)
+          ? saved.customs.filter(c => c && Array.isArray(c.eq))
+          : [],
+      };
+    }
     if (typeof userData.settings.playMode === 'number') {
       playMode = userData.settings.playMode;
       appSettings.playMode = playMode;

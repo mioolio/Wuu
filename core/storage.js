@@ -151,6 +151,33 @@ function writeFreeMusicData(data) {
   try { fs.writeFileSync(freeMusicDataFile, JSON.stringify(data, null, 2), 'utf-8'); } catch (e) {}
 }
 
+// ---- play_failed.json (播放失败记录, 修复中心扫描合并用) ----
+const playFailedFile = path.join(configDir, 'play_failed.json');
+function readPlayFailed() {
+  try {
+    if (fs.existsSync(playFailedFile)) {
+      const arr = JSON.parse(fs.readFileSync(playFailedFile, 'utf-8'));
+      return Array.isArray(arr) ? arr : [];
+    }
+  } catch (e) {}
+  return [];
+}
+function writePlayFailed(list) {
+  ensureConfigDir();
+  try { fs.writeFileSync(playFailedFile, JSON.stringify(list, null, 2), 'utf-8'); } catch (e) {}
+}
+function removePlayFailed(folder) {
+  if (!folder) return;
+  const list = readPlayFailed();
+  const next = list.filter(e => e.folder !== folder);
+  if (next.length !== list.length) writePlayFailed(next);
+}
+// 按音频路径移除记录 (audioPath → output/<folder>/xxx.m4a)
+function removePlayFailedByAudioPath(audioPath) {
+  if (!audioPath) return;
+  removePlayFailed(path.basename(path.dirname(audioPath)));
+}
+
 // 启动时加载时长缓存
 readDurationCache();
 
@@ -186,6 +213,8 @@ ipcMain.handle('delete-song-folder', async (event, audioPath) => {
     }
     // 删除整个子文件夹
     fs.rmSync(parentDir, { recursive: true, force: true });
+    // 同步清理播放失败记录(修复中心删除场景)
+    removePlayFailedByAudioPath(audioPath);
     return { ok: true, removed: 'folder' };
   } catch (e) {
     return { ok: false, error: e.message || 'unknown_error' };
@@ -197,4 +226,5 @@ module.exports = {
   readUserData, writeUserData,
   readDurationCache, writeDurationCache, getCachedDuration, setCachedDuration, getDurationCache,
   readFreeMusicData, writeFreeMusicData,
+  readPlayFailed, writePlayFailed, removePlayFailed, removePlayFailedByAudioPath,
 };

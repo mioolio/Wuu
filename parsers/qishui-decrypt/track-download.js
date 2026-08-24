@@ -284,6 +284,23 @@ async function fetchTrackPayloadFromSSR({ track_id }) {
           return buildTrackPayloadFromExtracted(extracted)
         }
 
+        // 特殊处理: music.douyin.com 新版 SSR 返回根级 audioWithLyricsOption (实测 keys:
+        // ["track_id","audioWithLyricsOption",...], 旧提取器不认这个结构导致漏提取,
+        // 绕道走了 _ROUTER_DATA HTML 解析)
+        if (json.audioWithLyricsOption && json.audioWithLyricsOption.url) {
+          const to = json.audioWithLyricsOption
+          dbgLog('fetchTrackPayloadFromSSR [' + label + '] 从根级 audioWithLyricsOption 提取成功')
+          return buildTrackPayloadFromExtracted({
+            title: to.trackName || to.title || '未知歌曲',
+            artist: to.artistName || to.artist || '未知歌手',
+            album: to.albumName || to.album || '',
+            duration: parseInt(to.duration || '0'),
+            trackId: String(json.track_id || to.trackId || to.track_id || track_id),
+            url: to.url,
+            spadeA: (to.encrypt_info && to.encrypt_info.spade_a) || to.spade_a || to.playAuth || '',
+          })
+        }
+
         // 特殊处理: music.douyin.com 可能返回 { trackOptions: {...} } 格式
         if (json.trackOptions && json.trackOptions.url) {
           const to = json.trackOptions
@@ -546,7 +563,88 @@ async function tryTrackPayloadFallback(track_id, reason) {
   return null
 }
 
+// 签名请求 track_v2 (第一优先级): bdms.node 生成客户端同款签名头, 绕过空响应风控
+// 背景: 2026-08 起 track_v2 对非客户端请求返回 HTTP 200 空 body (cookie+CSRF 无效),
+// SSR 回退只能拿 ~30 秒试听。签名请求等效官方客户端, 会员账号直接返回全部可用音质直链。
+// 失败返回 null (不抛异常), 由调用方回退到普通请求链。
+async function fetchTrackPayloadSigned({ track_id, mediaType = 'track', cookie, sessionid }) {
+  const signer = require('./bdms-signer');
+  if (!signer.available()) {
+    dbgLog('fetchTrackPayloadSigned bdms 不可用, 跳过签名请求');
+    return null;
+  }
+
+  const url = signer.buildTrackV2Url(endpoints.trackV2);
+  const cookieHeader = cookie || `sessionid=${sessionid};`;
+  // 客户端 interceptBeforeSendHeaders 同款 header 集 (origin/referer 被客户端删除)
+  const headers = {
+    'sec-ch-ua': '"Not.A/Brand";v="99", "Chromium";v="136"',
+    'sec-ch-ua-mobile': '?0',
+    'sec-ch-ua-platform': '"Windows"',
+    'user-agent': signer.CLIENT_PARAMS.user_agent,
+    'content-type': 'application/json; charset=utf-8',
+    'cookie': cookieHeader,
+    'accept': '*/*',
+    'accept-encoding': 'gzip, deflate',
+    'accept-language': 'zh-CN,zh;q=0.9',
+  };
+  const signedHeaders = signer.sign(url, headers);
+  if (!signedHeaders) return null;
+
+  const body = JSON.stringify({
+    aid: signer.CLIENT_PARAMS.aid,
+    track_id: String(track_id),
+    media_type: mediaType,
+    queue_type: 'search_one_track',
+    scene_name: 'search',
+  });
+
+  dbgLog('fetchTrackPayloadSigned 请求: track_id=' + track_id + ' media_type=' + mediaType);
+  const resp = await fetch(url, { method: 'POST', headers: signedHeaders, body });
+  const buf = Buffer.from(await resp.arrayBuffer());
+  // 手动解压防御: 手动设置 accept-encoding 时部分环境不自动解 gzip
+  let text = buf.toString('utf8');
+  if (buf[0] === 0x1f && buf[1] === 0x8b) {
+    text = require('zlib').gunzipSync(buf).toString('utf8');
+  }
+
+  if (!text.trim()) {
+    dbgLog('fetchTrackPayloadSigned 空响应 (HTTP ' + resp.status + '), 回退普通请求链');
+    return null;
+  }
+
+  let json;
+  try {
+    json = JSON.parse(text);
+  } catch (e) {
+    dbgLog('fetchTrackPayloadSigned 非 JSON 响应: ' + text.slice(0, 200));
+    return null;
+  }
+
+  // 校验有效载荷: 需要 track + video_model (错误响应只有 status_code/status_info)
+  if (!json?.track || !json?.track_player?.video_model) {
+    const statusCode = json?.status_code ?? json?.base?.status_code;
+    dbgLog('fetchTrackPayloadSigned 响应缺少 track/video_model, status_code=' + statusCode + ', 回退普通请求链');
+    return null;
+  }
+
+  // 标记签名来源: 服务器已按账号权限过滤 main_url, 音质选择时可直接精确匹配
+  json.__signed = true;
+  const vmObj = JSON.parse(json.track_player.video_model);
+  const qualities = (vmObj.video_list || []).map(v => v.video_meta?.quality + (v.main_url ? '' : '(无url)')).join(',');
+  dbgLog('fetchTrackPayloadSigned 成功: track=' + json.track.name + ' 音质=' + qualities);
+  return json;
+}
+
 async function fetchTrackPayload({ aid = fixed.aid, sessionid, track_id, mediaType = 'track', cookie }) {
+  // 第一优先级: bdms 签名请求 (客户端同款 X-Helios/X-Medusa 签名)
+  try {
+    const signedPayload = await fetchTrackPayloadSigned({ track_id, mediaType, cookie, sessionid });
+    if (signedPayload) return signedPayload;
+  } catch (e) {
+    dbgLog('fetchTrackPayload 签名请求异常, 回退普通请求链: ' + e.message);
+  }
+
   // 加入完整 query 参数(对齐其他汽水数据端点), aid 在 query, sessionid 在 Cookie + body
   const trackV2Url = buildUrl(endpoints.trackV2, {
     aid,
@@ -1248,10 +1346,31 @@ async function downloadTrackMedia({ sessionid, track_id, quality, aid = fixed.ai
   }
 
   // 选择策略:
-  // 1. 优先匹配指定 quality 且非 VIP
-  // 2. 回退: 第一个非 VIP 且有 main_url 的音质
-  // 3. 再回退: 第一个有 main_url 的音质(可能是 VIP 音质)
-  let matchedItem = videoList.find((item) => item?.video_meta?.quality === quality && item?.main_url && isFreeQuality(item?.video_meta?.quality))
+  // 签名响应 (__signed, 客户端同款请求): 服务器已按账号权限过滤 main_url,
+  //   1. 精确匹配指定 quality (会员用户原样满足, 含 VIP 音质)
+  //   2. 回退: 可用音质中码率最高的 (指定音质该曲目不提供时)
+  // 普通响应:
+  //   1. 优先匹配指定 quality 且非 VIP
+  //   2. 回退: 第一个非 VIP 且有 main_url 的音质
+  //   3. 再回退: 第一个有 main_url 的音质(可能是 VIP 音质)
+  let matchedItem = null
+  if (trackPayload?.__signed) {
+    matchedItem = videoList.find((item) => item?.video_meta?.quality === quality && item?.main_url)
+    if (matchedItem) {
+      dbgLog('downloadTrackMedia 签名响应精确匹配音质: quality=' + quality)
+    } else {
+      const best = videoList
+        .filter((item) => item?.main_url)
+        .sort((a, b) => (b?.video_meta?.bitrate || 0) - (a?.video_meta?.bitrate || 0))[0]
+      if (best) {
+        matchedItem = best
+        dbgLog('downloadTrackMedia 签名响应无指定音质 "' + quality + '", 选用最高码率: quality=' + best?.video_meta?.quality + ' bitrate=' + best?.video_meta?.bitrate)
+      }
+    }
+  }
+  if (!matchedItem) {
+    matchedItem = videoList.find((item) => item?.video_meta?.quality === quality && item?.main_url && isFreeQuality(item?.video_meta?.quality))
+  }
   if (!matchedItem) {
     dbgLog('downloadTrackMedia quality="' + quality + '" 未找到非VIP精确匹配, 尝试非VIP音质回退')
     matchedItem = videoList.find((item) => item?.main_url && isFreeQuality(item?.video_meta?.quality))
@@ -1265,6 +1384,21 @@ async function downloadTrackMedia({ sessionid, track_id, quality, aid = fixed.ai
 
   if (!matchedItem?.main_url) {
     dbgLog('downloadTrackMedia 错误: 所有音质都没有 main_url, video_list 完整结构=' + JSON.stringify(videoList, null, 2))
+    // 签名响应无可用音质 (如非 VIP 用户碰上全 VIP 曲目): 回退 SSR/后端链拿试听片段
+    if (trackPayload?.__signed) {
+      const fallbackPayload = await tryTrackPayloadFallback(track_id, '签名响应无可用音质')
+      if (fallbackPayload?.__directMainUrl) {
+        return await downloadFromDirectMainUrl({
+          directMainUrl: fallbackPayload.__directMainUrl,
+          contentType: fallbackPayload.__directContentType || 'audio/mp4',
+          trackPayload: fallbackPayload,
+          track_id,
+          quality,
+          vid,
+          isRealVideo: false,
+        })
+      }
+    }
     const error = new Error('no downloadable quality found')
     error.status = 404
     throw error

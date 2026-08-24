@@ -101,7 +101,13 @@ function initWebAudio() {
     mediaSource = audioCtx.createMediaElementSource(audio);
     gainNode = audioCtx.createGain();
     gainNode.gain.value = 1.0;
-    mediaSource.connect(gainNode);
+    // 音效链: mediaSource → 效果链(HP/EQ/加宽/环绕/混响, audio-fx.js) → gainNode
+    // 构建失败时函数内部回退为 mediaSource 直连 gainNode
+    if (typeof buildFxChain === 'function') {
+      buildFxChain(audioCtx, mediaSource, gainNode);
+    } else {
+      mediaSource.connect(gainNode);
+    }
     gainNode.connect(audioCtx.destination);
     // 初始化完成后恢复保存的音量值(此前 setVol 回退到 audio.volume 被 1.0 限制)
     if (typeof appSettings !== 'undefined' && typeof appSettings.volume === 'number') {
@@ -133,6 +139,8 @@ function setVol(v) {
 // 渐变期间 isPlaying 仍为 true, 避免 UI 提前切换为暂停态造成视觉抖动
 let fadeTimer = null;
 let fadeTargetVol = 0;
+// 连续播放失败计数(自动跳下一首保护用, 成功播放后重置)
+let playFailCount = 0;
 
 // 取消正在进行的渐变 (切歌/重新播放/拖动音量时调用)
 function cancelFade() {
@@ -200,6 +208,7 @@ audio.addEventListener('loadedmetadata', () => {
 audio.addEventListener('timeupdate', onTick);
 audio.addEventListener('play', () => {
   isPlaying = true; btnPlay.innerHTML = ICON_PAUSE;
+  playFailCount = 0;  // 播放成功, 重置连续失败计数
   startLrcRAF();
   startDesktopLyricRAF();
   lastTickWall = performance.now();
@@ -266,7 +275,38 @@ audio.addEventListener('error', (e) => {
   });
   isPlaying = false; btnPlay.innerHTML = ICON_PLAY; stopLrcRAF(); stopDesktopLyricRAF();
   // 试听模式: 触发换源回退
-  if (fmPreviewMode && typeof handleFmAudioError === 'function') handleFmAudioError();
+  if (fmPreviewMode && typeof handleFmAudioError === 'function') { handleFmAudioError(); return; }
+
+  // 本地歌曲播放失败(文件损坏/解码失败): 自动跳下一首, 不卡死播放
+  // 连续失败保护: 连续失败达上限(或超过列表长度)时停止, 防止全坏列表无限循环
+  if (s && curIdx >= 0 && (err.code === 2 || err.code === 3 || err.code === 4)) {
+    playFailCount++;
+    const listLen = (typeof songs !== 'undefined' && Array.isArray(songs)) ? songs.length : 0;
+    // 上报修复中心: 记入 play_failed.json, 下次扫描合并显示(文件级校验检不出的解码损坏)
+    if (s.audioPath && window.repairAPI && typeof window.repairAPI.reportPlayFailed === 'function') {
+      try {
+        window.repairAPI.reportPlayFailed({
+          audioPath: s.audioPath,
+          songName: s.songName || '',
+          artist: s.artist || '',
+        });
+      } catch (e) {}
+    }
+    if (typeof showToast === 'function') {
+      showToast(`「${s.songName || '未知歌曲'}」播放失败已跳过, 已记入修复中心`, 'error');
+    }
+    if (playFailCount >= 5 || (listLen > 0 && playFailCount >= listLen)) {
+      if (typeof showToast === 'function') showToast('连续多首播放失败, 已停止自动跳转', 'error');
+      playFailCount = 0;
+      return;
+    }
+    const nextIdx = (typeof pickNextIdx === 'function') ? pickNextIdx(1) : -1;
+    if (nextIdx >= 0 && nextIdx !== curIdx) {
+      play(nextIdx, true, false);
+    } else {
+      playFailCount = 0;  // 无处可跳(单曲列表等), 重置计数
+    }
+  }
 });
 audio.addEventListener('seeking', () => dbgAudio('seeking'));
 audio.addEventListener('seeked', () => {

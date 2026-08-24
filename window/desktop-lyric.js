@@ -89,7 +89,13 @@ ipcMain.handle('lyric-toggle', (event, show) => {
   if (!state.getLyricWin() || state.getLyricWin().isDestroyed()) createDesktopLyricWindow();
   const lyricWin = state.getLyricWin();
   if (!lyricWin) return false;
-  if (show) { lyricWin.show(); return true; }
+  if (show) {
+    lyricWin.show();
+    // 兜底: Windows 上 show:false 创建的窗口首次 show() 后 skipTaskbar 可能失效,
+    // 导致任务栏悬停出现歌词+主界面两个预览, show 后重新设置
+    try { lyricWin.setSkipTaskbar(true); } catch (e) {}
+    return true;
+  }
   lyricWin.hide();
   return false;
 });
@@ -99,6 +105,19 @@ ipcMain.handle('lyric-lock', (event, locked) => {
   const lyricWin = state.getLyricWin();
   if (!lyricWin || lyricWin.isDestroyed()) return;
   lyricWin.setIgnoreMouseEvents(locked, { forward: true });
+});
+
+// 锁定状态下临时恢复/恢复穿透交互 (鼠标悬停控制按钮时恢复交互, 离开后继续穿透)
+// 配合渲染进程: forward:true 只转发 mousemove, 点击永远穿透, 必须显式切换交互状态
+ipcMain.handle('lyric-set-interactive', (event, interactive) => {
+  const lyricWin = state.getLyricWin();
+  if (!lyricWin || lyricWin.isDestroyed()) return;
+  if (interactive) {
+    lyricWin.setIgnoreMouseEvents(false);
+  } else {
+    // 恢复穿透(锁定态), forward 保持 mousemove 转发以持续检测按钮悬停
+    lyricWin.setIgnoreMouseEvents(true, { forward: true });
+  }
 });
 
 // 设置桌面歌词窗口位置 (null=重置到默认居中, [x,y]=指定位置)

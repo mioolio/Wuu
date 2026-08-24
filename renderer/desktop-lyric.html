@@ -143,8 +143,9 @@
 
     /* 控制条 */
     #bar {
-      position: absolute; top: 4px; right: 8px;
+      position: absolute; top: 0; right: 0;
       display: flex; gap: 4px;
+      padding: 8px 10px;  /* 扩大命中区域, 锁定穿透模式下更易悬停到 */
       -webkit-app-region: no-drag;
       opacity: 0; transition: opacity 0.2s;
     }

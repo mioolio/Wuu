@@ -50,6 +50,9 @@
       "node_modules/**/*",
       "package.json"
     ],
+    "asarUnpack": [
+      "parsers/qishui-decrypt/native/**"
+    ],
     "extraResources": [
       {
         "from": "config/",

@@ -82,6 +82,21 @@ btnLock.addEventListener('click', async () => {
   btnLock.title = locked ? '解锁' : '锁定(鼠标穿透)';
 });
 
+// 锁定状态下悬停控制按钮区: 临时恢复交互让按钮可点击, 离开后恢复穿透
+// 原理: setIgnoreMouseEvents(true, {forward:true}) 只转发 mousemove(用于 hover 显示按钮),
+// 点击仍然穿透, 所以鼠标进入按钮区时必须显式切回可交互, 离开时再恢复穿透
+const bar = document.getElementById('bar');
+let hoverInteractive = false;
+async function setHoverInteractive(on) {
+  if (hoverInteractive === on) return;
+  hoverInteractive = on;
+  try { await window.desktopLyric.setInteractive(on); } catch (e) {}
+}
+bar.addEventListener('mouseenter', () => { if (locked) setHoverInteractive(true); });
+bar.addEventListener('mouseleave', () => { if (locked) setHoverInteractive(false); });
+// 兜底: 鼠标快速划出窗口时 mouseleave 可能丢失, 窗口级 mouseleave 时恢复穿透
+document.documentElement.addEventListener('mouseleave', () => { if (locked) setHoverInteractive(false); });
+
 btnClose.addEventListener('click', async () => {
   await window.desktopLyric.toggle(false);
   // 通知主窗口同步状态(否则主窗口的 desktopLyricOn 仍为 true, 按钮仍显示激活)

@@ -14,6 +14,26 @@ const { downloadParsedSong } = require('../download');
 
 const { parse: parseMusicLink, fetchTrackV2, krcToRaw } = parsers;
 
+// 播放失败记录 (config/play_failed.json, 读写实现见 core/storage.js)
+const { readPlayFailed, writePlayFailed, removePlayFailed } = require('../core/storage');
+
+// IPC: 播放失败上报 (audioPath → 推导出 output/<folder> 结构)
+ipcMain.handle('report-play-failed', (event, { audioPath, songName, artist }) => {
+  try {
+    if (!audioPath || typeof audioPath !== 'string') return;
+    const folder = path.basename(path.dirname(audioPath));
+    if (!folder) return;
+    const list = readPlayFailed();
+    if (!list.some(e => e.folder === folder)) {
+      list.push({ folder, songName: songName || '', artist: artist || '', ts: Date.now() });
+      writePlayFailed(list);
+      dbgLog('[REPAIR] 记录播放失败: ' + folder);
+    }
+  } catch (e) {
+    dbgLog('[REPAIR] 播放失败上报处理异常: ' + e.message);
+  }
+});
+
 // IPC: 扫描损坏歌曲
 ipcMain.handle('scan-damaged-songs', async () => {
   const outputDir = path.join(__dirname, '..', 'output');
@@ -163,8 +183,51 @@ ipcMain.handle('scan-damaged-songs', async () => {
         duration: (info && info.duration) || 0,
         issue,
         coverPath,
+        audioPath: normalAudio ? path.join(folderPath, normalAudio).replace(/\\/g, '/') : '',
       });
     }
+  }
+
+  // 合并播放失败记录: 文件级校验通过但实际解码失败的歌, 补充进损坏列表
+  const playFailed = readPlayFailed();
+  if (playFailed.length > 0) {
+    const known = new Set(damaged.map(d => d.folder));
+    const alive = [];  // 文件夹仍存在的记录(不存在说明已删除/改名, 顺手清理)
+    for (const entry of playFailed) {
+      if (!entry.folder) continue;
+      const folderPath = path.join(outputDir, entry.folder);
+      if (!fs.existsSync(folderPath)) continue;  // 已删除, 跳过(不入 alive, 自动清理)
+      alive.push(entry);
+      if (known.has(entry.folder)) continue;  // 已检出其他损坏, 不重复
+      // 从文件夹内容补全信息
+      let info = null;
+      try { info = JSON.parse(fs.readFileSync(path.join(folderPath, 'info.json'), 'utf-8')); } catch (e) {}
+      const files = fs.readdirSync(folderPath);
+      let songName = entry.songName || entry.folder, artist = entry.artist || '未知艺人';
+      if (entry.folder.includes(' - ') && !entry.songName) {
+        const li = entry.folder.lastIndexOf(' - ');
+        songName = entry.folder.slice(0, li).trim();
+        artist = entry.folder.slice(li + 3).trim();
+      }
+      if (info) {
+        if (info.title) songName = info.title;
+        else if (info.songName) songName = info.songName;
+        if (info.artist) artist = info.artist;
+      }
+      const coverFile = files.find(f => /^cover\.(jpg|jpeg|png|webp)$/i.test(f));
+      const normalAudio2 = files.find(f => /\.(aac|m4a|mp3|wav|flac|ogg)$/i.test(f) && !/\.enc\./i.test(f));
+      damaged.push({
+        folder: entry.folder,
+        title: songName,
+        artist,
+        trackId: (info && info.trackId) || '',
+        duration: (info && info.duration) || 0,
+        issue: '播放失败',
+        coverPath: coverFile ? path.join(folderPath, coverFile).replace(/\\/g, '/') : '',
+        audioPath: normalAudio2 ? path.join(folderPath, normalAudio2).replace(/\\/g, '/') : '',
+      });
+    }
+    if (alive.length !== playFailed.length) writePlayFailed(alive);
   }
   return damaged;
 });
@@ -316,6 +379,8 @@ ipcMain.handle('repair-song', async (event, item) => {
     log('开始下载...');
     const result = await downloadParsedSong(info, () => {}, { audio: true, cover: true, lrc: false, info: true });
     log('修复成功');
+    // 音频已重新下载, 清除播放失败记录
+    removePlayFailed(item.folder);
     return { ok: true, data: result };
   } catch (e) {
     log(`修复失败: ${e.message}\n${e.stack || ''}`);

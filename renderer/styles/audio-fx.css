@@ -1,0 +1,129 @@
+/* =========== 音效系统样式 (播放栏音效按钮 + 音效弹窗) =========== */
+
+/* 播放栏音效按钮: 激活预设时高亮(主题色) */
+#btn-fx.fx-active {
+  color: var(--accent);
+}
+#btn-fx.fx-active svg {
+  filter: drop-shadow(0 0 4px color-mix(in srgb, var(--accent) 55%, transparent));
+}
+
+/* 弹窗卡片 */
+.fx-card {
+  width: 420px;
+  max-width: calc(100vw - 48px);
+}
+
+/* 预设网格 */
+.fx-preset-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin: 14px 0 16px;
+}
+.fx-chip {
+  position: relative;
+  padding: 8px 6px;
+  background: var(--surface2);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color var(--t), color var(--t), background var(--t);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fx-chip:hover { background: var(--hover); }
+.fx-chip.active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+/* 自定义方案 chip 的删除小按钮 */
+.fx-chip-del {
+  position: absolute;
+  top: 1px;
+  right: 3px;
+  font-style: normal;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--fg3);
+  cursor: pointer;
+  padding: 2px;
+}
+.fx-chip-del:hover { color: #e81123; }
+
+/* 均衡器区 */
+.fx-eq-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.fx-eq-title { font-size: 13px; font-weight: 600; color: var(--fg); }
+.fx-eq-tip { font-size: 10px; color: var(--fg3); }
+
+.fx-eq-sliders {
+  display: flex;
+  justify-content: space-between;
+  gap: 4px;
+  padding: 8px 4px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.fx-eq-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+}
+.fx-eq-val {
+  font-size: 10px;
+  color: var(--fg3);
+  font-variant-numeric: tabular-nums;
+  height: 13px;
+  line-height: 13px;
+}
+.fx-eq-cell input[type="range"] {
+  -webkit-appearance: slider-vertical;
+  width: 18px;
+  height: 96px;
+  cursor: pointer;
+}
+.fx-eq-cell input[type="range"]:disabled { cursor: not-allowed; opacity: 0.5; }
+.fx-eq-label {
+  font-size: 10px;
+  color: var(--fg3);
+  height: 13px;
+  line-height: 13px;
+}
+/* 只读态(内置预设时): 滑块半透明 + 显示操作提示 */
+.fx-eq-tip { display: none; }
+.fx-eq-section.readonly .fx-eq-tip { display: inline; }
+.fx-eq-section.readonly .fx-eq-val { opacity: 0.6; }
+
+/* 底部操作行: 名称输入 + 重置 + 保存 */
+.fx-eq-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+.fx-eq-name-input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 10px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--fg);
+  font-size: 12px;
+  outline: none;
+}
+.fx-eq-name-input:focus { border-color: var(--accent); }
+.fx-eq-actions .parse-modal-btn { padding: 6px 14px; font-size: 12px; }

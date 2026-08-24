@@ -416,15 +416,38 @@ ipcMain.handle('qishui-import-song', async (event, { aid, sessionid, trackId, qu
 
     // 1. 下载并解密音频
     event.sender.send('qishui-import-progress', { stage: 'audio', pct: 10 });
-    const dlResult = await qishuiDownloadTrackMedia({
-      sessionid,
-      cookie: fullCookie,  // 传递完整 cookie 给 fetchVideoPayload
-      track_id: String(trackId),
-      quality: quality || 'high',
-      aid: aid || qishuiFixed.aid,
-      mediaType: mediaType || 'track',
-      vid: vid || '',  // UGC 创作歌曲的关键标识 (track.vid)
-    });
+
+    // 试听缓存复用: preview 已下载+解密到临时文件, 直接复用免二次下载
+    // (preview 与 import 均请求 high 音质, 内容一致; 元数据由 songMeta 提供)
+    let dlResult = null;
+    try {
+      for (const ext of ['m4a', 'flac', 'mp3', 'mp4']) {
+        const tmp = path.join(os.tmpdir(), `qishui-preview-${trackId}.${ext}`);
+        if (fs.existsSync(tmp)) {
+          const buf = fs.readFileSync(tmp);
+          if (buf.length > 1024) {  // 忽略异常小文件
+            const contentType = ext === 'flac' ? 'audio/flac'
+              : ext === 'mp3' ? 'audio/mpeg'
+              : ext === 'mp4' ? 'video/mp4' : 'audio/mp4';
+            dlResult = { buffer: buf, contentType, trackPayload: {} };
+            dbgLog('[QISHUI] import-song 命中试听缓存, 跳过下载: ' + tmp + ' size=' + buf.length);
+            break;
+          }
+        }
+      }
+    } catch (e) { dbgLog('[QISHUI] import-song 试听缓存读取失败(回退下载): ' + e.message); }
+
+    if (!dlResult) {
+      dlResult = await qishuiDownloadTrackMedia({
+        sessionid,
+        cookie: fullCookie,  // 传递完整 cookie 给 fetchVideoPayload
+        track_id: String(trackId),
+        quality: quality || 'high',
+        aid: aid || qishuiFixed.aid,
+        mediaType: mediaType || 'track',
+        vid: vid || '',  // UGC 创作歌曲的关键标识 (track.vid)
+      });
+    }
     const audioBuffer = dlResult.buffer;
     const trackPayload = dlResult.trackPayload;
     const track = trackPayload?.track || {};

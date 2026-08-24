@@ -102,6 +102,8 @@ let appSettings = {
   // 对外端口设置 (frp 等内网穿透转发时, 远程端口可能与本地服务端口不同)
   // 0 = 使用"服务端口"; >0 = 生成分享链接时使用此端口
   publicPort: 0,
+  // 音效设置 (audio-fx.js): preset=当前预设key, eq=自定义10段增益(dB), customs=已保存的自定义方案
+  audioFx: { preset: 'off', eq: [0,0,0,0,0,0,0,0,0,0], customs: [] },
 };
 
 // 进度条拖拽

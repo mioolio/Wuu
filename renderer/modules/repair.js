@@ -151,6 +151,39 @@ repairAllBtn.addEventListener('click', async () => {
   renderList();
 });
 
+// 构建删除按钮(无法修复/修复失败时, 用户可选择删除或保留)
+function buildDeleteBtn(item, idx) {
+  const btn = document.createElement('button');
+  btn.className = 'repair-del-btn';
+  btn.textContent = '删除';
+  btn.title = '从磁盘删除该歌曲文件夹';
+  btn.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    if (!item.audioPath) { showToast && showToast('该条目无音频路径, 无法删除', 'error'); return; }
+    if (!window.confirm(`确定要彻底删除「${item.title || item.folder}」吗?\n这将删除磁盘上该歌曲的整个文件夹(含音频/封面/歌词), 且无法恢复。`)) return;
+    btn.disabled = true;
+    const res = await window.musicAPI.deleteSongFolder(item.audioPath);
+    if (res && res.ok) {
+      _damagedList.splice(idx, 1);
+      renderRepairList();
+      setRepairStatus(`已删除「${item.title || item.folder}」`, 'info');
+      // 刷新歌库(保留当前播放位置)
+      const curAudioPath = songs[curIdx] ? songs[curIdx].audioPath : null;
+      songs = await window.musicAPI.getSongs();
+      if (curAudioPath) {
+        const newIdx = songs.findIndex(s => s.audioPath === curAudioPath);
+        if (newIdx >= 0) curIdx = newIdx;
+        else if (songs.length > 0) curIdx = 0;
+      }
+      renderList();
+    } else {
+      btn.disabled = false;
+      setRepairStatus(`删除失败: ${(res && res.error) || '未知错误'}`, 'error');
+    }
+  });
+  return btn;
+}
+
 // 渲染损坏歌曲列表
 function renderRepairList() {
   repairList.innerHTML = '';
@@ -264,6 +297,8 @@ function buildRepairRow(item, idx) {
     const btn = document.createElement('button');
     btn.className = 'repair-one-btn';
     btn.textContent = item._status === RS_FAILED ? '重试' : '修复';
+    // 修复失败后追加删除按钮(无法修复时用户可选择删除或保留)
+    if (item._status === RS_FAILED) tdAction.appendChild(buildDeleteBtn(item, idx));
     btn.addEventListener('click', async (e) => {
       e.stopPropagation();
       btn.disabled = true;
@@ -323,6 +358,8 @@ function buildRepairRow(item, idx) {
     tdAction.appendChild(btn);
   } else if (!item.trackId && !isLyricsIssue) {
     tdAction.innerHTML = '<span class="no-trackid-tip">无法修复</span>';
+    // 无法修复: 提供删除按钮(用户可选择删除或保留)
+    tdAction.appendChild(buildDeleteBtn(item, idx));
   }
 
   tr.appendChild(tdCover);

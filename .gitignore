@@ -29,14 +29,22 @@ decrypt_official_cache.js
 hook_diag_exports.js
 hook_soda_decrypt.js
 hook_soda_full.js
+hook_soda_cronet.js
 launch_soda_hook.py
 run_frida_hook.py
+run_hook.py
 soda_main.js
 soda_main_bundle.js
 soda_player.js
 test_spade_decrypt.js
+test_qishui_vip.js
 try_all_decrypt.js
 verify_spade_source.js
+
+# 汽水客户端签名逆向产物(专有二进制/源码提取/抓包记录,禁止入库)
+reverse/
+parsers/qishui-decrypt/native/
+soda_cronet_*.txt
 
 # IDE
 .vs/

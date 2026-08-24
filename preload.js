@@ -29,6 +29,8 @@ contextBridge.exposeInMainWorld('desktopLyric', {
   toggle: (show) => ipcRenderer.invoke('lyric-toggle', show),
   // 锁定/解锁(锁定后鼠标穿透)
   lock: (locked) => ipcRenderer.invoke('lyric-lock', locked),
+  // 锁定状态下临时恢复交互(鼠标悬停控制按钮时), 离开按钮后恢复穿透
+  setInteractive: (on) => ipcRenderer.invoke('lyric-set-interactive', on),
   // 发送歌词数据/当前时间到桌面歌词窗口
   send: (payload) => ipcRenderer.send('lyric-data', payload),
   // 桌面歌词窗口通过X按钮关闭时, 通知主窗口同步状态
@@ -62,6 +64,8 @@ contextBridge.exposeInMainWorld('repairAPI', {
   scan: () => ipcRenderer.invoke('scan-damaged-songs'),
   repair: (item) => ipcRenderer.invoke('repair-song', item),
   repairLyricsManual: (folder, shareLink) => ipcRenderer.invoke('repair-lyrics-manual', { folder, shareLink }),
+  // 播放失败上报(解码失败的歌曲记入修复中心, 文件级扫描检不出的解码损坏靠此补充)
+  reportPlayFailed: (info) => ipcRenderer.invoke('report-play-failed', info),
 });
 
 // 桌面歌词窗口接收更新

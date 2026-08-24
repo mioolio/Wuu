@@ -293,14 +293,14 @@ body.video-mode #left {
 #btn-play:hover { background: var(--accent-dim); transform: scale(1.06); }
 #btn-play svg { width: 18px; height: 18px; }
 
-#btn-mode, #btn-desktop-lyric, #btn-lyric-lock {
+#btn-mode, #btn-fx, #btn-desktop-lyric, #btn-lyric-lock {
   background: none; border: none; color: var(--fg);
   cursor: pointer; width: 28px; height: 28px;
   display: flex; align-items: center; justify-content: center;
   transition: opacity var(--t), color var(--t);
 }
-#btn-mode:hover, #btn-desktop-lyric:hover, #btn-lyric-lock:hover { opacity: 0.65; }
-#btn-mode svg, #btn-desktop-lyric svg, #btn-lyric-lock svg { width: 15px; height: 15px; }
+#btn-mode:hover, #btn-fx:hover, #btn-desktop-lyric:hover, #btn-lyric-lock:hover { opacity: 0.65; }
+#btn-mode svg, #btn-fx svg, #btn-desktop-lyric svg, #btn-lyric-lock svg { width: 15px; height: 15px; }
 #btn-desktop-lyric.active, #btn-lyric-lock.active { color: var(--accent); opacity: 1; }
 #btn-lyric-lock.hidden { display: none; }
 

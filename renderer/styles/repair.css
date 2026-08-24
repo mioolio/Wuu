@@ -193,6 +193,17 @@
   border: 1px solid var(--border);
 }
 .repair-one-btn.manual:hover { background: var(--hover); }
+/* 删除按钮(无法修复/修复失败时, 删除或保留由用户决定) */
+.repair-del-btn {
+  padding: 4px 14px;
+  margin-left: 6px;
+  background: transparent; color: #e81123;
+  border: 1px solid rgba(232,17,35,0.5); border-radius: 6px;
+  font-size: 11px; cursor: pointer;
+  transition: background var(--t), opacity var(--t);
+}
+.repair-del-btn:hover { background: rgba(232,17,35,0.1); }
+.repair-del-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .repair-done-mark {
   color: #5cb85c; font-size: 14px; font-weight: 700;
 }

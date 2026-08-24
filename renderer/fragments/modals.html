@@ -101,6 +101,29 @@
     </div>
   </div>
 
+  <!-- 音效弹窗 (播放栏音效按钮触发) -->
+  <div id="fx-modal" class="parse-modal hidden">
+    <div class="parse-modal-card fx-card">
+      <div class="parse-modal-title">音效</div>
+      <div id="fx-preset-grid" class="fx-preset-grid"></div>
+      <div id="fx-eq-section" class="fx-eq-section">
+        <div class="fx-eq-head">
+          <span class="fx-eq-title">均衡器</span>
+          <span class="fx-eq-tip readonly-only">选择"自定义"或已保存方案后可调节</span>
+        </div>
+        <div id="fx-eq-sliders" class="fx-eq-sliders"></div>
+        <div class="fx-eq-actions">
+          <input type="text" id="fx-eq-name" class="fx-eq-name-input" placeholder="方案名称" maxlength="12" />
+          <button id="fx-eq-reset" class="parse-modal-btn secondary">重置</button>
+          <button id="fx-eq-save" class="parse-modal-btn primary">保存方案</button>
+        </div>
+      </div>
+      <div class="parse-modal-actions">
+        <button id="fx-close" class="parse-modal-btn primary">关闭</button>
+      </div>
+    </div>
+  </div>
+
   <!-- 歌单分享设置 (从歌单分享页或主页分享按钮触发) -->
   <div id="pl-export-modal" class="parse-modal hidden">
     <div class="parse-modal-card pl-export-modal-card">
