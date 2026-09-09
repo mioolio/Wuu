@@ -436,6 +436,7 @@ settingGlassOpacity.addEventListener('input', () => {
   appSettings.glassOpacity = parseFloat(settingGlassOpacity.value);
   glassOpacityVal.textContent = Math.round(appSettings.glassOpacity * 100) + '%';
   document.documentElement.style.setProperty('--glass-opacity', appSettings.glassOpacity);
+  applyGlassDerivedOpacity();  // 二级/三级菜单(面板/弹窗)实时跟随
 });
 settingGlassOpacity.addEventListener('change', () => {
   appSettings.glassOpacity = parseFloat(settingGlassOpacity.value);

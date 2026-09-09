@@ -13,6 +13,11 @@ export default defineConfig({
     proxy: {
       '/api': 'http://127.0.0.1:30967',
       '/ping': 'http://127.0.0.1:30967',
+      // 一起听 WebSocket 代理 (ws: true 启用 WS 协议转发)
+      '/ws/together': {
+        target: 'ws://127.0.0.1:30967',
+        ws: true,
+      },
     },
   },
   build: {

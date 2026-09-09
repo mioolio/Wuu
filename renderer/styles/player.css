@@ -74,8 +74,7 @@
   max-width: 60%;
   padding: 10px 14px;
   background: rgba(0, 0, 0, 0.55);
-  backdrop-filter: blur(14px) saturate(160%);
-  -webkit-backdrop-filter: blur(14px) saturate(160%);
+  /* GPU 优化: 深色底已保证可读, 去掉 backdrop-filter */
   border-radius: 10px;
   color: #fff;
   pointer-events: none;
@@ -112,8 +111,7 @@
   height: 40px;
   border-radius: 50%;
   background: rgba(0, 0, 0, 0.55);
-  backdrop-filter: blur(14px) saturate(160%);
-  -webkit-backdrop-filter: blur(14px) saturate(160%);
+  /* GPU 优化: 深色底已保证可读, 去掉 backdrop-filter */
   border: none;
   color: #fff;
   cursor: pointer;
@@ -181,8 +179,7 @@ body.video-mode #left {
   top: 16px; right: 0;
   width: 22px; height: 56px;
   background: rgba(128,128,128,0.15);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
+  /* GPU 优化: 小按钮去掉 backdrop-filter */
   border: none;
   border-radius: 8px 0 0 8px;
   color: var(--fg2);
@@ -204,8 +201,9 @@ body.video-mode #left {
 #ctrl {
   height: 74px; flex-shrink: 0;
   background: transparent;
-  backdrop-filter: blur(20px) saturate(180%);
-  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  /* GPU 优化: 20→12, saturate 180→130 */
+  backdrop-filter: blur(12px) saturate(130%);
+  -webkit-backdrop-filter: blur(12px) saturate(130%);
   border-top: 1px solid var(--border);
   padding: 6px 18px 12px; display: flex;
   flex-direction: column; justify-content: center; gap: 6px;
@@ -318,8 +316,7 @@ body.video-mode #left {
 #vol-pop {
   position: absolute; bottom: 38px; left: 50%; transform: translateX(-50%);
   background: rgba(var(--bg-rgb), var(--glass-opacity));
-  backdrop-filter: blur(16px) saturate(150%);
-  -webkit-backdrop-filter: blur(16px) saturate(150%);
+  /* GPU 优化: 悬在进度条上方, 进度更新触发重模糊; 提高底色不透明度替代模糊 */
   border: 1px solid var(--border);
   border-radius: var(--r); padding: 10px 6px; z-index: 20;
 }

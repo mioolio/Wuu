@@ -1,4 +1,15 @@
 // =========== 应用设置 + 迷你条更新 ===========
+// 二级/三级菜单(面板+弹窗)跟随全局透明度设置的派生变量:
+//   --panel-opacity: 面板(设置分组/免费听歌词浮层) = 透明度×0.55, 默认 0.72→0.40 与旧版固定 0.4 一致
+//   --modal-opacity: 弹窗(模态卡片/免费听播放条) = 透明度+0.2, 保底 0.55 保可读性, 默认 0.72→0.92 接近旧版 0.96
+// 半透明+backdrop-blur 后, 封面渐变(跟随配色开启时)会透过这些表面, 实现"变色"跟随
+function applyGlassDerivedOpacity() {
+  const g = Math.min(0.95, Math.max(0.3, appSettings.glassOpacity));
+  const root = document.documentElement;
+  root.style.setProperty('--panel-opacity', (g * 0.55).toFixed(3));
+  root.style.setProperty('--modal-opacity', Math.min(0.97, Math.max(0.55, g + 0.2)).toFixed(3));
+}
+
 function applySettings() {
   const root = document.documentElement;
   settingShowFloatBtn.checked = appSettings.showFloatListBtn;
@@ -69,6 +80,7 @@ function applySettings() {
   updServerStatusText();
 
   root.style.setProperty('--glass-opacity', appSettings.glassOpacity);
+  applyGlassDerivedOpacity();  // 二级/三级菜单透明度联动
   root.style.setProperty('--color-intensity', appSettings.colorIntensity);
   root.style.setProperty('--lyric-done-opacity', appSettings.lyricDone);
   root.style.setProperty('--lyric-wait-opacity', appSettings.lyricWait);

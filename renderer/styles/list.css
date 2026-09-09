@@ -9,8 +9,7 @@
   margin-left: auto; width: 240px; padding: 8px 14px;
   border-radius: 20px; border: 1px solid var(--border);
   background: rgba(var(--bg-rgb), var(--glass-opacity));
-  backdrop-filter: blur(12px) saturate(150%);
-  -webkit-backdrop-filter: blur(12px) saturate(150%);
+  /* GPU 优化: 小元素去掉 backdrop-filter, 半透明底色足够 */
   color: var(--fg);
   font-size: 12px; outline: none; transition: border-color var(--t);
 }
@@ -135,8 +134,9 @@
   height: 100%;
   display: flex; flex-direction: column;
   background: rgba(26, 26, 26, var(--glass-opacity));
-  backdrop-filter: blur(20px) saturate(180%);
-  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  /* GPU 优化: 浮动列表覆盖旋转封面/走字歌词, 动画每帧触发重模糊, 20→12 */
+  backdrop-filter: blur(12px) saturate(130%);
+  -webkit-backdrop-filter: blur(12px) saturate(130%);
   border-radius: 12px;
   border: 1px solid var(--border);
   box-shadow: 0 4px 20px rgba(0,0,0,0.15);
@@ -168,8 +168,6 @@
   width: 100%; padding: 7px 14px;
   border-radius: 18px; border: 1px solid var(--border);
   background: rgba(var(--bg-rgb), var(--glass-opacity));
-  backdrop-filter: blur(12px) saturate(150%);
-  -webkit-backdrop-filter: blur(12px) saturate(150%);
   color: var(--fg);
   font-size: 12px; outline: none; transition: border-color var(--t);
 }

@@ -15,9 +15,31 @@ const props = defineProps({
   isPlaying: { type: Boolean, default: false },
 });
 
-const emit = defineEmits(['play', 'retry', 'loadMore']);
+const emit = defineEmits(['play', 'retry', 'loadMore', 'search']);
 
 const scrollContainer = ref(null);
+
+// ===== 搜索 (300ms 防抖, 服务端过滤分页) =====
+const query = ref('');
+let searchTimer = null;
+
+function onSearchInput(e) {
+  query.value = e.target.value;
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => {
+    emit('search', query.value.trim());
+  }, 300);
+}
+
+function clearSearch() {
+  clearTimeout(searchTimer);
+  query.value = '';
+  emit('search', '');
+}
+
+onBeforeUnmount(() => {
+  clearTimeout(searchTimer);
+});
 
 // 计算封面 URL (优先使用 coverPath)
 function getCoverUrl(song) {
@@ -54,10 +76,26 @@ onBeforeUnmount(() => {
   <div class="song-list-view" ref="scrollContainer">
     <!-- 顶部标题栏 -->
     <header class="header">
-      <h1>Wuu 音乐</h1>
-      <p class="subtitle" v-if="!loading && !loadError">
-        {{ songs.length }} / {{ total }} 首
-      </p>
+      <div class="title-row">
+        <h1>Wuu 音乐</h1>
+        <p class="subtitle" v-if="!loading && !loadError">
+          {{ songs.length }} / {{ total }} 首
+        </p>
+      </div>
+      <!-- 搜索框 -->
+      <div class="search-box">
+        <svg class="search-icon" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+        <input
+          class="search-input"
+          type="text"
+          :value="query"
+          placeholder="搜索歌曲 / 歌手"
+          @input="onSearchInput"
+        />
+        <button v-if="query" class="clear-btn" @click="clearSearch">
+          <svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </div>
     </header>
 
     <!-- 加载中 -->
@@ -74,7 +112,11 @@ onBeforeUnmount(() => {
 
     <!-- 空列表 -->
     <div v-else-if="!songs.length" class="status-box">
-      <p>歌库为空</p>
+      <template v-if="query">
+        <p>未找到"{{ query }}"相关歌曲</p>
+        <button class="retry-btn" @click="clearSearch">清除搜索</button>
+      </template>
+      <p v-else>歌库为空</p>
     </div>
 
     <!-- 歌曲列表 -->
@@ -133,6 +175,11 @@ onBeforeUnmount(() => {
   z-index: 10;
   border-bottom: 1px solid var(--border);
 }
+.title-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
 .header h1 {
   font-size: 24px;
   font-weight: 700;
@@ -143,6 +190,55 @@ onBeforeUnmount(() => {
   font-size: 13px;
   color: var(--text-secondary);
   margin: 4px 0 0;
+}
+
+/* 搜索框 */
+.search-box {
+  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg-card-elevated);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 8px 14px;
+}
+.search-icon {
+  width: 18px;
+  height: 18px;
+  fill: var(--text-secondary);
+  flex-shrink: 0;
+}
+.search-input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text);
+  font-size: 14px;
+}
+.search-input::placeholder {
+  color: var(--text-secondary);
+  opacity: 0.7;
+}
+.clear-btn {
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 0;
+  flex-shrink: 0;
+}
+.clear-btn svg {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
 }
 
 .status-box {

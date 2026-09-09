@@ -20,8 +20,7 @@
 }
 .stat-card {
   background: rgba(var(--bg-rgb), 0.4);
-  backdrop-filter: blur(16px) saturate(150%);
-  -webkit-backdrop-filter: blur(16px) saturate(150%);
+  /* GPU 优化: 背后是 body 玻璃皮肤, 去掉重复 backdrop-filter */
   border: 1px solid var(--border);
   border-radius: var(--r);
   padding: 18px 20px;
@@ -31,8 +30,6 @@
 .stat-card:hover { transform: translateY(-2px); border-color: var(--cover-accent, var(--accent)); }
 .stat-card.primary {
   background: linear-gradient(135deg, rgba(255,255,255,0.04), transparent);
-  backdrop-filter: blur(16px) saturate(150%);
-  -webkit-backdrop-filter: blur(16px) saturate(150%);
   border-color: var(--cover-accent, var(--accent));
 }
 .stat-card .stat-label {

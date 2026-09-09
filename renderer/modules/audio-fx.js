@@ -18,22 +18,27 @@ let fxLfoDepth = null;      // LFO 调制深度 (0=不摆动)
 let fxConvolver = null;     // 混响 (现场感)
 let fxWet = null;           // 混响湿度 (0=干声直通)
 
-// 10 段 EQ 中心频率 (Hz)
+// 10 段 EQ 默认中心频率 (Hz) 与默认 Q 值 (自定义方案可覆盖)
 const FX_EQ_FREQS = [31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
+const FX_EQ_Q_DEFAULT = 1.1;
+
+// 自定义模式默认效果参数 (hp/ls/hs/width/panDepth/panRate/wet)
+const FX_PARAMS_DEFAULT = { hp: 20, ls: 0, hs: 0, width: 1, panDepth: 0, panRate: 0.08, wet: 0 };
 
 // 预设定义:
 //   hp=highpass 截止(Hz)  ls/hs=shelf 增益(dB)  eq=10 段增益(dB)
 //   width=立体声宽度(1=原始)  panDepth=声像摆动深度(0-1)  panRate=摆动速率(Hz)  wet=混响湿度(0-1)
+// (v2 预设参数按听感校准: 低频防轰头 / 环绕宽度收敛 / 唱片高频柔化)
 const FX_PRESETS = {
   off:      { name: '关闭',       hp: 20,  ls: 0,  hs: 0,   eq: [0,0,0,0,0,0,0,0,0,0],                          width: 1,    panDepth: 0,    panRate: 0.08, wet: 0 },
-  bass:     { name: '超重低音',   hp: 20,  ls: 7,  hs: 1,   eq: [5,4,2.5,1,0,0,0,0,1,1.5],                      width: 1,    panDepth: 0,    panRate: 0.08, wet: 0 },
-  vocal:    { name: '清澈人声',   hp: 110, ls: -1, hs: 1.5, eq: [0,0,-1,-1.5,0,1.5,3,3,1.5,0.5],                width: 1.1,  panDepth: 0,    panRate: 0.08, wet: 0 },
-  surround: { name: '360度环绕',  hp: 20,  ls: 0,  hs: 0,   eq: [0,0,0,0,0,0,0,0,0,0],                          width: 2.2,  panDepth: 0.28, panRate: 0.08, wet: 0.06 },
+  bass:     { name: '超重低音',   hp: 20,  ls: 7,  hs: 1,   eq: [4.5,4,2.5,-1.5,0,0,0,0,1,1.5],                 width: 1,    panDepth: 0,    panRate: 0.08, wet: 0 },
+  vocal:    { name: '清澈人声',   hp: 120, ls: -1, hs: 1.5, eq: [0,0,-1,-1.5,0,1.5,3,3,1.5,0.5],                width: 1.1,  panDepth: 0,    panRate: 0.08, wet: 0 },
+  surround: { name: '360度环绕',  hp: 20,  ls: 0,  hs: 0,   eq: [0,0,0,0,0,0,0,0,0,0],                          width: 2.0,  panDepth: 0.28, panRate: 0.08, wet: 0.08 },
   d3:       { name: '3D音效',     hp: 20,  ls: 0,  hs: 2,   eq: [0,0,0,0,0,0,0.5,1,1.5,2],                      width: 1.7,  panDepth: 0.12, panRate: 0.05, wet: 0.12 },
   live:     { name: 'HIFI现场',   hp: 20,  ls: 1,  hs: 2,   eq: [0,0.5,1,0,0.5,0.5,0,1,1.5,2],                  width: 1.3,  panDepth: 0,    panRate: 0.08, wet: 0.18 },
   edm:      { name: '动感电音',   hp: 30,  ls: 5,  hs: 3,   eq: [3,2.5,2,0,0,0,0.5,1.5,3,4],                    width: 1.2,  panDepth: 0,    panRate: 0.08, wet: 0.05 },
   rock:     { name: '摇滚音效',   hp: 40,  ls: 3,  hs: 2,   eq: [3,2.5,1.5,-1,-1.5,0,1.5,2.5,2,1.5],            width: 1.15, panDepth: 0,    panRate: 0.08, wet: 0.04 },
-  vinyl:    { name: '复古唱片',   hp: 120, ls: 2,  hs: -3,  eq: [1,2,2,1.5,0.5,0,-0.5,-2,-5,-9],                width: 1.08, panDepth: 0,    panRate: 0.08, wet: 0.03 },
+  vinyl:    { name: '复古唱片',   hp: 120, ls: 2,  hs: -3,  eq: [1,2,2,1.5,0.5,0,-0.5,-2,-4.5,-8],               width: 1.08, panDepth: 0,    panRate: 0.08, wet: 0.03 },
 };
 
 // 生成混响 impulse response (指数衰减立体声噪声)
@@ -125,13 +130,20 @@ function buildFxChain(ctx, srcNode, dstNode) {
 }
 
 // ---- 设置读写 ----
+// 数据结构 v2: { preset, eq[10], eqFreqs[10], eqQs[10], params{7}, customs[{name, eq, eqFreqs?, eqQs?, params?}] }
+// 兼容 v1: 缺 eqFreqs/eqQs/params 的旧数据自动补默认值
 function _getFxSettings() {
-  if (typeof appSettings === 'undefined') return { preset: 'off', eq: FX_EQ_FREQS.map(() => 0), customs: [] };
+  const empty = { preset: 'off', eq: FX_EQ_FREQS.map(() => 0), eqFreqs: FX_EQ_FREQS.slice(), eqQs: FX_EQ_FREQS.map(() => FX_EQ_Q_DEFAULT), params: { ...FX_PARAMS_DEFAULT }, customs: [] };
+  if (typeof appSettings === 'undefined') return empty;
   if (!appSettings.audioFx || typeof appSettings.audioFx !== 'object') {
-    appSettings.audioFx = { preset: 'off', eq: FX_EQ_FREQS.map(() => 0), customs: [] };
+    appSettings.audioFx = empty;
+    return appSettings.audioFx;
   }
   const fx = appSettings.audioFx;
   if (!Array.isArray(fx.eq) || fx.eq.length !== 10) fx.eq = FX_EQ_FREQS.map(() => 0);
+  if (!Array.isArray(fx.eqFreqs) || fx.eqFreqs.length !== 10) fx.eqFreqs = FX_EQ_FREQS.slice();
+  if (!Array.isArray(fx.eqQs) || fx.eqQs.length !== 10) fx.eqQs = FX_EQ_FREQS.map(() => FX_EQ_Q_DEFAULT);
+  if (!fx.params || typeof fx.params !== 'object') fx.params = { ...FX_PARAMS_DEFAULT };
   if (!Array.isArray(fx.customs)) fx.customs = [];
   return fx;
 }
@@ -140,16 +152,28 @@ function _saveFxSettings() {
   if (typeof saveUserData === 'function') saveUserData();
 }
 
-// 解析 fx key → 完整参数 (custom / custom:<索引> 用 EQ 数组, 其余用预设)
+// 解析 fx key → 完整参数 (custom / custom:<索引> 用保存的完整参数, 其余用内置预设)
 function _resolveFxConfig(key) {
   const fx = _getFxSettings();
   if (key === 'custom') {
-    return { ...FX_PRESETS.off, eq: fx.eq.slice() };
+    return {
+      ...FX_PRESETS.off,
+      eq: fx.eq.slice(),
+      eqFreqs: fx.eqFreqs.slice(),
+      eqQs: fx.eqQs.slice(),
+      ...fx.params,
+    };
   }
   if (typeof key === 'string' && key.startsWith('custom:')) {
     const c = fx.customs[parseInt(key.slice(7), 10)];
     if (!c || !Array.isArray(c.eq)) return null;
-    return { ...FX_PRESETS.off, eq: c.eq.slice() };
+    return {
+      ...FX_PRESETS.off,
+      eq: c.eq.slice(),
+      eqFreqs: Array.isArray(c.eqFreqs) && c.eqFreqs.length === 10 ? c.eqFreqs.slice() : FX_EQ_FREQS.slice(),
+      eqQs: Array.isArray(c.eqQs) && c.eqQs.length === 10 ? c.eqQs.slice() : FX_EQ_FREQS.map(() => FX_EQ_Q_DEFAULT),
+      ...(c.params || {}),
+    };
   }
   return FX_PRESETS[key] || FX_PRESETS.off;
 }
@@ -170,7 +194,11 @@ function applyFxPreset(key, opts) {
     _setAudioParam(fxHP.frequency, conf.hp);
     _setAudioParam(fxLS.gain, conf.ls);
     _setAudioParam(fxHS.gain, conf.hs);
-    fxEq.forEach((n, i) => _setAudioParam(n.gain, conf.eq[i] || 0));
+    fxEq.forEach((n, i) => {
+      _setAudioParam(n.gain, conf.eq[i] || 0);
+      _setAudioParam(n.frequency, conf.eqFreqs ? conf.eqFreqs[i] : FX_EQ_FREQS[i]);
+      _setAudioParam(n.Q, conf.eqQs ? conf.eqQs[i] : FX_EQ_Q_DEFAULT);
+    });
     _setAudioParam(fxSideW.gain, conf.width);
     _setAudioParam(fxWet.gain, conf.wet);
     if (fxPan) {
@@ -187,6 +215,36 @@ function applyFxEqBand(i, db) {
   const fx = _getFxSettings();
   fx.eq[i] = db;
   if (fxReady && fxEq[i]) _setAudioParam(fxEq[i].gain, db);
+}
+
+// 自定义 EQ 频段中心频率实时调节 (Hz)
+function applyFxEqFreq(i, hz) {
+  const fx = _getFxSettings();
+  fx.eqFreqs[i] = hz;
+  if (fxReady && fxEq[i]) _setAudioParam(fxEq[i].frequency, hz);
+}
+
+// 自定义 EQ 频段 Q 值实时调节 (越大越窄越陡)
+function applyFxEqQ(i, q) {
+  const fx = _getFxSettings();
+  fx.eqQs[i] = q;
+  if (fxReady && fxEq[i]) _setAudioParam(fxEq[i].Q, q);
+}
+
+// 自定义效果参数实时调节 (key: hp/ls/hs/width/panDepth/panRate/wet)
+function applyFxParam(key, value) {
+  const fx = _getFxSettings();
+  fx.params[key] = value;
+  if (!fxReady) return;
+  switch (key) {
+    case 'hp': _setAudioParam(fxHP.frequency, value); break;
+    case 'ls': _setAudioParam(fxLS.gain, value); break;
+    case 'hs': _setAudioParam(fxHS.gain, value); break;
+    case 'width': _setAudioParam(fxSideW.gain, value); break;
+    case 'wet': _setAudioParam(fxWet.gain, value); break;
+    case 'panDepth': if (fxPan) _setAudioParam(fxLfoDepth.gain, value); break;
+    case 'panRate': if (fxPan) _setAudioParam(fxLfo.frequency, value); break;
+  }
 }
 
 // =========== 音效弹窗 UI ===========
@@ -231,6 +289,8 @@ function renderFxPresets() {
       applyFxPreset(key);
       renderFxPresets();
       renderFxEqSliders();
+      renderFxBandDetail();
+      renderFxParams();
     });
     return chip;
   };
@@ -251,9 +311,10 @@ function renderFxEqSliders() {
   const editable = fx.preset === 'custom' || (typeof fx.preset === 'string' && fx.preset.startsWith('custom:'));
   fxEqSliders.innerHTML = '';
   fxEqSection.classList.toggle('readonly', !editable);
-  FX_EQ_FREQS.forEach((freq, i) => {
+  for (let i = 0; i < 10; i++) {
+    const freq = conf.eqFreqs ? conf.eqFreqs[i] : FX_EQ_FREQS[i];
     const cell = document.createElement('div');
-    cell.className = 'fx-eq-cell';
+    cell.className = 'fx-eq-cell' + (fxSelectedBand === i ? ' selected' : '');
     const val = document.createElement('span');
     val.className = 'fx-eq-val';
     const fmtDb = v => (v > 0 ? '+' : '') + v.toFixed(1);
@@ -268,17 +329,21 @@ function renderFxEqSliders() {
       const db = parseFloat(input.value);
       val.textContent = fmtDb(db);
       // 拖动滑块: 以当前方案为起点切换到自定义模式实时调节
-      if (fx.preset !== 'custom') {
+      if (fx.preset !== 'custom' && !String(fx.preset).startsWith('custom:')) {
         fx.eq = conf.eq.slice();
+        fx.eqFreqs = (conf.eqFreqs || FX_EQ_FREQS).slice();
+        fx.eqQs = (conf.eqQs || FX_EQ_FREQS.map(() => FX_EQ_Q_DEFAULT)).slice();
+        fx.params = { ...(conf.hp !== undefined ? { hp: conf.hp, ls: conf.ls, hs: conf.hs, width: conf.width, panDepth: conf.panDepth, panRate: conf.panRate, wet: conf.wet } : fx.params) };
         fx.eq[i] = db;
         fx.preset = 'custom';
         if (fxReady) {
-          // 平滑应用整套自定义参数 (原预设可能带 hp/shelf/宽度等染色, 一并复位)
+          // 平滑应用整套自定义参数 (原预设可能带 hp/shelf/宽度等染色, 一并承接)
           applyFxPreset('custom', { silent: true });
         }
         _saveFxSettings();
         renderFxPresets();
         renderFxEqSliders();
+        renderFxParams();
         return;
       }
       applyFxEqBand(i, db);
@@ -286,12 +351,154 @@ function renderFxEqSliders() {
     });
     const label = document.createElement('span');
     label.className = 'fx-eq-label';
-    label.textContent = freq >= 1000 ? (freq / 1000) + 'k' : String(freq);
+    label.textContent = freq >= 1000 ? (Math.round(freq / 100) / 10) + 'k' : String(Math.round(freq));
+    // 点击频段: 选中后在下方详情区编辑中心频率/Q值
+    cell.addEventListener('click', () => {
+      fxSelectedBand = i;
+      renderFxEqSliders();
+      renderFxBandDetail();
+    });
     cell.appendChild(val);
     cell.appendChild(input);
     cell.appendChild(label);
     fxEqSliders.appendChild(cell);
+  }
+}
+
+// 当前选中的 EQ 频段索引 (点击滑块列切换, 详情区编辑频率/Q)
+let fxSelectedBand = 0;
+
+// 频段详情: 选中段的中心频率 + Q 值滑块 (自定义模式可调)
+function renderFxBandDetail() {
+  const wrap = document.getElementById('fx-band-detail');
+  if (!wrap) return;
+  const fx = _getFxSettings();
+  const conf = _resolveFxConfig(fx.preset) || FX_PRESETS.off;
+  const editable = fx.preset === 'custom' || (typeof fx.preset === 'string' && fx.preset.startsWith('custom:'));
+  const i = fxSelectedBand;
+  const freq = (conf.eqFreqs || FX_EQ_FREQS)[i];
+  const q = (conf.eqQs || FX_EQ_FREQS.map(() => FX_EQ_Q_DEFAULT))[i];
+  wrap.innerHTML = '';
+  wrap.classList.toggle('readonly', !editable);
+
+  const mkRow = (name, valText, min, max, step, value, fmt, onInput) => {
+    const row = document.createElement('div');
+    row.className = 'fx-param-row';
+    const label = document.createElement('span');
+    label.className = 'fx-param-label';
+    label.textContent = name;
+    const input = document.createElement('input');
+    input.type = 'range';
+    input.min = min; input.max = max; input.step = step;
+    input.value = value;
+    input.disabled = !editable;
+    const val = document.createElement('span');
+    val.className = 'fx-param-val';
+    val.textContent = valText;
+    input.addEventListener('input', () => {
+      const v = parseFloat(input.value);
+      val.textContent = fmt(v);
+      onInput(v);
+      _saveFxSettings();
+    });
+    row.appendChild(label);
+    row.appendChild(input);
+    row.appendChild(val);
+    return row;
+  };
+
+  const title = document.createElement('div');
+  title.className = 'fx-band-title';
+  title.textContent = '频段 ' + (i + 1) + ' 详情';
+  wrap.appendChild(title);
+
+  // 频率滑块: 20-20000 Hz, 步长用对数感知 (1-100 步 1, 100-1000 步 10, ...)
+  const freqRow = document.createElement('div');
+  freqRow.className = 'fx-param-row';
+  const freqLabel = document.createElement('span');
+  freqLabel.className = 'fx-param-label';
+  freqLabel.textContent = '中心频率';
+  const freqInput = document.createElement('input');
+  freqInput.type = 'range';
+  freqInput.min = 20; freqInput.max = 20000; freqInput.step = 1;
+  freqInput.value = freq;
+  freqInput.disabled = !editable;
+  const freqVal = document.createElement('span');
+  freqVal.className = 'fx-param-val';
+  const fmtHz = v => v >= 1000 ? (Math.round(v / 100) / 10) + 'kHz' : Math.round(v) + 'Hz';
+  freqVal.textContent = fmtHz(freq);
+  freqInput.addEventListener('input', () => {
+    const v = parseFloat(freqInput.value);
+    freqVal.textContent = fmtHz(v);
+    applyFxEqFreq(i, v);
+    _saveFxSettings();
+    // 同步 EQ 滑块列的频段标签
+    renderFxEqSliders();
   });
+  freqRow.appendChild(freqLabel);
+  freqRow.appendChild(freqInput);
+  freqRow.appendChild(freqVal);
+  wrap.appendChild(freqRow);
+
+  wrap.appendChild(mkRow('Q 值', q.toFixed(2), 0.1, 6, 0.05, q,
+    v => v.toFixed(2), v => applyFxEqQ(i, v)));
+}
+
+// 效果参数区: 7 个独立滑块 (自定义模式可调, 预设模式只读展示)
+const FX_PARAM_DEFS = [
+  { key: 'hp',       name: '低频截止', min: 20,   max: 400,  step: 1,    fmt: v => Math.round(v) + 'Hz' },
+  { key: 'ls',       name: '低架增益', min: -12,  max: 12,   step: 0.5,  fmt: v => (v > 0 ? '+' : '') + v.toFixed(1) + 'dB' },
+  { key: 'hs',       name: '高架增益', min: -12,  max: 12,   step: 0.5,  fmt: v => (v > 0 ? '+' : '') + v.toFixed(1) + 'dB' },
+  { key: 'width',    name: '空间宽度', min: 1,    max: 3,    step: 0.05, fmt: v => v.toFixed(2) + 'x' },
+  { key: 'panDepth', name: '声像深度', min: 0,    max: 0.6,  step: 0.01, fmt: v => Math.round(v * 100) + '%' },
+  { key: 'panRate',  name: '声像速率', min: 0.02, max: 0.5,  step: 0.01, fmt: v => v.toFixed(2) + 'Hz' },
+  { key: 'wet',      name: '混响湿度', min: 0,    max: 0.5,  step: 0.01, fmt: v => Math.round(v * 200) + '%' },
+];
+function renderFxParams() {
+  const wrap = document.getElementById('fx-params');
+  if (!wrap) return;
+  const fx = _getFxSettings();
+  const conf = _resolveFxConfig(fx.preset) || FX_PRESETS.off;
+  const editable = fx.preset === 'custom' || (typeof fx.preset === 'string' && fx.preset.startsWith('custom:'));
+  wrap.innerHTML = '';
+  wrap.classList.toggle('readonly', !editable);
+
+  for (const def of FX_PARAM_DEFS) {
+    const row = document.createElement('div');
+    row.className = 'fx-param-row';
+    const label = document.createElement('span');
+    label.className = 'fx-param-label';
+    label.textContent = def.name;
+    const input = document.createElement('input');
+    input.type = 'range';
+    input.min = def.min; input.max = def.max; input.step = def.step;
+    input.value = conf[def.key];
+    input.disabled = !editable;
+    const val = document.createElement('span');
+    val.className = 'fx-param-val';
+    val.textContent = def.fmt(conf[def.key]);
+    input.addEventListener('input', () => {
+      const v = parseFloat(input.value);
+      val.textContent = def.fmt(v);
+      // 预设/已保存方案上拖动 → 以当前值起点切换自定义
+      if (fx.preset !== 'custom' && !String(fx.preset).startsWith('custom:')) {
+        fx.eq = conf.eq.slice();
+        fx.eqFreqs = (conf.eqFreqs || FX_EQ_FREQS).slice();
+        fx.eqQs = (conf.eqQs || FX_EQ_FREQS.map(() => FX_EQ_Q_DEFAULT)).slice();
+        fx.params = { hp: conf.hp, ls: conf.ls, hs: conf.hs, width: conf.width, panDepth: conf.panDepth, panRate: conf.panRate, wet: conf.wet };
+        fx.preset = 'custom';
+      }
+      applyFxParam(def.key, v);
+      _saveFxSettings();
+      renderFxPresets();
+      renderFxEqSliders();
+      renderFxBandDetail();
+    });
+    row.appendChild(label);
+    row.appendChild(input);
+    row.appendChild(val);
+    wrap.appendChild(row);
+  }
 }
 
 // 更新播放栏按钮状态 (激活非 off 时高亮)
@@ -310,6 +517,8 @@ function toggleFxModal(show) {
   if (willShow) {
     renderFxPresets();
     renderFxEqSliders();
+    renderFxBandDetail();
+    renderFxParams();
     fxModal.classList.remove('hidden');
   } else {
     fxModal.classList.add('hidden');
@@ -326,34 +535,47 @@ if (fxModal) {
   fxModal.addEventListener('click', (e) => { if (e.target === fxModal) toggleFxModal(false); });
 }
 
-// 保存自定义方案 (当前 EQ 滑块值 → 命名方案)
+// 保存自定义方案 (当前 EQ + 频段 + Q值 + 效果参数 → 命名方案)
 const fxEqSaveBtn = document.getElementById('fx-eq-save');
 if (fxEqSaveBtn) {
   fxEqSaveBtn.addEventListener('click', () => {
     const fx = _getFxSettings();
     let name = (fxEqNameInput.value || '').trim();
     if (!name) name = '方案' + (fx.customs.length + 1);
-    fx.customs.push({ name, eq: fx.eq.slice() });
+    fx.customs.push({
+      name,
+      eq: fx.eq.slice(),
+      eqFreqs: fx.eqFreqs.slice(),
+      eqQs: fx.eqQs.slice(),
+      params: { ...fx.params },
+    });
     fx.preset = 'custom:' + (fx.customs.length - 1);
     _saveFxSettings();
     fxEqNameInput.value = '';
     renderFxPresets();
     renderFxEqSliders();
+    renderFxBandDetail();
+    renderFxParams();
     updFxUI(fx.preset);
     if (typeof showToast === 'function') showToast(`音效方案「${name}」已保存`, 'success');
   });
 }
 
-// 重置自定义 EQ 为全平直
+// 重置自定义 EQ 为全平直 (频段/Q值/效果参数一并复位)
 const fxEqResetBtn = document.getElementById('fx-eq-reset');
 if (fxEqResetBtn) {
   fxEqResetBtn.addEventListener('click', () => {
     const fx = _getFxSettings();
     fx.eq = FX_EQ_FREQS.map(() => 0);
+    fx.eqFreqs = FX_EQ_FREQS.slice();
+    fx.eqQs = FX_EQ_FREQS.map(() => FX_EQ_Q_DEFAULT);
+    fx.params = { ...FX_PARAMS_DEFAULT };
     if (fx.preset !== 'custom' && !String(fx.preset).startsWith('custom:')) fx.preset = 'custom';
     applyFxPreset(fx.preset);
     renderFxPresets();
     renderFxEqSliders();
+    renderFxBandDetail();
+    renderFxParams();
   });
 }
 

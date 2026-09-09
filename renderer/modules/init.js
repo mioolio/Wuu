@@ -148,11 +148,15 @@
     appSettings.publicPort = typeof userData.settings.publicPort === 'number'
       && userData.settings.publicPort > 0 ? userData.settings.publicPort : 0;
     // 音效设置 (audio-fx.js 管理, 加载时整体替换并做结构兜底)
+    // v2 结构: eq/eqFreqs/eqQs/params/customs (缺省字段由 _getFxSettings 补默认)
     if (userData.settings.audioFx && typeof userData.settings.audioFx === 'object') {
       const saved = userData.settings.audioFx;
       appSettings.audioFx = {
         preset: typeof saved.preset === 'string' ? saved.preset : 'off',
         eq: Array.isArray(saved.eq) && saved.eq.length === 10 ? saved.eq.map(Number) : [0,0,0,0,0,0,0,0,0,0],
+        eqFreqs: Array.isArray(saved.eqFreqs) && saved.eqFreqs.length === 10 ? saved.eqFreqs.map(Number) : undefined,
+        eqQs: Array.isArray(saved.eqQs) && saved.eqQs.length === 10 ? saved.eqQs.map(Number) : undefined,
+        params: saved.params && typeof saved.params === 'object' ? { ...saved.params } : undefined,
         customs: Array.isArray(saved.customs)
           ? saved.customs.filter(c => c && Array.isArray(c.eq))
           : [],

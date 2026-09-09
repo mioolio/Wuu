@@ -1,13 +1,16 @@
 <!-- =========== 移动端 App 根组件 =========== -->
-<!-- 布局: 底部导航(推荐/歌单/我的) + 播放器(右滑歌词) + 首次点击随机播放 -->
+<!-- 布局: 底部导航(推荐/歌单/我的/设置) + 播放器(右滑歌词) + 首次点击随机播放 -->
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue';
 import { usePlayer } from './composables/usePlayer.js';
+import { useListenTogether } from './composables/useListenTogether.js';
+import { useAudioFx } from './composables/useAudioFx.js';
 import { fetchSongsPage, coverUrl } from './api.js';
 import Player from './components/Player.vue';
 import LyricsView from './components/LyricsView.vue';
 import SongList from './components/SongList.vue';
 import Collections from './components/Collections.vue';
+import SettingsView from './components/SettingsView.vue';
 import BottomNav from './components/BottomNav.vue';
 
 const {
@@ -20,11 +23,14 @@ const {
   stopDesktopSync,
 } = usePlayer();
 
+// 一起听: 应用启动即初始化 (设置项开启时自动连接 WS 房间)
+useListenTogether();
+
 // ===== 音频元素 =====
 const audioRef = ref(null);
 
 // ===== 视图状态 =====
-const activeTab = ref('recommend');   // 'recommend' | 'list' | 'collections'
+const activeTab = ref('recommend');   // 'recommend' | 'list' | 'collections' | 'settings'
 const showLyrics = ref(false);        // 播放器内: false=封面, true=歌词
 const isSyncing = ref(true);          // 是否正在同步桌面端状态
 
@@ -39,10 +45,16 @@ const listLoadError = ref('');
 
 const PAGE_SIZE = 30;
 
+// ===== 歌单页搜索关键词 (空 = 全部) =====
+const searchQuery = ref('');
+
 // ===== 初始化音频 =====
+const { attachAudioFx, resumeCtx } = useAudioFx();
 onMounted(() => {
   if (audioRef.value) {
     init(audioRef.value);
+    // 音效链挂载 (Web Audio: EQ/空间/混响, 设置页可调)
+    attachAudioFx(audioRef.value);
   }
   loadSongs();
   // 启动桌面端状态同步
@@ -74,7 +86,7 @@ function hideLyricsView() {
   showLyrics.value = false;
 }
 
-// ===== 歌单页: 加载第一页 =====
+// ===== 歌单页: 加载第一页 (按当前搜索关键词) =====
 async function loadSongs() {
   listLoading.value = true;
   listLoadError.value = '';
@@ -82,7 +94,7 @@ async function loadSongs() {
   currentPage.value = 0;
   hasMore.value = true;
   try {
-    const data = await fetchSongsPage(1, PAGE_SIZE);
+    const data = await fetchSongsPage(1, PAGE_SIZE, searchQuery.value);
     songs.value = data.songs;
     totalCount.value = data.total;
     currentPage.value = 1;
@@ -99,7 +111,7 @@ async function loadMore() {
   if (listLoadingMore.value || !hasMore.value) return;
   listLoadingMore.value = true;
   try {
-    const data = await fetchSongsPage(currentPage.value + 1, PAGE_SIZE);
+    const data = await fetchSongsPage(currentPage.value + 1, PAGE_SIZE, searchQuery.value);
     songs.value.push(...data.songs);
     currentPage.value = data.page;
     hasMore.value = data.hasMore;
@@ -108,6 +120,12 @@ async function loadMore() {
   } finally {
     listLoadingMore.value = false;
   }
+}
+
+// ===== 歌单页: 搜索 (SongList 防抖后触发) =====
+function onSearch(q) {
+  searchQuery.value = q;
+  loadSongs();
 }
 
 // ===== 歌单页: 点击歌曲播放 (切到推荐页) =====
@@ -187,6 +205,7 @@ function playAll(songsList) {
         @play="playFromList"
         @retry="loadSongs"
         @loadMore="loadMore"
+        @search="onSearch"
       />
 
       <!-- 我的歌单页 -->
@@ -195,6 +214,9 @@ function playAll(songsList) {
         @play="playFromCollection"
         @playAll="playAll"
       />
+
+      <!-- 设置页 -->
+      <SettingsView v-show="activeTab === 'settings'" />
     </main>
 
     <!-- 底部导航 -->

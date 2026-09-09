@@ -112,12 +112,16 @@
           <span class="fx-eq-tip readonly-only">选择"自定义"或已保存方案后可调节</span>
         </div>
         <div id="fx-eq-sliders" class="fx-eq-sliders"></div>
+        <!-- 选中频段详情: 中心频率 + Q 值 (点击上方频段列切换) -->
+        <div id="fx-band-detail" class="fx-band-detail"></div>
         <div class="fx-eq-actions">
           <input type="text" id="fx-eq-name" class="fx-eq-name-input" placeholder="方案名称" maxlength="12" />
           <button id="fx-eq-reset" class="parse-modal-btn secondary">重置</button>
           <button id="fx-eq-save" class="parse-modal-btn primary">保存方案</button>
         </div>
       </div>
+      <!-- 效果参数: 7 个独立滑块 (自定义模式可调) -->
+      <div id="fx-params" class="fx-params"></div>
       <div class="parse-modal-actions">
         <button id="fx-close" class="parse-modal-btn primary">关闭</button>
       </div>

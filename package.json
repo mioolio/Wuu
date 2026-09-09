@@ -2,6 +2,7 @@
   "name": "wuu-music",
   "version": "1.0.0",
   "license": "Apache-2.0",
+  "author": "mioolio",
   "description": "简洁现代化的音乐播放器",
   "main": "main.js",
   "scripts": {
@@ -20,7 +21,9 @@
   },
   "dependencies": {
     "jpeg-js": "^0.4.4",
-    "sql.js": "^1.12.0"
+    "sql.js": "^1.12.0",
+    "ws": "^8.21.3",
+    "kugoumusicapi": "file:vendor/kugoumusicapi"
   },
   "build": {
     "appId": "com.wuu.music",
@@ -45,7 +48,7 @@
       "playlist/**/*",
       "renderer/**/*",
       "parsers/**/*",
-      "go-music-dl-main/**/*",
+      "mobile_UI/dist/**/*",
       "music-dl.exe",
       "node_modules/**/*",
       "package.json"
@@ -66,14 +69,14 @@
       "target": [
         "nsis"
       ],
-      "icon": "go-music-dl-main/desktop/icon.ico"
+      "icon": "build/icon.ico"
     },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
-      "installerIcon": "go-music-dl-main/desktop/icon.ico",
-      "uninstallerIcon": "go-music-dl-main/desktop/icon.ico",
-      "installerHeaderIcon": "go-music-dl-main/desktop/icon.ico"
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "installerHeaderIcon": "build/icon.ico"
     }
   }
 }

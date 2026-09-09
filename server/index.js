@@ -6,6 +6,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const { Worker } = require('worker_threads');
+const { WebSocketServer } = require('ws');
 const { configDir, ensureConfigDir, readUserData, writeUserData } = require('../core/storage');
 const { dbgLog, dbgErr } = require('../core/logger');
 
@@ -77,12 +78,13 @@ function readMobileData() {
         collections: Array.isArray(data.collections) ? data.collections : [],
         stats: data.stats && typeof data.stats === 'object' ? data.stats : {},
         progress: data.progress && typeof data.progress === 'object' ? data.progress : {},
+        dislikes: Array.isArray(data.dislikes) ? data.dislikes : [],
       };
     }
   } catch (e) {
     console.error('[server] readMobileData 失败:', e.message);
   }
-  return { collections: [], stats: {}, progress: {} };
+  return { collections: [], stats: {}, progress: {}, dislikes: [] };
 }
 
 function writeMobileData(data) {
@@ -91,6 +93,7 @@ function writeMobileData(data) {
     collections: Array.isArray(data.collections) ? data.collections : [],
     stats: data.stats && typeof data.stats === 'object' ? data.stats : {},
     progress: data.progress && typeof data.progress === 'object' ? data.progress : {},
+    dislikes: Array.isArray(data.dislikes) ? data.dislikes : [],
   }, null, 2);
   const tmpFile = mobileDataFile + '.tmp';
   try {
@@ -125,6 +128,7 @@ function writeSyncData(syncData, isIsolated) {
       collections: syncData.collections || [],
       stats: syncData.stats || {},
       progress: syncData.progress || {},
+      dislikes: syncData.dislikes || [],
     });
   } else {
     writeUserData(syncData);
@@ -293,6 +297,148 @@ function warmupCache() {
 const sharedDir = path.join(configDir, 'shared');
 function ensureSharedDir() {
   if (!fs.existsSync(sharedDir)) fs.mkdirSync(sharedDir, { recursive: true });
+}
+
+// =========== 一起听 (WebSocket 房间) ===========
+// 全局单房间: 所有开启一起听的移动端在同一房间实时同步, 双方都能控制
+// 协议 (JSON):
+//   客户端→服务器: { type: 'op', op: 'play'|'pause'|'seek'|'song'|'state', payload }
+//   服务器→客户端:
+//     { type: 'welcome', id, peers, hostId, hostSong, lastOp }  加入成功 + 房间状态(迟到者追平)
+//     { type: 'op', seq, op, payload, ts, from }    操作广播 (from ≠ 自己 id 时应用)
+//     { type: 'peers', count, hostId }                      在线人数变化
+//     { type: 'peer-left', id, count, hostId }              有成员退出 (对端据此暂停)
+// 仲裁: 服务器为每个操作分配单调递增 seq + 时间戳, 客户端丢弃过期 seq 避免乱序回退
+// host: 房间内 id 最小者 (即最先加入的人)。歌曲自然播完时只有 host 自动切歌,
+//       其他成员等待 host 的 song 广播, 避免双人同时切歌产生竞争 (乱跳/无法播放)
+// hostSong: host 最近一次携带完整歌曲上下文的操作 (歌名+进度+播放态),
+//       新成员加入(含手动开启一起听)时通过 welcome 立即拉取对齐, 保证一致性
+let _wss = null;
+let _togetherClients = new Map();  // ws → { id }
+let _togetherNextId = 1;
+let _togetherSeq = 0;
+let _togetherLastOp = null;  // 最近一次广播的操作 (迟到者加入时同步用)
+let _togetherHostSong = null;  // host 当前歌曲上下文 (加入即拉取)
+let _togetherPingTimer = null;
+
+// 房间 host = 在线成员中 id 最小者 (0 表示房间为空)
+function _togetherHostId() {
+  let min = 0;
+  for (const [, meta] of _togetherClients) {
+    if (!min || meta.id < min) min = meta.id;
+  }
+  return min;
+}
+
+function _broadcastTogether(msg, excludeWs) {
+  const text = JSON.stringify(msg);
+  for (const [client] of _togetherClients) {
+    if (client === excludeWs) continue;
+    if (client.readyState === 1) {
+      try { client.send(text); } catch (e) {}
+    }
+  }
+}
+
+function _notifyPeers() {
+  _broadcastTogether({ type: 'peers', count: _togetherClients.size, hostId: _togetherHostId() });
+}
+
+function _handleTogetherMessage(ws, raw) {
+  let msg;
+  try { msg = JSON.parse(raw); } catch (e) { return; }
+  const meta = _togetherClients.get(ws);
+  if (!meta) return;
+
+  if (msg.type === 'op') {
+    const entry = {
+      type: 'op',
+      seq: ++_togetherSeq,
+      op: String(msg.op || ''),
+      payload: msg.payload || {},
+      ts: Date.now(),
+      from: meta.id,
+    };
+    _togetherLastOp = entry;
+    // 跟踪 host 的歌曲上下文 (song/state 操作携带完整歌曲时),
+    // 供新成员加入时通过 welcome 立即对齐歌曲与进度
+    if (meta.id === _togetherHostId()) {
+      const p = entry.payload || {};
+      if (p.song && (entry.op === 'song' || entry.op === 'state')) {
+        _togetherHostSong = {
+          song: p.song,
+          position: typeof p.position === 'number' ? p.position : 0,
+          isPlaying: !!p.isPlaying,
+        };
+      }
+    }
+    // 广播给其他端 (发起者已本地应用, 无需回发)
+    _broadcastTogether(entry, ws);
+  }
+}
+
+function _ensureTogetherWss() {
+  if (_wss) return;
+  _wss = new WebSocketServer({ noServer: true });
+
+  _wss.on('connection', (ws, req) => {
+    const id = _togetherNextId++;
+    _togetherClients.set(ws, { id });
+    dbgLog(`[SERVER] 一起听客户端 #${id} 加入 (IP: ${getClientIP(req)})`);
+    if (_accessLogEnabled) logAccess(req, '一起听', '客户端加入');
+
+    // 欢迎: 分配 id + 在线数 + host + 房间当前状态 (迟到者立即追平进度)
+    // hostSong 优先: 新成员直接对齐 host 的歌曲+进度+播放态
+    ws.send(JSON.stringify({
+      type: 'welcome',
+      id,
+      peers: _togetherClients.size,
+      hostId: _togetherHostId(),
+      hostSong: _togetherHostSong,
+      lastOp: _togetherLastOp,
+    }));
+    _notifyPeers();
+
+    ws.on('message', (data) => _handleTogetherMessage(ws, data.toString()));
+    ws.on('close', () => {
+      _togetherClients.delete(ws);
+      dbgLog(`[SERVER] 一起听客户端 #${id} 离开`);
+      // 房间清空后清除残留状态, 避免下一位加入者拉到过期的歌曲/操作
+      if (_togetherClients.size === 0) {
+        _togetherLastOp = null;
+        _togetherHostSong = null;
+      }
+      // 显式通知退出事件: 剩余成员据此暂停播放; hostId 变化触发继任 host 逻辑
+      _broadcastTogether({
+        type: 'peer-left',
+        id,
+        count: _togetherClients.size,
+        hostId: _togetherHostId(),
+      });
+      _notifyPeers();
+    });
+    ws.on('error', () => {});  // 防止未处理错误导致进程退出
+  });
+
+  // 连接级心跳: 30s ping 清理僵尸连接
+  _togetherPingTimer = setInterval(() => {
+    for (const [client] of _togetherClients) {
+      if (client.readyState === 1) {
+        try { client.ping(); } catch (e) {}
+      }
+    }
+  }, 30000);
+}
+
+function _stopTogether() {
+  if (_togetherPingTimer) { clearInterval(_togetherPingTimer); _togetherPingTimer = null; }
+  for (const [client] of _togetherClients) {
+    try { client.terminate(); } catch (e) {}
+  }
+  _togetherClients.clear();
+  if (_wss) { try { _wss.close(); } catch (e) {} _wss = null; }
+  _togetherLastOp = null;
+  _togetherHostSong = null;
 }
 
 // 提取客户端真实IP (处理代理头)
@@ -693,10 +839,17 @@ function startServer(port, bindIP, whitelist, rateLimit, accessLogEnabled) {
       return;
     }
 
-    // GET /api/songs?page=N&pageSize=M → 分页返回歌库列表 (从缓存 slice, 极快)
+    // GET /api/songs?page=N&pageSize=M&q=关键词 → 分页返回歌库列表 (从缓存 slice, 极快)
+    // q 可选: 按歌曲名/歌手名不区分大小写子串过滤 (与电脑端搜索行为一致)
     if (pathname === '/api/songs' && req.method === 'GET') {
       try {
-        const safe = await getSafeSongsAsync();
+        let safe = await getSafeSongsAsync();
+        const kw = (url.searchParams.get('q') || '').trim().toLowerCase();
+        if (kw) {
+          safe = safe.filter(s =>
+            ((s.songName || '') + ' ' + (s.artist || '')).toLowerCase().includes(kw)
+          );
+        }
         const page = parseInt(url.searchParams.get('page') || '0', 10);
         const pageSize = parseInt(url.searchParams.get('pageSize') || '0', 10);
         if (page > 0 && pageSize > 0) {
@@ -940,6 +1093,38 @@ function startServer(port, bindIP, whitelist, rateLimit, accessLogEnabled) {
       return;
     }
 
+    // POST /api/collections/create → 创建空歌单 { name } (移动端自建歌单用)
+    if (pathname === '/api/collections/create' && req.method === 'POST') {
+      try {
+        const body = await parseBody(req);
+        const name = String(body.name || '').trim().slice(0, 50);
+        if (!name) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, message: '歌单名称不能为空' }));
+          return;
+        }
+        const { data, isIsolated } = readSyncData();
+        if (!data.collections) data.collections = [];
+        const col = {
+          id: 'mobile-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+          name,
+          songs: [],
+          createdAt: Date.now(),
+        };
+        data.collections.push(col);
+        writeSyncData(data, isIsolated);
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({
+          ok: true,
+          collection: { id: col.id, name: col.name, songCount: 0, songs: [], createdAt: col.createdAt },
+        }));
+      } catch (e) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, message: e.message }));
+      }
+      return;
+    }
+
     // GET /api/collections → 获取用户歌单 (含"我喜欢"和自建歌单)
     if (pathname === '/api/collections' && req.method === 'GET') {
       try {
@@ -1002,6 +1187,11 @@ function startServer(port, bindIP, whitelist, rateLimit, accessLogEnabled) {
         } else {
           likedCol.songs.push(audioPath);
           liked = true;
+          // 互斥: 收藏后清除不推荐标记 (与桌面端 data.js toggleLike 行为一致)
+          if (Array.isArray(data.dislikes)) {
+            const k = data.dislikes.findIndex(d => d && d.path === audioPath);
+            if (k >= 0) data.dislikes.splice(k, 1);
+          }
         }
         writeSyncData(data, isIsolated);
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -1049,6 +1239,80 @@ function startServer(port, bindIP, whitelist, rateLimit, accessLogEnabled) {
         res.end(JSON.stringify({ ok: true, inCollection: add }));
       } catch (e) {
         res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, message: e.message }));
+      }
+      return;
+    }
+
+    // GET /api/disliked → 获取不推荐歌曲索引列表
+    if (pathname === '/api/disliked' && req.method === 'GET') {
+      try {
+        const { data } = readSyncData();
+        const dislikedIndices = (data.dislikes || [])
+          .map(d => audioPathToIndex(d && d.path))
+          .filter(i => i >= 0);
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ ok: true, dislikedIndices }));
+      } catch (e) {
+        res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ ok: false, message: e.message }));
+      }
+      return;
+    }
+
+    // POST /api/dislike → 切换不推荐 { index: N }
+    // 互斥逻辑与桌面端 data.js toggleDislike 一致:
+    // 标记不推荐时从所有歌单移除; 取消不推荐时仅删标记
+    if (pathname === '/api/dislike' && req.method === 'POST') {
+      try {
+        const body = await parseBody(req);
+        const audioPath = indexToAudioPath(body.index);
+        if (!audioPath) {
+          res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ ok: false, message: '歌曲不存在' }));
+          return;
+        }
+        const { data, isIsolated } = readSyncData();
+        if (!Array.isArray(data.dislikes)) data.dislikes = [];
+        const i = data.dislikes.findIndex(d => d && d.path === audioPath);
+        let disliked;
+        if (i >= 0) {
+          data.dislikes.splice(i, 1);
+          disliked = false;
+        } else {
+          data.dislikes.push({ path: audioPath, ts: Date.now() });
+          disliked = true;
+          // 互斥: 从所有歌单移除
+          (data.collections || []).forEach(col => {
+            if (Array.isArray(col.songs)) {
+              const k = col.songs.indexOf(audioPath);
+              if (k >= 0) col.songs.splice(k, 1);
+            }
+          });
+        }
+        writeSyncData(data, isIsolated);
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ ok: true, disliked }));
+      } catch (e) {
+        res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ ok: false, message: e.message }));
+      }
+      return;
+    }
+
+    // GET /api/audio-fx-presets → 返回桌面端保存的自定义音效方案 (预设方案跨端同步)
+    // 移动端只读: 桌面端命名保存的方案在移动端可直接选用, 当前选中预设各端独立
+    if (pathname === '/api/audio-fx-presets' && req.method === 'GET') {
+      try {
+        const userData = readUserData();
+        const fx = userData && userData.settings && userData.settings.audioFx;
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({
+          ok: true,
+          customs: (fx && Array.isArray(fx.customs)) ? fx.customs : [],
+        }));
+      } catch (e) {
+        res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(JSON.stringify({ ok: false, message: e.message }));
       }
       return;
@@ -1136,10 +1400,27 @@ function startServer(port, bindIP, whitelist, rateLimit, accessLogEnabled) {
     }
   });
 
+  // 一起听 WebSocket 升级: /ws/together 路径, 与 HTTP 共享端口, 复用白名单校验
+  _server.on('upgrade', (req, socket, head) => {
+    let pathname = '';
+    try {
+      pathname = new URL(req.url, `http://localhost:${_port}`).pathname;
+    } catch (e) {}
+    if (pathname !== '/ws/together' || !checkWhitelist(req)) {
+      socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+    _ensureTogetherWss();
+    _wss.handleUpgrade(req, socket, head, (ws) => {
+      _wss.emit('connection', ws, req);
+    });
+  });
+
   _server.listen(_port, _bindIP, () => {
     const bindDesc = _bindIP === '0.0.0.0' ? '所有网卡' : _bindIP;
     const wlDesc = _whitelist.length ? `白名单 ${_whitelist.length} 个IP` : '无白名单限制';
-    dbgLog(`[SERVER] HTTP 服务器已启动, 端口 ${_port}, 绑定 ${bindDesc}, ${wlDesc}`);
+    dbgLog(`[SERVER] HTTP 服务器已启动, 端口 ${_port}, 绑定 ${bindDesc}, ${wlDesc}, 一起听 WS: /ws/together`);
     // 后台预热缓存: 服务器启动后立即用 worker 线程扫描歌库, 后续请求直接命中缓存
     warmupCache();
   });
@@ -1148,6 +1429,7 @@ function startServer(port, bindIP, whitelist, rateLimit, accessLogEnabled) {
 }
 
 function stopServer() {
+  _stopTogether();
   if (_server) {
     _server.close();
     _server = null;

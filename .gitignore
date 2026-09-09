@@ -57,3 +57,6 @@ soda_analysis/
 mobile_UI/dist/
 mobile_UI/node_modules/
 
+# 本地临时工作副本 (含独立 .git, 不属于应用本体, 禁止入库)
+.wuu-tmp/
+

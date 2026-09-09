@@ -1,9 +1,11 @@
 // =========== 移动端 API 封装 ===========
 // 所有请求走相对路径, 由桌面端 HTTP 服务器处理
 
-// 分页获取歌单列表 (按需加载)
-export async function fetchSongsPage(page, pageSize = 30) {
-  const resp = await fetch(`/api/songs?page=${page}&pageSize=${pageSize}`);
+// 分页获取歌单列表 (按需加载, q 可选搜索关键词)
+export async function fetchSongsPage(page, pageSize = 30, q = '') {
+  const params = new URLSearchParams({ page, pageSize });
+  if (q) params.set('q', q);
+  const resp = await fetch(`/api/songs?${params}`);
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   const data = await resp.json();
   if (!data.ok) throw new Error(data.message || '获取歌单失败');
@@ -66,6 +68,19 @@ export async function fetchCollections() {
   return data;  // { ok, collections: [{ id, name, songCount, songs, createdAt }] }
 }
 
+// 创建空歌单 (移动端自建分类用)
+export async function createCollection(name) {
+  const resp = await fetch('/api/collections/create', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  const data = await resp.json();
+  if (!data.ok) throw new Error(data.message || '创建歌单失败');
+  return data.collection;
+}
+
 // 获取已喜欢的歌曲索引列表
 export async function fetchLiked() {
   const resp = await fetch('/api/liked');
@@ -78,6 +93,26 @@ export async function fetchLiked() {
 // 切换点赞 (返回 { ok, liked: true/false })
 export async function toggleLike(index) {
   const resp = await fetch('/api/like', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ index }),
+  });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return resp.json();
+}
+
+// 获取已不推荐的歌曲索引列表
+export async function fetchDisliked() {
+  const resp = await fetch('/api/disliked');
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  const data = await resp.json();
+  if (!data.ok) throw new Error(data.message || '获取不推荐列表失败');
+  return data;  // { ok, dislikedIndices: [1, 4, ...] }
+}
+
+// 切换不推荐 (返回 { ok, disliked: true/false })
+export async function toggleDislike(index) {
+  const resp = await fetch('/api/dislike', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ index }),

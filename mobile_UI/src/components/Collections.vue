@@ -1,8 +1,8 @@
 <!-- =========== 我的歌单组件 =========== -->
 <!-- 展示用户歌单列表, 点击进入歌单详情播放 -->
 <script setup>
-import { ref, onMounted } from 'vue';
-import { fetchCollections, coverUrl, coverByPath } from '../api.js';
+import { ref, nextTick, onMounted } from 'vue';
+import { fetchCollections, createCollection, coverUrl, coverByPath } from '../api.js';
 
 const emit = defineEmits(['play', 'playAll']);
 
@@ -11,12 +11,54 @@ const loading = ref(true);
 const loadError = ref('');
 const activeCollection = ref(null);  // null=列表视图, 非null=歌单详情
 
+// ===== 创建歌单 =====
+const showCreate = ref(false);
+const newName = ref('');
+const creating = ref(false);
+const createError = ref('');
+const nameInput = ref(null);
+
+function openCreate() {
+  newName.value = '';
+  createError.value = '';
+  showCreate.value = true;
+  // 等弹层渲染后聚焦输入框
+  nextTick(() => {
+    if (nameInput.value) nameInput.value.focus();
+  });
+}
+
+async function confirmCreate() {
+  const name = newName.value.trim();
+  if (!name) {
+    createError.value = '请输入歌单名称';
+    return;
+  }
+  if (creating.value) return;
+  creating.value = true;
+  createError.value = '';
+  try {
+    await createCollection(name);
+    showCreate.value = false;
+    await loadCollections();
+  } catch (e) {
+    createError.value = e.message || '创建失败';
+  } finally {
+    creating.value = false;
+  }
+}
+
 async function loadCollections() {
   loading.value = true;
   loadError.value = '';
   try {
     const data = await fetchCollections();
-    collections.value = data.collections || [];
+    const list = data.collections || [];
+    // "我喜欢"固定置顶, 其余按创建时间排序
+    collections.value = [
+      ...list.filter(c => c.id === 'mobile-liked' || c.name === '我喜欢'),
+      ...list.filter(c => c.id !== 'mobile-liked' && c.name !== '我喜欢'),
+    ];
   } catch (e) {
     loadError.value = e.message;
   } finally {
@@ -107,6 +149,9 @@ onMounted(() => {
     <template v-else>
       <header class="header">
         <h1>我的歌单</h1>
+        <button class="add-btn" title="新建歌单" @click="openCreate">
+          <svg viewBox="0 0 24 24"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+        </button>
       </header>
 
       <div v-if="loading" class="status-box">
@@ -121,7 +166,8 @@ onMounted(() => {
 
       <div v-else-if="collections.length === 0" class="status-box">
         <p>暂无歌单</p>
-        <p class="hint">在电脑端创建歌单后即可在此查看</p>
+        <p class="hint">点击右上角 + 创建一个空歌单开始分类</p>
+        <button class="retry-btn" @click="openCreate">新建歌单</button>
       </div>
 
       <div v-else class="collection-list">
@@ -151,6 +197,33 @@ onMounted(() => {
         </div>
       </div>
     </template>
+
+    <!-- 创建歌单弹层 -->
+    <Teleport to="body">
+      <Transition name="fade">
+        <div v-if="showCreate" class="create-mask" @click.self="showCreate = false">
+          <div class="create-dialog">
+            <div class="create-title">新建歌单</div>
+            <input
+              ref="nameInput"
+              v-model="newName"
+              class="create-input"
+              type="text"
+              maxlength="50"
+              placeholder="输入歌单名称"
+              @keyup.enter="confirmCreate"
+            />
+            <div v-if="createError" class="create-error">{{ createError }}</div>
+            <div class="create-actions">
+              <button class="create-btn cancel" @click="showCreate = false">取消</button>
+              <button class="create-btn confirm" :disabled="creating" @click="confirmCreate">
+                {{ creating ? '创建中…' : '创建' }}
+              </button>
+            </div>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
   </div>
 </template>
 
@@ -179,6 +252,102 @@ onMounted(() => {
   color: var(--text);
   margin: 0;
   flex: 1;
+}
+.add-btn {
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  padding: 0;
+  flex-shrink: 0;
+}
+.add-btn svg {
+  width: 26px;
+  height: 26px;
+  fill: currentColor;
+}
+
+/* 创建歌单弹层 */
+.create-mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 32px;
+}
+.create-dialog {
+  width: 100%;
+  max-width: 340px;
+  background: var(--bg-card-elevated);
+  border-radius: 14px;
+  padding: 20px;
+}
+.create-title {
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 16px;
+  text-align: center;
+}
+.create-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+  outline: none;
+}
+.create-input:focus {
+  border-color: var(--accent);
+}
+.create-error {
+  font-size: 12px;
+  color: #ff6b6b;
+  margin-top: 8px;
+}
+.create-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 18px;
+}
+.create-btn {
+  flex: 1;
+  padding: 9px 0;
+  border-radius: 8px;
+  font-size: 14px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-secondary);
+}
+.create-btn.confirm {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+.create-btn:disabled {
+  opacity: 0.6;
+}
+
+/* 弹层过渡 */
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.2s ease;
+}
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
 }
 .header-info {
   flex: 1;

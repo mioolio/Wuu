@@ -63,8 +63,9 @@ body {
   user-select: none;
   -webkit-font-smoothing: antialiased;
   position: relative;
-  backdrop-filter: blur(20px) saturate(180%);
-  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  /* GPU 优化: 模糊半径 20→14, saturate 180→130 (成本∝半径, 全屏层是 GPU 大头) */
+  backdrop-filter: blur(14px) saturate(130%);
+  -webkit-backdrop-filter: blur(14px) saturate(130%);
   border-radius: 8px;
 }
 /* 动态背景层: 全屏渐变覆盖整个界面, 渐变字符串由 player.js 注入 --cover-gradient */
@@ -91,7 +92,7 @@ body::before {
   opacity: 0; pointer-events: none;
   transition: opacity 0.3s ease, transform 0.3s ease;
   box-shadow: 0 4px 20px rgba(0,0,0,0.25);
-  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  /* GPU 优化: 纯色 toast 去掉 backdrop-filter */
   max-width: 80vw; text-align: center;
 }
 .app-toast-show { opacity: 1; transform: translateX(-50%) translateY(0); }

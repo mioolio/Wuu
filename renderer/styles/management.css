@@ -42,8 +42,7 @@
   border-radius: 6px;
   border: 1px solid var(--border);
   background: rgba(var(--bg-rgb), var(--glass-opacity));
-  backdrop-filter: blur(12px) saturate(150%);
-  -webkit-backdrop-filter: blur(12px) saturate(150%);
+  /* GPU 优化: 去掉 backdrop-filter, 背后是 body 玻璃皮肤 */
   color: var(--fg);
   font-size: 12px;
   cursor: pointer;
