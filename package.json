@@ -1,0 +1,82 @@
+{
+  "name": "wuu-music",
+  "version": "1.0.0",
+  "license": "Apache-2.0",
+  "author": "mioolio",
+  "description": "简洁现代化的音乐播放器",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "cd mobile_UI && npm.cmd run dev",
+    "dev:all": "node scripts/dev.js",
+    "build:mobile": "cd mobile_UI && npm.cmd run build",
+    "build:full": "npm.cmd run build:mobile && npm.cmd start",
+    "build": "electron-builder",
+    "build:dir": "electron-builder --dir",
+    "postinstall": "node scripts/patch-kugoumusicapi.js"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0"
+  },
+  "dependencies": {
+    "jpeg-js": "^0.4.4",
+    "sql.js": "^1.12.0",
+    "ws": "^8.21.3",
+    "kugoumusicapi": "file:vendor/kugoumusicapi"
+  },
+  "build": {
+    "appId": "com.wuu.music",
+    "productName": "Wuu Music",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "core/**/*",
+      "audio/**/*",
+      "soda/**/*",
+      "cover/**/*",
+      "window/**/*",
+      "download/**/*",
+      "repair/**/*",
+      "free-music/**/*",
+      "kugou/**/*",
+      "qishui/**/*",
+      "server/**/*",
+      "playlist/**/*",
+      "renderer/**/*",
+      "parsers/**/*",
+      "mobile_UI/dist/**/*",
+      "music-dl.exe",
+      "node_modules/**/*",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "parsers/qishui-decrypt/native/**"
+    ],
+    "extraResources": [
+      {
+        "from": "config/",
+        "to": "config/",
+        "filter": [
+          "*.json"
+        ]
+      }
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "installerHeaderIcon": "build/icon.ico"
+    }
+  }
+}

@@ -1,0 +1,31 @@
+<!-- 修复视图 -->
+      <div class="repair-head">
+        <h2>修复中心</h2>
+        <p class="repair-tip">扫描曲库中损坏的歌曲(解密失败/音频缺失/文件过小/歌词精度不足),根据 info.json 中的 trackId 重新拉取并下载</p>
+      </div>
+      <div class="repair-body">
+        <div class="repair-toolbar">
+          <button id="repair-scan-btn">扫描损坏歌曲</button>
+          <button id="repair-all-btn" class="hidden">修复全部</button>
+          <span id="repair-status" class="repair-status hidden"></span>
+        </div>
+
+        <div id="repair-list-wrap" class="repair-list-wrap hidden">
+          <div class="repair-table-wrap">
+            <table class="repair-table">
+              <thead>
+                <tr>
+                  <th class="col-cover"></th>
+                  <th class="col-title">歌曲名</th>
+                  <th class="col-artist">作者</th>
+                  <th class="col-issue">问题</th>
+                  <th class="col-trackid">Track ID</th>
+                  <th class="col-repair-status">修复状态</th>
+                  <th class="col-action">操作</th>
+                </tr>
+              </thead>
+              <tbody id="repair-list"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>

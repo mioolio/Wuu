@@ -1,0 +1,41 @@
+<!-- 统计视图 -->
+      <div class="stats-head">
+        <h2>音乐统计</h2>
+      </div>
+      <div class="stats-body">
+        <!-- 总览卡片 -->
+        <div class="stats-overview">
+          <div class="stat-card primary">
+            <div class="stat-label">累计听歌时长</div>
+            <div class="stat-value" id="stat-total-duration">0</div>
+            <div class="stat-sub" id="stat-total-duration-sub"></div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">总播放次数</div>
+            <div class="stat-value" id="stat-total-plays">0</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">收藏歌曲</div>
+            <div class="stat-value" id="stat-liked-count">0</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">曲库总数</div>
+            <div class="stat-value" id="stat-song-count">0</div>
+          </div>
+        </div>
+
+        <!-- 排行榜 -->
+        <div class="stats-ranking">
+          <div class="ranking-head">
+            <h3>最喜欢听的音乐</h3>
+            <div class="ranking-tabs">
+              <button class="ranking-tab active" data-sort="plays">按播放次数</button>
+              <button class="ranking-tab" data-sort="duration">按听歌时长</button>
+            </div>
+          </div>
+          <ul id="ranking-list" class="ranking-list"></ul>
+          <div id="ranking-empty" class="hidden">
+            <p>还没有播放记录</p>
+          </div>
+        </div>
+      </div>

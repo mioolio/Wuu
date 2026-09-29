@@ -1,0 +1,106 @@
+/* =========== 歌词样式 (歌词视图/逐字动画) =========== */
+/* ===== Lyrics ===== */
+#lyrics {
+  width: 520px; flex-shrink: 1; min-width: 280px;
+  height: 100%;
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px 0; overflow: hidden;
+  transition: width var(--t);
+  box-sizing: border-box;
+}
+
+#lyrics-inner {
+  width: 100%; max-width: 620px; max-height: 100%;
+  overflow-y: auto; scroll-behavior: smooth;
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 8%, black 92%, transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent 0%, black 8%, black 92%, transparent 100%);
+  padding: 60px 0;
+  scrollbar-width: none;  /* Firefox */
+  -ms-overflow-style: none;  /* IE/Edge */
+}
+#lyrics-inner::-webkit-scrollbar { display: none; }  /* WebKit/Chromium */
+
+.lyric-line {
+  font-size: var(--lyric-size); font-weight: 400;
+  line-height: 1.6em;
+  min-height: 2.2em;
+  padding: 0.3em 0;
+  color: var(--lyric-wait);
+  text-align: center; white-space: pre-wrap; word-break: break-word;
+  transition: color 0.4s ease-out, opacity 0.3s ease-out, font-size 0.3s ease;
+  cursor: pointer; border-radius: 6px;
+  opacity: 0.65;
+  position: relative;
+}
+.lyric-line:hover { background: var(--hover); }
+/* 占位行不可点击 */
+.lyric-line:first-child { cursor: default; }
+.lyric-line:first-child:hover { background: none; }
+/* 当前行: 用线性渐变 + background-clip:text 实现"从左到右连续填充"
+   --p 表示已唱到的位置(占整行宽度的百分比)，
+   渐变在 --p 处由"已唱色"切到"未唱色"，fill 在任意位置暂停都能看到不同的中间态 */
+.lyric-line.cur {
+  font-size: calc(var(--lyric-size) * 1.5);
+  color: transparent;
+  background: linear-gradient(to right,
+    var(--lyric-done) 0%,
+    var(--lyric-done) var(--p, 0%),
+    var(--lyric-wait) var(--p, 0%),
+    var(--lyric-wait) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  opacity: 1;
+  /* 当前行保持单行, 配合 scale 自适应缩放, 避免换行后渐变填充百分比错乱 */
+  white-space: nowrap;
+}
+/* 跑马灯模式: 长歌词超出容器宽度时启用横向滚动
+   双层结构:
+     .lyric-line.cur.marquee → 外层裁剪容器 (overflow:hidden, text-align:left)
+     .marquee-track          → 内层滚动层 (display:inline-block, transform:translateX)
+   渐变填充放在 .marquee-track 上, 渐变宽度 = 文字总宽度,
+   --track-p 基于文字总宽度计算, 这样滚动时渐变跟着文字一起移动, 进度始终准确 */
+.lyric-line.cur.marquee {
+  background: none;
+  -webkit-text-fill-color: initial;
+  color: transparent;
+  overflow: hidden;
+  white-space: nowrap;
+  text-align: left;
+  position: relative;
+  padding-left: 0;
+  padding-right: 0;
+}
+.lyric-line.cur.marquee .marquee-track {
+  display: inline-block;
+  white-space: nowrap;
+  will-change: transform;
+  background: linear-gradient(to right,
+    var(--lyric-done) 0%,
+    var(--lyric-done) var(--track-p, 0%),
+    var(--lyric-wait) var(--track-p, 0%),
+    var(--lyric-wait) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
+/* 已唱过的行: 保持较高的可见度 */
+.lyric-line.done {
+  opacity: 0.85;
+  color: var(--lyric-wait);
+  transition: opacity 0.3s ease-out;
+}
+/* 歌词填充进度条 */
+.lyric-line.cur .lyric-fill {
+  position: absolute;
+  left: 0; top: 0;
+  height: 100%;
+  background: var(--accent);
+  opacity: 0.15;
+  transition: width 0.1s linear;
+}
+
+.lyric-char {
+  display: inline;
+}

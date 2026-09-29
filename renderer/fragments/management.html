@@ -1,0 +1,33 @@
+<!-- 不推荐管理界面 -->
+<div class="mgmt-container">
+  <div class="mgmt-head">
+    <h2>不推荐管理</h2>
+    <p class="mgmt-sub">这里展示你标记为"不推荐"的音乐,可从磁盘彻底移除。</p>
+    <div class="mgmt-actions">
+      <button id="mgmt-refresh" class="mgmt-btn" title="刷新列表">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
+        <span>刷新</span>
+      </button>
+      <button id="mgmt-clear" class="mgmt-btn mgmt-btn-warn" title="清空不推荐标记(不删文件)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
+        <span>清空标记</span>
+      </button>
+    </div>
+  </div>
+
+  <div class="mgmt-summary">
+    <span id="mgmt-count" class="mgmt-count">共 0 首</span>
+    <span id="mgmt-size" class="mgmt-size"></span>
+  </div>
+
+  <div class="mgmt-body">
+    <ul id="mgmt-list" class="mgmt-list"></ul>
+    <div id="mgmt-empty" class="mgmt-empty">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="e-icon">
+        <path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-3.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3" transform="rotate(180 12 12)"/>
+      </svg>
+      <p>暂无标记为不推荐的音乐</p>
+      <p class="mgmt-empty-sub">在播放界面点击倒点赞按钮,即可将音乐加入此处</p>
+    </div>
+  </div>
+</div>
