@@ -2,6 +2,10 @@
 config/
 output/
 node_modules/
+.backups/
+.test-artifacts/
+desktop_UI/dist/
+desktop_UI/node_modules/
 
 # 用户数据与下载的音乐(体积大,不入库)
 data/downloads/

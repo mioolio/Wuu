@@ -5,6 +5,8 @@
 const path = require('path');
 const { BrowserWindow, ipcMain, screen } = require('electron');
 const state = require('../core/state');
+const { loadRenderer } = require('./renderer-entry');
+const latestLyricPayloads = new Map();
 
 // 读取已保存的桌面歌词位置 (从 userdata.json)
 function _readSavedLyricBounds() {
@@ -62,7 +64,10 @@ function createDesktopLyricWindow() {
   lyricWin.setAlwaysOnTop(true, 'screen-saver');
   // 初始可交互(未锁定状态, 可拖动)
   lyricWin.setIgnoreMouseEvents(false);
-  lyricWin.loadFile(path.join(__dirname, '..', 'renderer', 'desktop-lyric.html'));
+  lyricWin.webContents.on('did-finish-load', () => {
+    for (const payload of latestLyricPayloads.values()) lyricWin.webContents.send('lyric-update', payload);
+  });
+  loadRenderer(lyricWin, 'lyrics').catch(error => console.error('[React desktop lyrics]', error.message));
 
   // 监听窗口移动: 拖动后保存位置到 userdata.json
   lyricWin.on('moved', () => {
@@ -169,6 +174,11 @@ ipcMain.handle('lyric-set-position', (event, pos) => {
 // 主进程转发歌词数据/时间到桌面歌词窗口
 // 注意: 不检查 lyricWin.isVisible(), 因为主窗口最小化时仍需转发时间
 ipcMain.on('lyric-data', (event, payload) => {
+  if (payload && typeof payload.type === 'string') {
+    if (payload.type === 'clear') latestLyricPayloads.delete('data');
+    if (payload.type === 'data') latestLyricPayloads.delete('clear');
+    latestLyricPayloads.set(payload.type, payload);
+  }
   state.sendToLyric('lyric-update', payload);
 });
 

@@ -1,5 +1,5 @@
 // =========== 开发模式启动脚本 ===========
-// 同时启动: Electron 桌面端 (提供后端 API) + Vite dev server (移动端 UI 热更新)
+// 同时启动: React 桌面端 + Electron 后端 + Vue 移动端，两个界面均支持热更新
 // 用法: node scripts/dev.js  或  npm run dev:all
 // 退出: Ctrl+C 会同时关闭两个进程
 const { spawn } = require('child_process');
@@ -21,10 +21,11 @@ const C = {
 };
 
 const children = [];
+let stopping = false;
 
 function spawnProc(name, cmd, args, cwd, color) {
   const prefix = `${color}[${name}]${C.reset} `;
-  const p = spawn(cmd, args, { cwd, shell: isWin, env: process.env });
+  const p = spawn(cmd, args, { cwd, shell: isWin, env: process.env, windowsHide: true });
   children.push(p);
 
   let buf = '';
@@ -42,37 +43,46 @@ function spawnProc(name, cmd, args, cwd, color) {
   });
   p.on('exit', (code, sig) => {
     console.log(`${color}[${name}]${C.reset} 进程退出 code=${code} sig=${sig}`);
+    if (!stopping) cleanup(code || 0);
   });
+  p.on('error', error => { console.error(error.message); cleanup(1); });
   return p;
 }
 
-function cleanup() {
+function cleanup(exitCode = 0) {
+  if (stopping) return;
+  stopping = true;
   for (const p of children) {
-    try { p.kill('SIGTERM'); } catch (e) {}
     if (isWin) {
-      try { spawn('taskkill', ['/pid', String(p.pid), '/T', '/F'], { shell: true }); } catch (e) {}
-    }
+      try { if (p.pid && p.exitCode === null) spawn('taskkill', ['/pid', String(p.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' }); } catch (e) {}
+    } else { try { p.kill('SIGTERM'); } catch (e) {} }
   }
-  process.exit(0);
+  process.exitCode = exitCode;
+  setTimeout(() => process.exit(exitCode), 250).unref();
 }
 
-process.on('SIGINT', cleanup);
-process.on('SIGTERM', cleanup);
+process.on('SIGINT', () => cleanup());
+process.on('SIGTERM', () => cleanup());
 
 console.log(`${C.cyan}[dev]${C.reset} 启动开发模式: Electron + Vite`);
 
 // 1. 启动 Electron 桌面端
 console.log(`${C.gray}[dev] 启动 Electron 桌面端...${C.reset}`);
-spawnProc('desktop', npmCmd, ['start'], root, C.cyan);
+spawnProc('desktop', npmCmd, ['run', 'dev:desktop'], root, C.cyan);
 
 // 2. 稍延迟启动 Vite (避免端口冲突, 让 Electron 先起来)
 setTimeout(() => {
+  if (stopping) return;
   const mobileDir = path.join(root, 'mobile_UI');
   const nm = path.join(mobileDir, 'node_modules');
   if (!fs.existsSync(nm)) {
     console.log(`${C.yellow}[dev] mobile_UI/node_modules 不存在, 先安装依赖...${C.reset}`);
-    const inst = spawn(npmCmd, ['install'], { cwd: mobileDir, shell: isWin, stdio: 'inherit' });
-    inst.on('exit', () => {
+    const inst = spawn(npmCmd, ['install'], { cwd: mobileDir, shell: isWin, stdio: 'inherit', windowsHide: true });
+    children.push(inst);
+    inst.on('error', error => { console.error(error.message); cleanup(1); });
+    inst.on('exit', code => {
+      if (stopping) return;
+      if (code !== 0) { cleanup(code || 1); return; }
       spawnProc('mobile', npmCmd, ['run', 'dev'], mobileDir, C.green);
     });
   } else {

@@ -1,0 +1,98 @@
+const { _electron: electron } = require('../desktop_UI/node_modules/playwright');
+const path = require('path');
+const fs = require('fs');
+const assert = require('assert/strict');
+const root = path.join(__dirname,'..');
+
+(async () => {
+  const artifacts=path.join(root,'.test-artifacts'); fs.mkdirSync(artifacts,{recursive:true});
+  const app=await electron.launch({executablePath:require('electron'),args:[path.join(__dirname,'smoke-main.cjs')],cwd:root,env:{...process.env,WUU_RENDERER_URL:''},timeout:30000});
+  const errors=[];
+  try {
+    await app.firstWindow();
+    let page;
+    for (let attempt=0;attempt<200;attempt++) {
+      page=app.windows().find(window=>window.url() && window.url()!=='about:blank' && !window.url().includes('window=lyrics'));
+      if (page) break;
+      await new Promise(resolve=>setTimeout(resolve,50));
+    }
+    assert.ok(page, 'React main window should load');
+    page.setDefaultTimeout(8000);
+    console.log('Electron renderer:',page.url());
+    app.process().stderr?.on('data',data=>process.stderr.write(data));
+    page.on('pageerror',error=>errors.push(error.message));
+    await page.getByRole('navigation',{name:'主导航'}).waitFor();
+    await page.waitForFunction(()=>document.querySelector('.now-playing strong')?.textContent==='React 测试歌曲');
+    await page.getByRole('button',{name:'暂停',exact:true}).waitFor({timeout:15000});
+    const nav=page.getByRole('navigation',{name:'主导航'});
+    await nav.getByRole('button',{name:'推荐',exact:true}).click();
+    await page.getByRole('heading',{name:'推荐',exact:true}).waitFor();
+    await page.screenshot({path:path.join(artifacts,'react-library.png')});
+    const startedAt=await page.getByRole('slider',{name:'播放进度',exact:true}).evaluate(slider=>Number(slider.value));
+    const routes=[['音乐列表','音乐列表'],['我的歌单','我的歌单'],['正在播放','React 测试歌曲'],['音乐导入','导入音乐'],['音乐统计','音乐统计'],['修复中心','修复中心'],['歌单分享','歌单分享'],['不推荐管理','不推荐管理'],['设置','设置']];
+    for (const [label,title] of routes) {
+      await nav.getByRole('button',{name:label,exact:true}).click();
+      await page.locator('.page-host:not([hidden])').getByRole('heading',{name:title,exact:true}).waitFor();
+    }
+    await page.waitForFunction(start=>Number(document.querySelector('[aria-label="播放进度"]')?.value)>start,startedAt);
+    await page.getByRole('button',{name:'暂停',exact:true}).waitFor();
+    await nav.getByRole('button',{name:'音乐列表',exact:true}).click();
+    await page.getByRole('button',{name:'新建歌单',exact:true}).click();
+    const dialog=page.getByRole('dialog',{name:'新建歌单'});
+    await dialog.getByRole('textbox').fill('React 验证歌单');
+    await dialog.getByRole('button',{name:'创建',exact:true}).click();
+    await page.getByRole('button',{name:/React 验证歌单/}).waitFor();
+    await nav.getByRole('button',{name:'音乐列表',exact:true}).click();
+    await page.getByRole('button',{name:'编辑 React 测试歌曲 的收藏歌单'}).click();
+    await page.getByRole('dialog',{name:'选择歌单'}).getByLabel('React 验证歌单',{exact:false}).check();
+    await page.getByRole('dialog',{name:'选择歌单'}).getByRole('button',{name:'完成'}).click();
+    await nav.getByRole('button',{name:'正在播放',exact:true}).click();
+    await page.screenshot({path:path.join(artifacts,'react-player.png')});
+    await page.getByRole('button',{name:'打开音效',exact:true}).click();
+    await page.getByRole('dialog',{name:'音效与均衡器'}).getByRole('heading',{name:'音效与均衡器'}).waitFor();
+    await page.getByRole('dialog',{name:'音效与均衡器'}).getByRole('button',{name:'清澈人声',exact:true}).click();
+    await page.getByRole('button',{name:'关闭音效',exact:true}).click();
+    await page.getByRole('button',{name:'打开桌面歌词',exact:true}).click();
+    const lyric=await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows().find(window=>window.webContents.getURL().includes('window=lyrics')).id);
+    assert.ok(lyric);
+    const lyricPage=app.windows().find(window=>window.url().includes('window=lyrics'));
+    assert.ok(lyricPage, 'Desktop lyric window should use the React renderer');
+    await lyricPage.locator('.desktop-current-row').waitFor();
+    await lyricPage.waitForFunction(()=>document.querySelector('.desktop-current-row')?.textContent.includes('React') || document.querySelector('.desktop-current-row')?.textContent.includes('页面'));
+    await page.getByRole('button',{name:'关闭桌面歌词',exact:true}).click();
+    await page.getByRole('button',{name:'下一首',exact:true}).click();
+    await page.waitForFunction(()=>document.querySelector('.now-playing strong')?.textContent==='第二首测试歌曲');
+    await page.getByRole('button',{name:'上一首',exact:true}).click();
+    await page.waitForFunction(()=>document.querySelector('.now-playing strong')?.textContent==='React 测试歌曲');
+    await page.getByRole('button',{name:'暂停',exact:true}).waitFor();
+    const progress=page.getByRole('slider',{name:'播放进度',exact:true});
+    const bounds=await progress.boundingBox(); assert.ok(bounds);
+    await page.mouse.move(bounds.x+bounds.width*.1,bounds.y+bounds.height*.5);
+    await page.mouse.down();
+    await page.mouse.move(bounds.x+bounds.width*.45,bounds.y+bounds.height*.5,{steps:6});
+    await page.mouse.up();
+    await page.waitForFunction(()=>Number(document.querySelector('[aria-label="播放进度"]')?.value)>30);
+    await nav.getByRole('button',{name:'免费听音乐',exact:true}).click();
+    await page.getByRole('button',{name:'我已了解并同意',exact:true}).click();
+    await page.getByText('服务就绪',{exact:true}).waitFor();
+    await nav.getByRole('button',{name:'修复中心',exact:true}).click();
+    await page.getByRole('button',{name:/扫描/}).first().click();
+    await page.getByText('未发现损坏的歌曲',{exact:true}).waitFor();
+    await nav.getByRole('button',{name:'设置',exact:true}).click();
+    await page.getByLabel('手机版服务',{exact:false}).check();
+    await page.getByText('运行中',{exact:true}).first().waitFor();
+    await page.getByLabel('手机版服务',{exact:false}).uncheck();
+    await page.getByText('已停止',{exact:true}).first().waitFor();
+    await page.screenshot({path:path.join(artifacts,'react-settings.png')});
+    await page.getByRole('button',{name:'暂停',exact:true}).click();
+    await page.waitForTimeout(650);
+    const result=await app.evaluate(()=>({data:global.__wuuSmoke.data,calls:global.__wuuSmoke.calls}));
+    assert.ok(result.data.collections.find(collection=>collection.name==='React 验证歌单')?.songs.length===1);
+    assert.ok(result.data.collections.find(collection=>collection.id==='existing')?.songs.length===1);
+    assert.ok(result.data.progress[result.data.collections[0].songs[0]]>30, 'The real media position after dragging should be saved');
+    assert.ok(result.calls.includes('desktop-state-update'));
+    assert.ok(result.calls.includes('server-start'));
+    assert.deepEqual(errors,[]);
+    console.log(JSON.stringify({ok:true,packaged:process.env.WUU_SMOKE_PACKAGED==='1',routes:routes.length+1,checks:['native IPC','NetEase runtime dependencies','play/pause/next/previous','drag to seek','navigation keeps playback','collection migration/edit','audio effects','desktop lyrics','disclaimer','repair scan','network settings','progress persistence'],screenshots:['react-library.png','react-player.png','react-settings.png']}));
+  } finally { await app.evaluate(({app})=>app.exit(0)).catch(()=>{}); await app.close().catch(()=>{}); }
+})().catch(error=>{console.error(error);process.exitCode=1;});

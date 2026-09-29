@@ -5,6 +5,8 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Electron-2B2E4A?style=for-the-badge&logo=electron&logoColor=9FEAF9" alt="Electron" />
   <img src="https://img.shields.io/badge/Node.js-339933?style=for-the-badge&logo=node.js&logoColor=white" alt="Node.js" />
+  <img src="https://img.shields.io/badge/React_19-149ECA?style=for-the-badge&logo=react&logoColor=white" alt="React 19" />
+  <img src="https://img.shields.io/badge/TypeScript-3178C6?style=for-the-badge&logo=typescript&logoColor=white" alt="TypeScript" />
   <img src="https://img.shields.io/badge/Web_Audio_API-FB7299?style=for-the-badge&logo=webaudio&logoColor=white" alt="Web Audio API" />
   <img src="https://img.shields.io/badge/Vue_3-42B883?style=for-the-badge&logo=vue.js&logoColor=white" alt="Vue 3" />
   <img src="https://img.shields.io/badge/Windows-0078D4?style=for-the-badge&logo=windows&logoColor=white" alt="Windows" />
@@ -19,6 +21,8 @@
 ## 一、项目简介
 
 Wuu Music（以下简称"Wuu"）是一款面向 Windows 平台的桌面端音乐管理工具。项目以"本地音乐库管理为核心、多平台扩展为补充"为设计理念，为用户提供统一的音乐收藏、播放、导入与分享体验。
+
+桌面界面现已重构为 React 19 + TypeScript + Vite + Zustand，手机端继续使用 Vue 3。主进程、IPC 接口与本地歌曲目录保持兼容；迁移范围、Git 备份及恢复方式见 [React 桌面迁移说明](docs/REACT_MIGRATION.md)。
 
 ### 设计动机
 
@@ -77,7 +81,7 @@ mediaSource → highpass → 10段peaking EQ → lowshelf → highshelf
 
 - 10 段 peaking 滤波器，中心频率：31 / 62 / 125 / 250 / 500 / 1k / 2k / 4k / 8k / 16k Hz
 - 每段 -12 ~ +12 dB 可调，实时 `setTargetAtTime` 平滑过渡防爆音
-- 支持命名保存多个自定义方案，持久化到 `userdata.json` 的 `audioFx` 字段
+- 支持命名保存多个自定义方案，持久化到 `userdata.json` 的 `settings.audioFx` 字段
 
 ### 2.3 多平台歌单导入
 
@@ -139,7 +143,7 @@ mediaSource → highpass → 10段peaking EQ → lowshelf → highshelf
 
 **播放失败自动处理**：
 
-- 播放器监听 `audio.error` 事件（MEDIA_ERR_NETWORK / DECODE / SRC_NOT_SUPPORTED）
+- 播放器监听持久媒体元素的 `error` 事件（MEDIA_ERR_NETWORK / DECODE / SRC_NOT_SUPPORTED）
 - 自动跳转下一首歌曲，连续失败 ≥5 次或超过列表长度时停止（防全坏列表死循环）
 - 失败歌曲自动上报至 `config/play_failed.json`，修复中心扫描时合并显示为"播放失败"条目
 - 文件级校验（verifyAudioFile）检不出的解码损坏，靠此播放时上报机制补充
@@ -197,12 +201,13 @@ mediaSource → highpass → 10段peaking EQ → lowshelf → highshelf
 
 | 层级 | 技术选型 | 说明 |
 |------|----------|------|
-| 运行时 | Electron 33 + Node.js 18+ | 跨平台桌面应用框架 |
+| 运行时 | Electron 33 | 桌面应用运行时；开发与构建使用 Node.js 20.19+ 或 22.12+ |
 | 主进程 | JavaScript (CommonJS) | 业务逻辑、IPC 处理、文件系统操作 |
-| 渲染层 | HTML / CSS / JavaScript | 当前为原生实现，计划逐步迁移至 Vue 3 |
+| 桌面界面 | React 19 + TypeScript 5.9 + Vite 7 | 组件化界面，TypeScript 严格模式，生产入口为 desktop_UI/dist |
+| 桌面状态管理 | Zustand 5 | 歌曲、收藏、设置、播放状态与本地数据持久化 |
 | 移动端 | Vue 3 + Vite 5 | 移动端 Web UI，非原生移动应用 |
 | 音频处理 | Web Audio API | 原生 BiquadFilter / Convolver / StereoPanner / GainNode |
-| 构建 | electron-builder 25 | Windows NSIS 安装包打包 |
+| 构建与验证 | Vite + electron-builder 25 + Vitest + Playwright | 两端静态资源、Windows NSIS 安装包、单元测试与 Electron smoke 测试 |
 | 加密 | AES-CTR / AES-256-GCM | 音频解密与歌单分享加密 |
 | 数据持久化 | JSON 文件（原子写） | userdata.json / play_failed.json / duration_cache.json |
 
@@ -262,29 +267,33 @@ wuu://<base64url(JSON{v, f, b, j, jc, r, dt, d, p})>
 
 ### 3.4 渲染层架构
 
-当前桌面端渲染层基于原生 HTML/CSS/JavaScript 实现，按功能模块拆分：
+桌面界面由 React 组件与 TypeScript 服务组成。Zustand 集中管理业务状态，`api.ts` 封装 preload 暴露的 IPC 接口及独立事件取消订阅。播放器持有一个持续存在的媒体元素，音频节点和播放队列独立于页面组件生命周期，切换页面时继续播放。
 
 ```
-renderer/
-  ├── index.html             主界面入口
-  ├── style.css              全局样式（@import 各功能样式表）
-  ├── styles/
-  │   ├── player.css          播放栏与控制按钮
-  │   ├── audio-fx.css        音效弹窗与 EQ 滑块
-  │   ├── repair.css          修复中心列表与状态
-  │   └── ...
-  └── modules/
-      ├── state.js            前端状态管理（含 appSettings 默认值）
-      ├── dom.js              DOM 引用与操作
-      ├── events.js           事件绑定
-      ├── init.js             初始化流程（加载 userdata 合并设置）
-      ├── player-core.js      播放器核心（WebAudio 增益链 + 音效链接入点）
-      ├── audio-fx.js         音效系统（9 预设 + 10 段 EQ + 方案保存）
-      ├── management.js       歌曲管理
-      ├── settings.js         设置面板
-      ├── repair.js            修复中心 UI（扫描/修复/删除）
-      └── utils.js            工具函数
+desktop_UI/
+  ├── index.html              Vite 挂载入口
+  ├── src/
+  │   ├── main.tsx            主界面 / 桌面歌词窗口入口
+  │   ├── App.tsx             应用布局、导航与页面管理
+  │   ├── store.ts            Zustand 状态与 userdata.json 持久化
+  │   ├── types.ts            共享类型
+  │   ├── api.ts              IPC 桥接与媒体地址处理
+  │   ├── ui.ts               通知、确认与输入弹窗
+  │   ├── components/         播放栏、歌词、桌面歌词、音效与通用组件
+  │   ├── features/           歌库、导入、在线音乐、分享、修复、统计、设置
+  │   ├── services/
+  │   │   ├── player.ts       持久播放器、队列、进度与桌面状态同步
+  │   │   ├── audioFx.ts      9 个预设、10 段 EQ 与自定义方案
+  │   │   └── lyrics.ts       行级 / 逐字歌词解析
+  │   └── styles.css          全局样式
+  ├── vite.config.ts          桌面开发端口 5173，构建输出 dist/
+  ├── tsconfig.json           TypeScript 严格检查
+  └── package.json
 ```
+
+主窗口与桌面歌词窗口通过 `window/renderer-entry.js` 加载同一套 React 构建产物；开发模式使用 Vite，生产模式只加载 `desktop_UI/dist/`。`renderer/` 保留为迁移前历史源码，不再作为生产入口，也不再通过注入 HTML 片段或全局脚本构建界面。
+
+桌面端通过 Electron IPC 访问本地业务，手机端通过 HTTP API 访问服务。两端使用不同组件框架，可共享与界面无关的类型、协议和纯逻辑；React 与 Vue 组件分别维护。
 
 ### 3.5 移动端架构
 
@@ -315,13 +324,13 @@ mobile_UI/
 
 ### 4.1 Web Audio 音效链
 
-音效系统在 `renderer/modules/audio-fx.js` 中实现，通过 `buildFxChain()` 在播放器首次 `play()` 时将效果链插入 `mediaSource` 与 `gainNode` 之间。
+音效系统在 `desktop_UI/src/services/audioFx.ts` 中实现，由 `AudioEffects` 类管理音频节点。`desktop_UI/src/services/player.ts` 在首次初始化 Web Audio 时，将效果链接入 `MediaElementAudioSourceNode` 与 `GainNode` 之间；React 音效面板位于 `desktop_UI/src/components/AudioFxPanel.tsx`。页面切换不会重建媒体源或音效链。
 
 **关键技术点**：
 
 - **M/S 立体声加宽**：使用 `ChannelSplitter` + `ChannelMerger` 将立体声拆分为 Mid（L+R）与 Side（L−R）通道，通过控制 Side 通道增益实现声场宽度调节。宽度 = 1 时输出与输入完全一致，无染色。
 - **环绕声像摆动**：`StereoPanner` 节点配合低频 LFO（`OscillatorNode`，0.05-0.08Hz）实现声像缓慢左右摆动，模拟 360 度环绕效果。
-- **程序生成混响 IR**：`_makeImpulse()` 函数生成 1.9 秒指数衰减的立体声噪声 Impulse Response，无需外部音频文件，Convolver 节点加载后实现板式混响效果。
+- **程序生成混响 IR**：`AudioEffects` 构造函数生成 1.9 秒衰减的立体声噪声 Impulse Response，无需外部音频文件，Convolver 节点加载后实现板式混响效果。
 - **平滑参数过渡**：所有参数切换使用 `setTargetAtTime(value, currentTime, 0.03)` 实现 30ms 指数过渡，避免预设切换时的爆音。
 - **构建失败回退**：效果链构建异常时自动回退为 `mediaSource` 直连 `gainNode`，不影响基础播放。
 
@@ -330,10 +339,10 @@ mobile_UI/
 播放失败从检测到修复的完整链路：
 
 ```
-audio.error 事件 (code=2/3/4)
-  → player-core.js: playFailCount++ (连续失败保护)
+持久媒体元素 error 事件 (code=2/3/4)
+  → services/player.ts: handleFailure / failCount (连续失败保护)
   → IPC report-play-failed → repair/index.js → config/play_failed.json
-  → 自动跳下一首 (pickNextIdx)
+  → 自动跳下一首 (playerService.next)
   → 用户进入修复中心 → scan-damaged-songs
     → 文件级校验 (verifyAudioFile) + play_failed.json 合并
     → 显示"播放失败"条目
@@ -546,7 +555,7 @@ audio.error 事件 (code=2/3/4)
 
 ### 7.1 环境要求
 
-- Node.js >= 18
+- Node.js 20.19+ 或 22.12+（Vite 7 的运行要求）
 - npm >= 9
 - Windows 10 及以上版本（当前版本主要面向 Windows 平台）
 
@@ -554,31 +563,43 @@ audio.error 事件 (code=2/3/4)
 
 ```bash
 npm install
+
+# 开发或构建手机端时安装其依赖
+npm install --prefix mobile_UI
 ```
 
-安装完成后会自动执行 `scripts/patch-kugoumusicapi.js` 对酷狗音乐 API 依赖进行补丁处理。
+根目录安装完成后会自动执行 `scripts/patch-kugoumusicapi.js` 对酷狗音乐 API 依赖进行补丁处理。首次运行 `npm start`、`npm run dev` 或 `npm run build:desktop` 时，启动脚本会检查并自动安装 `desktop_UI/` 的依赖；也可提前执行 `npm install --prefix desktop_UI`。
 
 ### 7.3 开发模式
 
 ```bash
-# 仅启动桌面端
+# 构建 React 桌面界面后启动 Electron
 npm start
 
-# 同时启动桌面端与移动端（Vite 热更新）
+# 桌面端 React 热更新 + Electron
+npm run dev
+
+# 仅启动手机端 Vue 热更新服务器
+npm run dev:mobile
+
+# 同时启动桌面端、Electron 与手机端热更新服务器
 npm run dev:all
 ```
 
-开发模式下，移动端 UI 在 `http://localhost:5174/` 启动 Vite dev server，支持文件修改热更新。桌面端代码修改需重启 Electron 进程。
+桌面开发服务器位于 `http://127.0.0.1:5173/`，Electron 自动加载该地址；手机端开发服务器位于 `http://localhost:5174/`。两端界面修改均支持 Vite 热更新。修改 Electron 主进程或 preload 后，需要重启开发进程。
 
-`dev:all` 脚本（`scripts/dev.js`）会同时启动 Electron 后端和 Vite 前端热更新服务器，无需频繁构建。
+手机端开发服务器将 API 请求代理至 `http://127.0.0.1:30967`，使用同步、歌库等功能时需同时运行桌面端并在设置中开启网络服务。
 
 ### 7.4 构建打包
 
 ```bash
 npm run build
+
+# 免安装目录版
+npm run build:dir
 ```
 
-使用 electron-builder 构建 Windows NSIS 安装包，输出目录为 `dist/`。构建配置详见 `package.json` 中的 `build` 字段。
+两个命令均先构建 `desktop_UI/dist/` 与 `mobile_UI/dist/`，再使用 electron-builder 生成 Windows NSIS 安装包或免安装目录版，输出目录为根目录 `dist/`。打包桌面入口只包含 React 构建产物，迁移前的 `renderer/` 不纳入生产入口。构建配置详见 `package.json` 中的 `build` 字段。
 
 **asarUnpack 配置**：`parsers/qishui-decrypt/native/**` 需要解包到 `app.asar.unpacked`，因为 Node.js 无法从 asar 内加载原生 `.node` 模块。
 
@@ -594,20 +615,36 @@ npm run build:mobile
 
 | 脚本 | 说明 |
 |------|------|
-| `npm start` | 启动 Electron 桌面端 |
-| `npm run dev` | 仅启动移动端 Vite dev server |
-| `npm run dev:all` | 同时启动桌面端 + 移动端（推荐开发使用） |
-| `npm run build` | 构建 Windows NSIS 安装包 |
-| `npm run build:dir` | 构建免安装目录版（调试用） |
+| `npm start` | 构建 React 桌面界面后启动 Electron |
+| `npm run dev` / `npm run dev:desktop` | React 桌面端热更新（5173）+ Electron |
+| `npm run dev:mobile` | Vue 手机端热更新（5174） |
+| `npm run dev:all` | 同时运行桌面端、Electron 与手机端热更新服务器 |
+| `npm run build:desktop` | 检查 TypeScript 并构建 React 桌面资源 |
 | `npm run build:mobile` | 构建移动端静态文件 |
-| `npm run build:full` | 构建移动端 + 启动桌面端 |
+| `npm run build:full` | 构建桌面、手机两端资源后启动 Electron |
+| `npm run build` | 构建两端资源并生成 Windows NSIS 安装包 |
+| `npm run build:dir` | 构建两端资源并生成免安装目录版 |
+| `npm run typecheck` | 检查桌面 TypeScript 类型 |
+| `npm test` | 运行桌面 Vitest 测试 |
+| `npm run test:desktop` | 使用 fixture 运行 Playwright Electron smoke 测试 |
+
+### 7.7 验证桌面重构
+
+```bash
+npm run build:desktop
+npm run typecheck
+npm test
+npm run test:desktop
+```
+
+Electron smoke 测试使用生成的音频、歌词及 fixture IPC 验证本地播放、页面切换、收藏编辑、音效、桌面歌词和网络设置。测试数据、独立 Electron 用户目录及截图位于 `.test-artifacts/`，歌曲与配置写入由 fixture 接管，不修改真实的 `output/` 或 `config/userdata.json`。这类测试不代表第三方账号真实登录、远程接口可用性或实际会员音质已经验证；这些功能需在对应账号与网络环境中单独测试。
 
 ---
 
 ## 八、目录结构
 
 ```
-SQET/
+Wuu-main/
 ├── main.js                       主进程入口
 ├── preload.js                    上下文桥接（IPC API 暴露）
 ├── package.json                  项目元数据与构建配置
@@ -627,7 +664,8 @@ SQET/
 │   └── color.js                  封面主色调提取（13 桶 HSL 分色）
 ├── window/                       窗口管理
 │   ├── main-window.js            主窗口
-│   └── desktop-lyric.js          桌面歌词窗口（skipTaskbar + 锁定态交互）
+│   ├── desktop-lyric.js          桌面歌词窗口（skipTaskbar + 锁定态交互）
+│   └── renderer-entry.js         React 开发 / 生产窗口入口
 ├── download/
 │   └── index.js                  在线解析下载
 ├── repair/
@@ -663,19 +701,25 @@ SQET/
 │       ├── track-decryptor.js    解密器实现
 │       ├── decrypt-utils.js      解密工具函数
 │       └── qishui-auth.js        认证配置
-├── renderer/                     渲染层
-│   ├── index.html                主界面
-│   ├── style.css                 全局样式入口
-│   ├── styles/                   各功能样式表
-│   ├── fragments/                HTML 片段（footer/modals/settings 等）
-│   └── modules/                  前端模块（含 audio-fx.js 音效系统）
+├── desktop_UI/                   桌面界面（React 19 + TypeScript + Vite 7 + Zustand 5）
+│   ├── src/                      组件、功能页、状态与播放器服务
+│   ├── dist/                     生产桌面与歌词窗口构建产物
+│   ├── package.json
+│   └── vite.config.ts
+├── renderer/                     迁移前历史源码，保留参考，不作为生产入口
 ├── mobile_UI/                    移动端 Web UI（Vue 3 + Vite）
 │   ├── src/
 │   ├── package.json
 │   └── vite.config.js
 ├── scripts/
-│   ├── dev.js                    开发模式启动脚本（dev:all）
-│   └── patch-kugoumusicapi.js    依赖补丁脚本
+│   ├── desktop.js                桌面依赖检查、构建、启动与热更新
+│   ├── dev.js                    桌面、手机联合开发（dev:all）
+│   ├── build.js                  两端构建与 Electron 打包
+│   ├── smoke-desktop.cjs         Playwright Electron 验证
+│   ├── smoke-main.cjs            隔离 fixture 数据与 IPC
+│   └── patch-kugoumusicapi.js     依赖补丁脚本
+├── docs/
+│   └── REACT_MIGRATION.md         迁移范围、Git 备份与恢复说明
 └── tools/
     └── netease-api/              内嵌 NeteaseCloudMusicApi
 ```
@@ -690,11 +734,11 @@ SQET/
 |------|------|------|
 | 本地音乐管理 | 稳定 | 核心功能已完成，支持多格式扫描与播放 |
 | Web Audio 音效 | 稳定 | 9 预设 + 10 段自定义 EQ + 方案保存 |
-| 桌面端渲染层 | 稳定 | 基于原生 HTML/CSS/JavaScript 实现，计划逐步重构为 Vue 3 |
+| 桌面端渲染层 | React 重构完成 | React 19 + TypeScript 5.9 + Vite 7 + Zustand 5；主界面与桌面歌词均使用 React |
 | 音频解密 | 稳定 | Soda 格式（AES-CTR）解密已实现 |
 | 播放失败处理 | 稳定 | 自动跳转 + 上报修复中心 + 删除/修复闭环 |
 | 桌面歌词 | 稳定 | 锁定态交互 + skipTaskbar + 跑马灯 |
-| 多平台歌单导入 | 稳定 | 网易云、酷狗、汽水三平台支持 |
+| 多平台歌单导入 | 维护中 | 网易云、酷狗、汽水界面与 IPC 已迁移；实际登录、导入依赖账号和平台服务 |
 | 在线解析下载 | 维护中 | 依赖第三方平台接口，需持续跟进接口变更 |
 | 歌词系统 | 稳定 | 逐字歌词解析，多级回退获取策略 |
 | 歌单分享 | 稳定 | wuu:// 加密协议 + HTTP 服务器 + 访问控制 |
@@ -705,13 +749,13 @@ SQET/
 
 **短期目标：**
 
-- 渲染层框架迁移：将桌面端原生 HTML 渲染层逐步重构为 Vue 3 组件化架构，提升可维护性与组件复用性
+- React 桌面完善：持续覆盖导入、解析、修复与分享的真实场景，补充关键回归验证，完善交互与可访问性
 - 性能优化：大规模歌单渲染采用虚拟滚动与分页加载；歌曲扫描引入增量扫描机制；音频缓冲与预加载策略优化
 - 移动端完善：补充功能模块，优化移动端交互体验
 
 **中长期目标：**
 
-- TypeScript 迁移：考虑使用 TypeScript 优化类型安全与开发体验（注：TypeScript 不优化运行时性能，主要提升可维护性）
+- 类型与逻辑共享：桌面 TypeScript 已落地，逐步完善 IPC、HTTP 协议的类型定义，并提取桌面与手机端可共享的纯逻辑
 - 数据存储优化：当歌库规模增长到 JSON 性能瓶颈时，考虑迁移到 SQLite（sql.js 已集成）
 - 原生移动应用：基于 Tauri 或 React Native 构建真正的跨平台原生移动应用
 - 云同步能力：支持歌单与收藏的端到端加密云端同步
@@ -756,8 +800,11 @@ SQET/
 | 项目 | 用途 | 许可证 |
 |------|------|--------|
 | [Electron](https://github.com/electron/electron) | 跨平台桌面应用运行时框架 | MIT |
+| [React](https://github.com/facebook/react) | 桌面组件界面与桌面歌词窗口 | MIT |
+| [TypeScript](https://github.com/microsoft/TypeScript) | 桌面类型检查与开发工具 | Apache-2.0 |
+| [Zustand](https://github.com/pmndrs/zustand) | 桌面状态管理 | MIT |
 | [Vue 3](https://github.com/vuejs/core) | 渐进式 JavaScript 框架（移动端 UI） | MIT |
-| [Vite](https://github.com/vitejs/vite) | 前端构建工具（移动端） | MIT |
+| [Vite](https://github.com/vitejs/vite) | 桌面与移动端构建、热更新工具 | MIT |
 | [NeteaseCloudMusicApi](https://github.com/Binaryify/NeteaseCloudMusicApi) | 网易云音乐 API 服务 | MIT |
 | [kugoumusicapi](https://github.com/MacroJson/kugoumusicapi) | 酷狗音乐 API 库 | MIT |
 | [jpeg-js](https://github.com/eugeneware/jpeg-js) | JPEG 图像解码（封面处理） | BSD-3-Clause |

@@ -1,0 +1,23 @@
+.playlist-page > .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.playlist-page label:not(.toolbar label), .playlist-page details > label { display: block; font-size: 12px; }
+.playlist-page label > input.field, .playlist-page label > select.field { display: block; width: 100%; margin-top: 6px; }
+.playlist-page .toolbar > input.field, .management-page .toolbar > input.field, .repair-page .toolbar > input.field { display: block; flex: 1; min-width: 180px; margin-bottom: 0; }
+.playlist-page summary { cursor: pointer; padding: 3px 0; }
+.playlist-page summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 5px; border-radius: 5px; }
+.playlist-page .toolbar > label, .management-page .toolbar > label { display: inline-flex; align-items: center; gap: 7px; }
+.playlist-page .row > label { display: inline-flex; align-items: center; gap: 7px; }
+.playlist-page progress, .stats-page progress { height: 5px; accent-color: var(--accent); }
+.playlist-page .row { flex-wrap: wrap; }
+.playlist-page .row > label:has(select) { flex: 1; min-width: 150px; display: block; }
+.stats-page > .grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.stats-page > .grid h2 { font-size: 22px; margin: 10px 0; }
+.stats-page .row > button { display: block; justify-content: flex-start; white-space: normal; padding: 8px; }
+.stats-page .row > button > .muted { margin-top: 4px; font-size: 12px; }
+.management-page .row, .repair-page .row { flex-wrap: wrap; }
+.management-page .row > div, .repair-page .row > div { flex-basis: 200px; }
+.repair-page .row > div > button { white-space: normal; text-align: left; padding: 5px 7px; }
+.repair-page .badge { max-width: 180px; white-space: normal; }
+@media (max-width: 1100px) {
+  .playlist-page > .grid { grid-template-columns: minmax(0, 1fr); }
+  .stats-page > .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

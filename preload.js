@@ -1,5 +1,13 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
+// Each React effect owns its listener. Unmounting one view must not remove
+// listeners used by another view on the shared progress channels.
+function listen(channel, callback) {
+  const listener = (_event, ...args) => callback(...args);
+  ipcRenderer.on(channel, listener);
+  return () => ipcRenderer.removeListener(channel, listener);
+}
+
 contextBridge.exposeInMainWorld('musicAPI', {
   getSongs: () => ipcRenderer.invoke('get-songs'),
   getLyrics: (lrcPath) => ipcRenderer.invoke('get-lyrics', lrcPath),
@@ -8,7 +16,7 @@ contextBridge.exposeInMainWorld('musicAPI', {
   // 同步保存: 用于 beforeunload 等关键场景, 阻塞直到主进程写盘完成
   // (async invoke 在窗口关闭/进程被杀时可能来不及到达主进程)
   saveUserDataSync: (data) => ipcRenderer.sendSync('save-userdata-sync', data),
-  onDurationUpdate: (cb) => ipcRenderer.on('duration-update', (e, payload) => cb(payload)),
+  onDurationUpdate: (cb) => listen('duration-update', cb),
   extractCoverColor: (filePath) => ipcRenderer.invoke('extract-cover-color', filePath),
   extractCoverColorFromURL: (url) => ipcRenderer.invoke('extract-cover-color-url', url),
   // 从磁盘彻底删除歌曲文件夹 (管理界面使用)
@@ -20,7 +28,7 @@ contextBridge.exposeInMainWorld('windowAPI', {
   toggleMaximize: () => ipcRenderer.invoke('window-maximize'),
   close: () => ipcRenderer.invoke('window-close'),
   quit: () => ipcRenderer.invoke('window-quit'),
-  onWindowState: (cb) => ipcRenderer.on('window-state', (e, isMax) => cb(isMax)),
+  onWindowState: (cb) => listen('window-state', cb),
 });
 
 // 桌面歌词相关 API (主窗口用)
@@ -37,14 +45,14 @@ contextBridge.exposeInMainWorld('desktopLyric', {
   notifyClosed: () => ipcRenderer.send('lyric-closed-by-user'),
   // 桌面歌词窗口内锁按钮变更穿透状态, 通知主窗口同步锁按钮
   notifyLockChanged: (locked) => ipcRenderer.send('lyric-lock-changed', { locked }),
-  onClosed: (cb) => ipcRenderer.on('lyric-closed-by-user', () => cb()),
+  onClosed: (cb) => listen('lyric-closed-by-user', cb),
   // 设置窗口位置 (null=重置默认居中, [x,y]=指定位置)
   setPosition: (pos) => ipcRenderer.invoke('lyric-set-position', pos),
   // 主进程通知: 桌面歌词窗口位置已保存 (用户拖动后触发)
   // 渲染进程需监听此事件同步 appSettings.desktopLyricBounds, 避免被下次 saveUserData 覆盖
-  onBoundsSaved: (cb) => ipcRenderer.on('lyric-bounds-saved', (e, pos) => cb(pos)),
+  onBoundsSaved: (cb) => listen('lyric-bounds-saved', cb),
   // 桌面歌词窗口内锁按钮变更穿透状态时, 通知主窗口同步锁按钮
-  onLockChanged: (cb) => ipcRenderer.on('lyric-lock-changed', (e, locked) => cb(locked)),
+  onLockChanged: (cb) => listen('lyric-lock-changed', cb),
 });
 
 // 在线解析 API (汽水音乐分享链接解析 + 下载)
@@ -53,13 +61,13 @@ contextBridge.exposeInMainWorld('parseAPI', {
   parseStream: (texts) => ipcRenderer.invoke('parse-music-links-stream', texts),
   // 酷狗第三方代理 JSON 解析(流式推送, 复用 onParseProgress 进度事件)
   parseKugouJsonStream: (jsonText) => ipcRenderer.invoke('parse-kugou-json-stream', jsonText),
-  onParseProgress: (cb) => ipcRenderer.on('parse-progress-event', (e, payload) => cb(payload)),
+  onParseProgress: (cb) => listen('parse-progress-event', cb),
   removeParseProgress: () => ipcRenderer.removeAllListeners('parse-progress-event'),
   checkExists: (info) => ipcRenderer.invoke('check-parsed-song-exists', info),
   download: (info, overwrite) => ipcRenderer.invoke('download-parsed-song', info, overwrite),
-  onDownloadProgress: (cb) => ipcRenderer.on('parse-download-progress', (e, payload) => cb(payload)),
+  onDownloadProgress: (cb) => listen('parse-download-progress', cb),
   // 酷狗歌词合并诊断日志(F12 排查歌词末字丢失问题)
-  onKugouDiag: (cb) => ipcRenderer.on('kugou-lyric-diag', (e, payload) => cb(payload)),
+  onKugouDiag: (cb) => listen('kugou-lyric-diag', cb),
   removeKugouDiag: () => ipcRenderer.removeAllListeners('kugou-lyric-diag'),
 });
 
@@ -74,7 +82,7 @@ contextBridge.exposeInMainWorld('repairAPI', {
 
 // 桌面歌词窗口接收更新
 contextBridge.exposeInMainWorld('lyricReceiver', {
-  onUpdate: (cb) => ipcRenderer.on('lyric-update', (e, payload) => cb(payload)),
+  onUpdate: (cb) => listen('lyric-update', cb),
 });
 
 // ===== 桌面端播放状态同步 API (供 renderer 推送状态到主进程) =====
@@ -130,7 +138,7 @@ contextBridge.exposeInMainWorld('kugouAPI', {
   // 试听: 获取流式 URL + 歌词 + 元数据, 不下载
   preview: (song, quality) => ipcRenderer.invoke('kugou-preview', { song, quality }),
   // 进度事件(复用解析模块的进度通道)
-  onDownloadProgress: (cb) => ipcRenderer.on('parse-download-progress', (e, payload) => cb(payload)),
+  onDownloadProgress: (cb) => listen('parse-download-progress', cb),
   removeDownloadProgress: () => ipcRenderer.removeAllListeners('parse-download-progress'),
 });
 
@@ -152,7 +160,7 @@ contextBridge.exposeInMainWorld('qishuiAPI', {
   switchAccount: (userid) => ipcRenderer.invoke('qishui-switch-account', userid),
   removeAccount: (userid) => ipcRenderer.invoke('qishui-remove-account', userid),
   logout: () => ipcRenderer.invoke('qishui-logout'),
-  onImportProgress: (cb) => ipcRenderer.on('qishui-import-progress', (e, payload) => cb(payload)),
+  onImportProgress: (cb) => listen('qishui-import-progress', cb),
   removeImportProgress: () => ipcRenderer.removeAllListeners('qishui-import-progress'),
 });
 
@@ -181,7 +189,7 @@ contextBridge.exposeInMainWorld('neteaseAPI', {
   // 试听: 获取流式 URL + 歌词 + 元数据, 不下载
   preview: (songId, quality) => ipcRenderer.invoke('netease-preview', { songId, quality }),
   // 进度事件(复用解析模块的进度通道)
-  onDownloadProgress: (cb) => ipcRenderer.on('parse-download-progress', (e, payload) => cb(payload)),
+  onDownloadProgress: (cb) => listen('parse-download-progress', cb),
   removeDownloadProgress: () => ipcRenderer.removeAllListeners('parse-download-progress'),
 });
 
@@ -212,7 +220,7 @@ contextBridge.exposeInMainWorld('playlistAPI', {
   getAccessLogs: () => ipcRenderer.invoke('server-get-access-logs'),
   clearAccessLogs: () => ipcRenderer.invoke('server-clear-access-logs'),
   // 下载进度事件 (复用 parse-download-progress 通道)
-  onDownloadProgress: (cb) => ipcRenderer.on('parse-download-progress', (e, payload) => cb(payload)),
+  onDownloadProgress: (cb) => listen('parse-download-progress', cb),
   removeDownloadProgress: () => ipcRenderer.removeAllListeners('parse-download-progress'),
 });
 

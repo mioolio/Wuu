@@ -102,10 +102,12 @@ function writeUserData(data) {
     fs.writeFileSync(tmpFile, payload, 'utf-8');
     // rename 在同分区下是原子操作, Windows 上也能保证目标文件不会处于半写状态
     fs.renameSync(tmpFile, userDataFile);
+    return true;
   } catch (e) {
     // 即便 rename 失败, 也尝试清理临时文件
     try { if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile); } catch (_) {}
     console.error('[storage] writeUserData 失败:', e.message);
+    return false;
   }
 }
 
@@ -185,13 +187,11 @@ readDurationCache();
 const { ipcMain } = require('electron');
 ipcMain.handle('get-userdata', () => readUserData());
 ipcMain.handle('save-userdata', (event, data) => {
-  writeUserData(data);
-  return true;
+  return writeUserData(data);
 });
 // 同步保存用户数据(用于 beforeunload, 阻塞渲染进程直到写盘完成)
 ipcMain.on('save-userdata-sync', (event, data) => {
-  writeUserData(data);
-  event.returnValue = true;
+  event.returnValue = writeUserData(data);
 });
 
 // 删除磁盘上的歌曲文件夹 (彻底移除不喜欢的音乐)

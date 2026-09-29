@@ -6,6 +6,7 @@ const path = require('path');
 const { BrowserWindow, ipcMain, Tray, Menu, nativeImage, app } = require('electron');
 const state = require('../core/state');
 const { createDesktopLyricWindow, destroyDesktopLyricWindow } = require('./desktop-lyric');
+const { loadRenderer } = require('./renderer-entry');
 
 let tray = null;
 let isQuitting = false;
@@ -89,7 +90,7 @@ function setWindowRoundedCorners(win) {
       ' -PassThru | Out-Null;
       [Dwm]::DwmSetWindowAttribute([IntPtr]${hwnd.readUInt32LE(0)}, 33, [ref]2, 4)
     `;
-    execSync(`powershell -NoProfile -Command "${ps.replace(/"/g, '\\"').replace(/\n/g, ' ')}"`, { timeout: 3000 });
+    execSync(`powershell -NoProfile -Command "${ps.replace(/"/g, '\\"').replace(/\n/g, ' ')}"`, { timeout: 3000, windowsHide: true });
   } catch (e) {
     // 非Win11可忽略
   }
@@ -114,7 +115,7 @@ function createWindow() {
     },
   });
   state.setMainWindow(mainWindow);
-  mainWindow.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
+  loadRenderer(mainWindow).catch(error => console.error('[React renderer]', error.message));
 
   // 临时: Ctrl+Shift+I 打开 DevTools
   mainWindow.webContents.on('before-input-event', (event, input) => {
