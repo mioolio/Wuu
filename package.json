@@ -19,6 +19,7 @@
     "typecheck": "npm --prefix desktop_UI run typecheck",
     "test": "npm --prefix desktop_UI test",
     "test:desktop": "node scripts/smoke-desktop.cjs",
+    "test:visual": "node scripts/visual-desktop.cjs",
     "postinstall": "node scripts/patch-kugoumusicapi.js"
   },
   "devDependencies": {

@@ -1,4 +1,5 @@
-import { memo, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useDeferredValue, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { errorMessage } from '../api';
 import { useAppStore } from '../store';
 import { confirmAction, formatTime, notify, promptText } from '../ui';
@@ -8,19 +9,44 @@ import Icon from '../components/Icon';
 import Cover from '../components/Cover';
 
 type Entry = { type: 'song'; song: Song } | { type: 'artist'; artist: string; count: number };
-const SongRow = memo(function SongRow({ song, queue, onChooseCollection }: { song: Song; queue: Song[]; onChooseCollection: (song: Song) => void }) {
+const SongRow = memo(function SongRow({ song, queue, number, onChooseCollection }: { song: Song; queue: Song[]; number:number; onChooseCollection: (song: Song) => void }) {
   const current = useAppStore(state => state.player.song?.audioPath === song.audioPath);
   const liked = useAppStore(state => state.collections.some(c => c.songs.includes(song.audioPath)));
   const disliked = useAppStore(state => state.dislikes[song.audioPath] !== undefined);
   const duration = useAppStore(state => state.actualDuration[song.audioPath] || song.realDuration || song.duration || 0);
+  const [menu, setMenu] = useState<{x:number;y:number}|null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuId = useId();
+  useEffect(() => {
+    if (!menu) return;
+    menuRef.current?.querySelector<HTMLButtonElement>('button')?.focus();
+    const close = (event:PointerEvent) => { if (!menuRef.current?.contains(event.target as Node) && !triggerRef.current?.contains(event.target as Node)) setMenu(null); };
+    const escape = (event:KeyboardEvent) => { if (event.key === 'Escape') { setMenu(null); triggerRef.current?.focus(); } };
+    const scroll = () => setMenu(null);
+    document.addEventListener('pointerdown',close); document.addEventListener('keydown',escape); window.addEventListener('scroll',scroll,true);
+    const unsubscribe = useAppStore.subscribe((state,previous) => { if (state.view !== previous.view) setMenu(null); });
+    return () => { document.removeEventListener('pointerdown',close); document.removeEventListener('keydown',escape); window.removeEventListener('scroll',scroll,true); unsubscribe(); };
+  }, [menu]);
   const play = () => { void playerService.playSong(song, queue).catch(error => notify(errorMessage(error), 'error')); };
   return <div className={`song-row ${current ? 'current' : ''}`} onDoubleClick={play}>
-    <button className="song-main" onClick={play} title={`播放 ${song.songName}`}><Cover path={song.coverPath} /><span className="song-meta"><strong>{song.songName}</strong><span>{song.artist}{song.album ? ` · ${song.album}` : ''}</span></span></button>
+    <span className="song-number" aria-hidden="true">{current ? <span className="track-playing"><i /><i /><i /></span> : String(number).padStart(2,'0')}</span>
+    <button className="song-main" onClick={play} title={`播放 ${song.songName} · ${song.artist}`}><Cover path={song.coverPath} /><span className="song-meta"><strong>{song.songName}</strong><span>{song.artist}</span></span></button>
+    <span className="song-album" title={song.album || '单曲'}>{song.album || '单曲'}</span>
     <span className="song-duration">{formatTime(duration)}</span>
     <button className={`icon-button ${liked ? 'active' : ''}`} aria-label={liked ? `编辑 ${song.songName} 的收藏歌单` : `收藏 ${song.songName}`} onClick={() => onChooseCollection(song)}><Icon name="heart" /></button>
-    <button className="icon-button" aria-label={`添加 ${song.songName} 到歌单`} onClick={() => onChooseCollection(song)}><Icon name="plus" /></button>
-    <button className={`icon-button ${disliked ? 'active' : ''}`} title="不推荐" aria-label={`不推荐 ${song.songName}`} onClick={() => useAppStore.getState().toggleDislike(song.audioPath)}><Icon name="dislike" style={{ transform: 'rotate(180deg)' }} /></button>
-    <button className="icon-button" title="分享" aria-label={`分享 ${song.songName}`} onClick={() => { useAppStore.setState({ shareSelection: [song.audioPath] }); useAppStore.getState().setView('playlist'); }}><Icon name="share" /></button>
+    <button className={`icon-button ${menu ? 'active' : ''}`} ref={triggerRef} aria-label={`更多 ${song.songName} 操作`} aria-haspopup="menu" aria-expanded={!!menu} aria-controls={menu ? menuId : undefined} onClick={event => {
+      const rect=event.currentTarget.getBoundingClientRect(); setMenu(menu ? null : {x:Math.min(rect.right-192,window.innerWidth-204),y:Math.min(rect.bottom+6,window.innerHeight-184)});
+    }}><Icon name="more" /></button>
+    {menu && createPortal(<div className="song-context-menu" role="menu" id={menuId} aria-label={`${song.songName} 的操作`} ref={menuRef} style={{left:menu.x,top:menu.y}} onKeyDown={event => {
+      const buttons=[...event.currentTarget.querySelectorAll<HTMLButtonElement>('button')]; const index=buttons.indexOf(document.activeElement as HTMLButtonElement);
+      if (event.key==='ArrowDown' || event.key==='ArrowUp') { event.preventDefault(); buttons[(index+(event.key==='ArrowDown'?1:-1)+buttons.length)%buttons.length]?.focus(); }
+      if (event.key==='Tab') { triggerRef.current?.focus(); setMenu(null); }
+    }}>
+      <button role="menuitem" onClick={() => { setMenu(null); onChooseCollection(song); }}><Icon name="plus" size={17} />添加到歌单</button>
+      <button role="menuitem" onClick={() => { setMenu(null); useAppStore.setState({shareSelection:[song.audioPath]}); useAppStore.getState().setView('playlist'); }}><Icon name="share" size={17} />分享歌曲</button>
+      <button role="menuitem" onClick={() => { setMenu(null); useAppStore.getState().toggleDislike(song.audioPath); }}><Icon name="dislike" size={17} style={{transform:'rotate(180deg)'}} />{disliked ? '取消不推荐' : '不推荐这首歌'}</button>
+    </div>,document.body)}
   </div>;
 });
 
@@ -76,7 +102,7 @@ export default function LibraryView() {
   const remove = async (id: string, name: string) => { if (await confirmAction({ title: '删除歌单', message: `删除「${name}」？歌曲文件会保留。`, danger: true })) useAppStore.getState().deleteCollection(id); };
   const start = Math.max(0, Math.floor(scrollTop / 64) - 5);
   const end = Math.min(entries.length, Math.ceil((scrollTop + height) / 64) + 5);
-  return <section className="library-page panel">
+  return <section className={`library-page panel ${showCollections ? 'collections-page' : ''}`}>
     <header className="page-header"><div className="row">{collection && <button className="icon-button" aria-label="返回歌单" onClick={() => useAppStore.setState({ activeCollectionId: null })}><Icon name="back" /></button>}<div><h1>{showCollections ? '我的歌单' : collection?.name || (view === 'home' ? '推荐' : '音乐列表')}</h1><p className="muted">{showCollections ? `${collections.length} 个歌单` : `${filtered.length} 首歌曲`}</p></div></div>
       <div className="toolbar"><button onClick={() => { void useAppStore.getState().reloadSongs().then(() => notify('歌库已刷新','success')).catch(error => notify(errorMessage(error),'error')); }} aria-label="刷新歌库"><Icon name="refresh" />刷新</button><button className="primary" onClick={() => void create()}><Icon name="plus" />新建歌单</button></div>
     </header>
@@ -85,9 +111,10 @@ export default function LibraryView() {
       <div className="toolbar"><button onClick={() => void rename(item.id,item.name)}>重命名</button><button onClick={() => { useAppStore.setState({ shareSelection: item.songs }); useAppStore.getState().setView('playlist'); }}>分享</button><button className="danger" onClick={() => void remove(item.id,item.name)}>删除</button></div>
     </article>)}{!collections.length && <div className="empty">创建歌单，把喜欢的音乐收在一起。</div>}</div> : <>
       <div className="toolbar library-tools"><label className="search-box"><Icon name="search" /><input aria-label="搜索本地歌曲" placeholder="搜索歌曲、歌手或专辑…" value={query} onChange={event => setQuery(event.target.value)} /></label><button className={grouped ? 'active' : ''} onClick={() => setGrouped(!grouped)}><Icon name="group" />按歌手分组</button><button disabled={!filtered.length} onClick={() => void playerService.playSong(filtered[0],filtered)}><Icon name="play" />播放全部</button></div>
+      <div className="song-list-heading" aria-hidden="true"><span>#</span><span>歌曲 / 艺人</span><span className="heading-album">专辑</span><span className="heading-duration"><Icon name="clock" size={14} /></span><span className="heading-actions" /></div>
       <div className="song-viewport" ref={viewport} onScroll={event => setScrollTop(event.currentTarget.scrollTop)}><div style={{ height: entries.length * 64, position: 'relative' }}>
         {entries.slice(start,end).map((entry,index) => <div style={{ position: 'absolute', top: (start+index)*64, height:64, left:0, right:0 }} key={entry.type === 'artist' ? `artist:${entry.artist}` : `song:${start+index}:${entry.song.audioPath}`}>
-          {entry.type === 'artist' ? <button className="artist-header" onClick={() => setCollapsed(previous => { const next = new Set(previous); next.has(entry.artist) ? next.delete(entry.artist) : next.add(entry.artist); return next; })}>{collapsed.has(entry.artist) ? '▸' : '▾'} {entry.artist}<span className="badge">{entry.count}</span></button> : <SongRow song={entry.song} queue={filtered} onChooseCollection={setPickerSong} />}
+          {entry.type === 'artist' ? <button className="artist-header" onClick={() => setCollapsed(previous => { const next = new Set(previous); next.has(entry.artist) ? next.delete(entry.artist) : next.add(entry.artist); return next; })}>{collapsed.has(entry.artist) ? '▸' : '▾'} {entry.artist}<span className="badge">{entry.count}</span></button> : <SongRow song={entry.song} queue={filtered} number={start+index+1} onChooseCollection={setPickerSong} />}
         </div>)}
       </div>{!filtered.length && <div className="empty">{query ? '没有找到匹配的歌曲' : '暂无歌曲，可从音乐导入或免费听音乐添加。'}</div>}</div>
     </>}

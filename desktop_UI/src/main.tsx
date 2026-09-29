@@ -7,6 +7,7 @@ import { persistNow, useAppStore } from './store';
 import { playerService } from './services/player';
 import { notify } from './ui';
 import './styles.css';
+import './design-system.css';
 
 class ErrorBoundary extends Component<{ children:ReactNode },{ error:string }> {
   state = { error:'' };
@@ -24,7 +25,7 @@ if (!lyricsWindow) {
     if (useAppStore.getState().hydrated) await playerService.initialize();
   }).catch(error => notify(errorMessage(error),'error'));
   const keyboard = (event:KeyboardEvent) => {
-    if (event.target instanceof HTMLElement && (event.target.closest('input,textarea,select,[contenteditable="true"],[role="dialog"]') || document.querySelector('[role="dialog"]'))) return;
+    if (event.target instanceof HTMLElement && (event.target.closest('input,textarea,select,button,a,[contenteditable="true"],[role="dialog"],[role="menu"]') || document.querySelector('[role="dialog"]'))) return;
     if (event.code === 'Space') { event.preventDefault(); playerService.toggle(); }
     if (event.ctrlKey && event.key === 'ArrowRight') { event.preventDefault(); playerService.next(1); }
     if (event.ctrlKey && event.key === 'ArrowLeft') { event.preventDefault(); playerService.next(-1); }

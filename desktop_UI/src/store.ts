@@ -3,8 +3,8 @@ import { errorMessage, getBridge } from './api';
 import type { Collection, PlayerState, Settings, Song, SongStats, View } from './types';
 
 export const defaultSettings: Settings = {
-  playMode: 1, volume: 1, fadePause: true, glassOpacity: 0.72, discCover: true, colorIntensity: 0.85,
-  lyricDone: 0.9, lyricWait: 0.55, lyricSize: 15, themeFollowCover: false,
+  playMode: 1, volume: 1, fadePause: true, glassOpacity: 0.72, discCover: false, colorIntensity: 0.85,
+  lyricDone: 0.9, lyricWait: 0.55, lyricSize: 20, themeFollowCover: false,
   progressColorEnabled: false, progressColor: '#fb7299', progressColor2: '#ff5e8a',
   simulateLrcProgress: false, showFloatListBtn: true, artistGroupMode: 'bucket',
   desktopLyricPersist: false, desktopLyricBounds: null, desktopLyricLocked: false,

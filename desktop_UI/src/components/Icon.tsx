@@ -15,6 +15,20 @@ const paths: Record<string, string> = {
   minimize: 'M5 12h14', maximize: 'M5 5h14v14H5Z', refresh: 'M20 7v5h-5M4 17v-5h5M5.4 8a7 7 0 0 1 11.5-4L20 7M4 17l3.1 3A7 7 0 0 0 18.6 16',
   play: 'm8 5 11 7-11 7Z', pause: 'M8 5v14M16 5v14', group: 'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 3a4 4 0 1 1 0 8 4 4 0 0 1 0-8Zm8 1a4 4 0 0 1 0 8m1 3a4 4 0 0 1 4 4v2',
   previous: 'M19 4 7 12l12 8V4ZM5 4v16', next: 'M5 4 17 12 5 20V4Zm14 0v16',
+  arrow: 'M5 12h14m-6-6 6 6-6 6',
+  more: 'M5 12h.01M12 12h.01M19 12h.01',
+  shuffle: 'm18 3 3 3-3 3M3 6h3c4 0 8 12 12 12h3m-3-3 3 3-3 3M3 18h3c1.8 0 3.5-2.4 5-5m2-2c2-3 3.3-5 5-5h3',
+  repeat: 'm17 2 4 4-4 4M3 11V9a3 3 0 0 1 3-3h15M7 22l-4-4 4-4m14-1v2a3 3 0 0 1-3 3H3',
+  repeatOne: 'm17 2 4 4-4 4M3 11V9a3 3 0 0 1 3-3h15M7 22l-4-4 4-4m14-1v2a3 3 0 0 1-3 3H3m8-8 1-1v6',
+  volume: 'M11 5 6 9H3v6h3l5 4V5Zm4 3a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14',
+  muted: 'M11 5 6 9H3v6h3l5 4V5Zm5 4 5 6m0-6-5 6',
+  equalizer: 'M5 3v10m0 4v4M12 3v3m0 4v11M19 3v10m0 4v4M2 13h6M9 6h6m1 7h6',
+  lyrics: 'M4 4h16v14H7l-3 3V4Zm4 5h8m-8 4h5',
+  lock: 'M6 10h12v11H6V10Zm2 0V6a4 4 0 0 1 8 0v4m-4 4v3',
+  unlock: 'M6 10h12v11H6V10Zm2 0V6a4 4 0 0 1 7.5-2m-3.5 10v3',
+  headphones: 'M3 14v-3a9 9 0 0 1 18 0v3M3 13h4v8H5a2 2 0 0 1-2-2v-6Zm18 0h-4v8h2a2 2 0 0 0 2-2v-6Z',
+  clock: 'M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9-5v5l3 2',
+  disc: 'M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-6 0a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z',
 };
 export default function Icon({ name, size = 20, style }: { name: string; size?: number; style?: CSSProperties }) {
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={style}><path d={paths[name] || paths.music} /></svg>;

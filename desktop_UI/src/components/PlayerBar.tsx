@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { errorMessage } from '../api';
 import { useAppStore } from '../store';
 import { formatTime, notify, promptText } from '../ui';
@@ -7,9 +7,10 @@ import { playerService } from '../services/player';
 import Cover from './Cover';
 import Icon from './Icon';
 import AudioFxPanel from './AudioFxPanel';
+import './player-design.css';
 
 const modes = ['单曲循环', '列表循环', '随机播放'];
-const modeIcons = ['↻', '⇄', '⤨'];
+const modeIcons = ['repeatOne', 'repeat', 'shuffle'];
 export default function PlayerBar() {
   const player = useAppStore(state => state.player);
   const settings = useAppStore(state => state.settings);
@@ -48,27 +49,29 @@ export default function PlayerBar() {
     setDragTime(null);
   };
   const time = dragTime ?? player.time;
+  const rangeStyle = { '--range-progress': `${player.duration ? Math.min(100, Math.max(0, time / player.duration * 100)) : 0}%`, '--range-color': settings.progressColorEnabled ? settings.progressColor : 'var(--accent)', '--range-color-end': settings.progressColorEnabled ? settings.progressColor2 : 'var(--accent)' } as CSSProperties;
+  const volumeStyle = { '--range-progress': `${Math.min(100, Math.max(0, settings.volume / 1.5 * 100))}%` } as CSSProperties;
   return <>
-    <footer className="player-bar" aria-label="播放控制">
-      <div className="now-playing"><button className="now-playing-link" aria-label="打开正在播放" onClick={() => useAppStore.getState().setView('player')}><Cover path={player.preview?.cover || player.song?.coverPath} /><span className="song-meta"><strong>{title}</strong><span>{player.loading ? '正在加载…' : artist}</span></span></button>
+    <footer className="player-bar player-deck" aria-label="播放控制">
+      <div className="now-playing"><button className="now-playing-link" aria-label="打开正在播放" title={`${title} · ${artist}`} onClick={() => useAppStore.getState().setView('player')}><Cover path={player.preview?.cover || player.song?.coverPath} /><span className="song-meta"><strong>{title}</strong><span>{player.loading ? '正在加载…' : artist}</span></span></button>
         {player.song && <button className={`icon-button ${liked ? 'active' : ''}`} aria-label="选择当前歌曲的收藏歌单" onClick={() => setPickerOpen(true)}><Icon name="heart" /></button>}
         {player.preview?.onSave && <button className="icon-button" disabled={saving} aria-label="保存试听到歌库" onClick={() => void savePreview()}><Icon name="plus" /></button>}
       </div>
-      <div className="player-central"><div className="player-transport"><button className="icon-button mode-button" title={modes[settings.playMode]} aria-label={`播放模式：${modes[settings.playMode]}`} onClick={() => useAppStore.getState().setSettings({ playMode: (settings.playMode + 1) % 3 })}>{modeIcons[settings.playMode]}</button><button className="icon-button" aria-label="上一首" disabled={!available} onClick={() => playerService.next(-1)}><Icon name="previous" /></button><button className="play-button primary" aria-label={player.playing ? '暂停' : '播放'} disabled={!available && !songs.length} onClick={() => playerService.toggle()}><Icon name={player.playing ? 'pause' : 'play'} size={24} /></button><button className="icon-button" aria-label="下一首" disabled={!available} onClick={() => playerService.next(1)}><Icon name="next" /></button></div>
+      <div className="player-central"><div className="player-transport"><button className="icon-button mode-button" title={modes[settings.playMode]} aria-label={`播放模式：${modes[settings.playMode]}`} onClick={() => useAppStore.getState().setSettings({ playMode: (settings.playMode + 1) % 3 })}><Icon name={modeIcons[settings.playMode]} size={17} /></button><button className="icon-button" aria-label="上一首" disabled={!available} onClick={() => playerService.next(-1)}><Icon name="previous" size={18} /></button><button className="play-button primary" aria-label={player.playing ? '暂停' : '播放'} disabled={!available && !songs.length} onClick={() => playerService.toggle()}><Icon name={player.playing ? 'pause' : 'play'} size={21} /></button><button className="icon-button" aria-label="下一首" disabled={!available} onClick={() => playerService.next(1)}><Icon name="next" size={18} /></button><span className="transport-balance" aria-hidden="true" /></div>
         <div className="player-progress"><span>{formatTime(time)}</span><input aria-label="播放进度" type="range" min={0} max={player.duration || 1} step={0.1} disabled={!player.duration} value={Math.min(time, player.duration || 0)} onPointerDown={event => {
           dragTimeRef.current = Number(event.currentTarget.value); setDragTime(dragTimeRef.current);
           event.currentTarget.setPointerCapture(event.pointerId);
         }} onChange={event => {
           const target = Number(event.currentTarget.value);
           if (dragTimeRef.current !== null) { dragTimeRef.current = target; setDragTime(target); } else playerService.seek(target);
-        }} onPointerUp={event => { if (dragTimeRef.current !== null) dragTimeRef.current = Number(event.currentTarget.value); commitSeek(); }} onPointerCancel={() => { dragTimeRef.current = null; setDragTime(null); }} onKeyUp={commitSeek} onBlur={commitSeek} style={{ accentColor: settings.progressColorEnabled ? settings.progressColor : undefined }} /><span>{formatTime(player.duration)}</span></div>
+        }} onPointerUp={event => { if (dragTimeRef.current !== null) dragTimeRef.current = Number(event.currentTarget.value); commitSeek(); }} onPointerCancel={() => { dragTimeRef.current = null; setDragTime(null); }} onKeyUp={commitSeek} onBlur={commitSeek} style={rangeStyle} /><span>{formatTime(player.duration)}</span></div>
       </div>
-      <div className="player-extras"><button className={`icon-button ${fx.preset !== 'off' ? 'active' : ''}`} title={`音效：${fxName}`} aria-label="打开音效" onClick={() => setFxOpen(true)}>EQ</button><button className={`icon-button ${player.desktopLyricOn ? 'active' : ''}`} title="桌面歌词" aria-label={player.desktopLyricOn ? '关闭桌面歌词' : '打开桌面歌词'} onClick={() => invoke(() => playerService.toggleDesktopLyric())}>词</button>{player.desktopLyricOn && <button className={`icon-button ${settings.desktopLyricLocked ? 'active' : ''}`} aria-label={settings.desktopLyricLocked ? '解锁桌面歌词' : '锁定桌面歌词'} onClick={() => invoke(() => playerService.toggleLyricLock())}>{settings.desktopLyricLocked ? '🔒' : '🔓'}</button>}
-        <label className="volume-control" title={`音量 ${Math.round(settings.volume * 100)}%`}><button className="icon-button" aria-label={settings.volume === 0 ? '取消静音' : '静音'} onClick={() => playerService.setVolume(settings.volume === 0 ? 1 : 0)}>{settings.volume === 0 ? '◌' : '◖'}</button><input aria-label="音量" type="range" min={0} max={1.5} step={0.01} value={settings.volume} onChange={event => playerService.setVolume(Number(event.target.value))} /></label>
+      <div className="player-extras"><button className={`icon-button ${fx.preset !== 'off' ? 'active' : ''}`} title={`音效：${fxName}`} aria-label="打开音效" onClick={() => setFxOpen(true)}><Icon name="equalizer" size={18} /></button><button className={`icon-button ${player.desktopLyricOn ? 'active' : ''}`} title="桌面歌词" aria-label={player.desktopLyricOn ? '关闭桌面歌词' : '打开桌面歌词'} onClick={() => invoke(() => playerService.toggleDesktopLyric())}><Icon name="lyrics" size={18} /></button>{player.desktopLyricOn && <button className={`icon-button ${settings.desktopLyricLocked ? 'active' : ''}`} title={settings.desktopLyricLocked ? '解锁桌面歌词' : '锁定桌面歌词'} aria-label={settings.desktopLyricLocked ? '解锁桌面歌词' : '锁定桌面歌词'} onClick={() => invoke(() => playerService.toggleLyricLock())}><Icon name={settings.desktopLyricLocked ? 'lock' : 'unlock'} size={17} /></button>}
+        <div className="volume-control" title={`音量 ${Math.round(settings.volume * 100)}%`}><button className="icon-button" aria-label={settings.volume === 0 ? '取消静音' : '静音'} onClick={() => playerService.setVolume(settings.volume === 0 ? 1 : 0)}><Icon name={settings.volume === 0 ? 'muted' : 'volume'} size={18} /></button><input aria-label="音量" type="range" min={0} max={1.5} step={0.01} value={settings.volume} style={volumeStyle} onChange={event => playerService.setVolume(Number(event.target.value))} /></div>
         {settings.showFloatListBtn && <button className={`icon-button ${queueOpen ? 'active' : ''}`} title="播放队列" aria-label="打开播放队列" onClick={() => setQueueOpen(!queueOpen)}><Icon name="list" /></button>}
       </div>
     </footer>
-    {queueOpen && <aside className="player-queue panel" aria-label="播放队列"><header className="page-header"><h2>播放队列 <span className="badge">{player.preview?.queue?.length || queue.length}</span></h2><button className="icon-button" aria-label="关闭播放队列" onClick={() => setQueueOpen(false)}>×</button></header><input aria-label="搜索播放队列" placeholder="搜索队列…" value={query} onChange={event => { setQuery(event.target.value); setLimit(100); }} />
+    {queueOpen && <aside className="player-queue panel listening-queue" aria-label="播放队列"><header className="page-header"><h2>播放队列 <span className="badge">{player.preview?.queue?.length || queue.length}</span></h2><button className="icon-button" aria-label="关闭播放队列" onClick={() => setQueueOpen(false)}><Icon name="close" size={18} /></button></header><input aria-label="搜索播放队列" placeholder="搜索队列…" value={query} onChange={event => { setQuery(event.target.value); setLimit(100); }} />
       <div className="queue-list">{player.preview ? (player.preview.queue || [player.preview]).filter(item => !query || `${item.name} ${item.artist}`.toLowerCase().includes(query.toLowerCase())).slice(0, limit).map((item, index) => <button className={`queue-song ${item.name === player.preview?.name && item.artist === player.preview?.artist ? 'active' : ''}`} key={index} onClick={() => invoke(() => playerService.playPreview({ ...item, queue: player.preview?.queue }))}><Cover path={item.cover} /><span className="song-meta"><strong>{item.name}</strong><span>{item.artist}</span></span></button>) : queue.slice(0, limit).map(song => <button className={`queue-song ${song.audioPath === player.song?.audioPath ? 'active' : ''}`} key={song.audioPath} onClick={() => invoke(() => playerService.playSong(song, playerService.getQueue()))}><Cover path={song.coverPath} /><span className="song-meta"><strong>{song.songName}</strong><span>{song.artist}</span></span></button>)}{(player.preview?.queue?.length || queue.length) > limit && <button className="button" onClick={() => setLimit(previous => previous + 100)}>显示更多</button>}{!player.preview && !queue.length && <div className="empty">队列为空</div>}</div>
     </aside>}
     {fxOpen && <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setFxOpen(false); }}><div className="modal-card wide" role="dialog" aria-modal="true" aria-label="音效与均衡器"><AudioFxPanel onClose={() => setFxOpen(false)} /></div></div>}

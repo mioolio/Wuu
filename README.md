@@ -24,6 +24,8 @@ Wuu Music（以下简称"Wuu"）是一款面向 Windows 平台的桌面端音乐
 
 桌面界面现已重构为 React 19 + TypeScript + Vite + Zustand，手机端继续使用 Vue 3。主进程、IPC 接口与本地歌曲目录保持兼容；迁移范围、Git 备份及恢复方式见 [React 桌面迁移说明](docs/REACT_MIGRATION.md)。
 
+桌面 UI 采用炭黑、暖白与浅绿色的统一视觉体系，重新编排推荐首页、分组导航、音乐列表和沉浸式播放器。视觉规范和窗口验证方式见 [桌面设计说明](docs/UI_DESIGN.md)。
+
 ### 设计动机
 
 当前主流音乐平台存在以下问题，Wuu 旨在从技术层面提供解决方案：
