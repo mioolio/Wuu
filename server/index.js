@@ -9,6 +9,8 @@ const { Worker } = require('worker_threads');
 const { WebSocketServer } = require('ws');
 const { configDir, ensureConfigDir, readUserData, writeUserData } = require('../core/storage');
 const { dbgLog, dbgErr } = require('../core/logger');
+const { incrementPlayCount } = require('./play-count');
+const { mergeTogetherState } = require('./together-state');
 
 const DEFAULT_PORT = 30967;
 let _server = null;
@@ -311,14 +313,14 @@ function ensureSharedDir() {
 // 仲裁: 服务器为每个操作分配单调递增 seq + 时间戳, 客户端丢弃过期 seq 避免乱序回退
 // host: 房间内 id 最小者 (即最先加入的人)。歌曲自然播完时只有 host 自动切歌,
 //       其他成员等待 host 的 song 广播, 避免双人同时切歌产生竞争 (乱跳/无法播放)
-// hostSong: host 最近一次携带完整歌曲上下文的操作 (歌名+进度+播放态),
+// hostSong: 房间当前歌曲上下文 (双方切歌; 仅 host 心跳校准), 合并后续控制,
 //       新成员加入(含手动开启一起听)时通过 welcome 立即拉取对齐, 保证一致性
 let _wss = null;
 let _togetherClients = new Map();  // ws → { id }
 let _togetherNextId = 1;
 let _togetherSeq = 0;
 let _togetherLastOp = null;  // 最近一次广播的操作 (迟到者加入时同步用)
-let _togetherHostSong = null;  // host 当前歌曲上下文 (加入即拉取)
+let _togetherHostSong = null;  // 房间当前歌曲上下文 (加入即拉取)
 let _togetherPingTimer = null;
 
 // 房间 host = 在线成员中 id 最小者 (0 表示房间为空)
@@ -360,18 +362,8 @@ function _handleTogetherMessage(ws, raw) {
       from: meta.id,
     };
     _togetherLastOp = entry;
-    // 跟踪 host 的歌曲上下文 (song/state 操作携带完整歌曲时),
-    // 供新成员加入时通过 welcome 立即对齐歌曲与进度
-    if (meta.id === _togetherHostId()) {
-      const p = entry.payload || {};
-      if (p.song && (entry.op === 'song' || entry.op === 'state')) {
-        _togetherHostSong = {
-          song: p.song,
-          position: typeof p.position === 'number' ? p.position : 0,
-          isPlaying: !!p.isPlaying,
-        };
-      }
-    }
+    // 双方切歌立即更新上下文, 仅 host 心跳校准; 当前歌曲控制进入欢迎快照。
+    _togetherHostSong = mergeTogetherState(_togetherHostSong, entry, meta.id === _togetherHostId());
     // 广播给其他端 (发起者已本地应用, 无需回发)
     _broadcastTogether(entry, ws);
   }
@@ -407,6 +399,9 @@ function _ensureTogetherWss() {
       if (_togetherClients.size === 0) {
         _togetherLastOp = null;
         _togetherHostSong = null;
+      } else if (_togetherHostSong) {
+        // 与客户端收到 peer-left 后暂停的行为一致。
+        _togetherHostSong = { ..._togetherHostSong, isPlaying: false };
       }
       // 显式通知退出事件: 剩余成员据此暂停播放; hostId 变化触发继任 host 逻辑
       _broadcastTogether({
@@ -1329,11 +1324,10 @@ function startServer(port, bindIP, whitelist, rateLimit, accessLogEnabled) {
           return;
         }
         const { data, isIsolated } = readSyncData();
-        if (!data.stats) data.stats = {};
-        data.stats[audioPath] = (data.stats[audioPath] || 0) + 1;
+        const count = incrementPlayCount(data, audioPath);
         writeSyncData(data, isIsolated);
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(JSON.stringify({ ok: true, count: data.stats[audioPath] }));
+        res.end(JSON.stringify({ ok: true, count }));
       } catch (e) {
         res.writeHead(500, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ ok: false, message: e.message }));

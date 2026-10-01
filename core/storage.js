@@ -15,7 +15,7 @@ function ensureConfigDir() {
 
 // ---- userdata.json ----
 function _emptyUserData() {
-  return { likes: [], dislikes: [], collections: [], stats: {}, progress: {}, lastSession: null, actualDuration: {}, settings: {} };
+  return { likes: [], dislikes: [], collections: [], stats: {}, progress: {}, lastSession: null, actualDuration: {}, settings: {}, genreOverrides: {} };
 }
 
 // 备份损坏的 userdata 文件, 便于事后恢复 (不覆盖已有备份)
@@ -65,6 +65,7 @@ function readUserData() {
       // 渲染进程 init.js 会把 songs 数组转回 Set
       collections: Array.isArray(data.collections) ? data.collections : [],
       stats: data.stats && typeof data.stats === 'object' ? data.stats : {},
+      genreOverrides: data.genreOverrides && typeof data.genreOverrides === 'object' && !Array.isArray(data.genreOverrides) ? data.genreOverrides : {},
       progress: data.progress && typeof data.progress === 'object' ? data.progress : {},
       lastSession: data.lastSession && typeof data.lastSession === 'object' ? data.lastSession : null,
       actualDuration: data.actualDuration && typeof data.actualDuration === 'object' ? data.actualDuration : {},
@@ -92,6 +93,7 @@ function writeUserData(data) {
     dislikes: Array.isArray(data.dislikes) ? data.dislikes : [],
     collections: Array.isArray(data.collections) ? data.collections : [],
     stats: data.stats && typeof data.stats === 'object' ? data.stats : {},
+    genreOverrides: data.genreOverrides && typeof data.genreOverrides === 'object' && !Array.isArray(data.genreOverrides) ? data.genreOverrides : {},
     progress: data.progress && typeof data.progress === 'object' ? data.progress : {},
     lastSession: data.lastSession && typeof data.lastSession === 'object' ? data.lastSession : null,
     actualDuration: data.actualDuration && typeof data.actualDuration === 'object' ? data.actualDuration : {},

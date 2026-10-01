@@ -1,8 +1,13 @@
 import { create } from 'zustand';
 import { errorMessage, getBridge } from './api';
+import { navigateView } from './services/navigation';
+import { normalizeSongStats } from './services/listeningHistory';
+import { normalizeSidebarWidth, SIDEBAR_DEFAULT_WIDTH } from './services/sidebarPreferences';
 import type { Collection, PlayerState, Settings, Song, SongStats, View } from './types';
 
 export const defaultSettings: Settings = {
+  interfaceMode: 'modern',
+  sidebarCollapsed: true, sidebarWidth: SIDEBAR_DEFAULT_WIDTH,
   playMode: 1, volume: 1, fadePause: true, glassOpacity: 0.72, discCover: false, colorIntensity: 0.85,
   lyricDone: 0.9, lyricWait: 0.55, lyricSize: 20, themeFollowCover: false,
   progressColorEnabled: false, progressColor: '#fb7299', progressColor2: '#ff5e8a',
@@ -18,12 +23,14 @@ export const defaultSettings: Settings = {
 interface AppState {
   songs: Song[]; collections: Collection[]; dislikes: Record<string, number>; likeTimes: Record<string, number>;
   stats: Record<string, SongStats>; progress: Record<string, number>; actualDuration: Record<string, number>;
+  genreOverrides: Record<string, string[]>;
   lastSession: { audioPath: string; t: number } | null; settings: Settings;
   player: PlayerState; view: View; activeCollectionId: string | null; shareSelection: string[];
   hydrated: boolean; loading: boolean; error: string;
   initialize: () => Promise<void>; reloadSongs: () => Promise<void>;
   setView: (view: View) => void; setSettings: (patch: Partial<Settings>) => void;
   setPlayer: (patch: Partial<PlayerState>) => void;
+  setSongGenres: (path: string, genres: string[] | null) => void;
   createCollection: (name: string) => string; renameCollection: (id: string, name: string) => void;
   deleteCollection: (id: string) => void; setCollectionSong: (id: string, path: string, included: boolean) => void;
   toggleLike: (path: string) => void; toggleDislike: (path: string) => void; removeSong: (path: string) => void;
@@ -47,7 +54,7 @@ export function serializeUserData() {
     likes: likedPaths.map(path => ({ path, ts: state.likeTimes[path] || 0 })),
     dislikes: Object.entries(state.dislikes).map(([path, ts]) => ({ path, ts })),
     collections: state.collections, stats: state.stats, progress: state.progress,
-    actualDuration: state.actualDuration, lastSession: state.lastSession, settings: state.settings,
+    actualDuration: state.actualDuration, lastSession: state.lastSession, settings: state.settings, genreOverrides: state.genreOverrides,
   };
 }
 export function persistNow(sync = false) {
@@ -63,14 +70,17 @@ export function persistNow(sync = false) {
     console.error('保存用户数据失败', error); return false;
   });
 }
-export function scheduleSave() { if (saveTimer) clearTimeout(saveTimer); saveTimer = setTimeout(() => persistNow(), 500); }
+export function scheduleSave() { if (!saveTimer) saveTimer = setTimeout(() => persistNow(), 500); }
 function pathTimes(value: any): Record<string, number> {
   const entries = Array.isArray(value) ? value : [];
   return Object.fromEntries(entries.map((entry: any, index: number) => typeof entry === 'string' ? [entry, Date.now() - index] : [entry.path, Number(entry.ts) || 0]).filter(([path]: any[]) => !!path));
 }
+function finiteSetting(value: unknown, fallback: number, min: number, max: number): number {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.min(max, Math.max(min, value)) : fallback;
+}
 
 export const useAppStore = create<AppState>((set, get) => ({
-  songs: [], collections: [], dislikes: {}, likeTimes: {}, stats: {}, progress: {}, actualDuration: {}, lastSession: null,
+  songs: [], collections: [], dislikes: {}, likeTimes: {}, stats: {}, progress: {}, actualDuration: {}, genreOverrides: {}, lastSession: null,
   settings: defaultSettings,
   player: { song: null, index: -1, playing: false, time: 0, duration: 0, loading: false, lyricText: '', preview: null, error: '', desktopLyricOn: false },
   view: savedView(), activeCollectionId: null, shareSelection: [], hydrated: false, loading: true, error: '',
@@ -90,9 +100,16 @@ export const useAppStore = create<AppState>((set, get) => ({
         if (!collections.length && Object.keys(likes).length) collections = [{ id: 'migrated-liked', name: '我喜欢的音乐', songs: Object.keys(likes), createdAt: Date.now() }];
         pendingLocalLikesMigration = migratedLocalLikes;
         set({ songs: Array.isArray(songs) ? songs : [], collections, likeTimes: likes,
-          dislikes: pathTimes(userData?.dislikes), stats: userData?.stats || {}, progress: userData?.progress || {},
+          dislikes: pathTimes(userData?.dislikes), stats: Object.fromEntries(Object.entries(userData?.stats || {}).map(([path,entry]) => [path,normalizeSongStats(entry)])), progress: userData?.progress || {},
           actualDuration: userData?.actualDuration || {}, lastSession: userData?.lastSession || null,
-          settings: { ...defaultSettings, ...userData?.settings }, hydrated: true, loading: false, error: '',
+          genreOverrides: Object.fromEntries(Object.entries(userData?.genreOverrides || {}).filter(([,value]) => Array.isArray(value)).map(([path,value]) => [path,[...new Set((value as unknown[]).filter((genre): genre is string => typeof genre === 'string').map(genre => genre.trim()).filter(Boolean))]])),
+          settings: { ...defaultSettings, ...userData?.settings,
+            interfaceMode: userData?.settings?.interfaceMode === 'classic' ? 'classic' : 'modern',
+            sidebarCollapsed: typeof userData?.settings?.sidebarCollapsed === 'boolean' ? userData.settings.sidebarCollapsed : true,
+            sidebarWidth: normalizeSidebarWidth(userData?.settings?.sidebarWidth),
+            glassOpacity: finiteSetting(userData?.settings?.glassOpacity, defaultSettings.glassOpacity, .12, 1),
+            colorIntensity: finiteSetting(userData?.settings?.colorIntensity, defaultSettings.colorIntensity, 0, 1),
+          }, hydrated: true, loading: false, error: '',
         });
         if (migratedLocalLikes) await persistNow();
       } catch (error) { set({ loading: false, error: errorMessage(error) }); initializeTask = null; }
@@ -105,8 +122,17 @@ export const useAppStore = create<AppState>((set, get) => ({
     const index = current ? songs.findIndex((song: Song) => song.audioPath === current.audioPath) : -1;
     set(state => ({ songs, player: { ...state.player, index, song: index >= 0 ? songs[index] : state.player.song } }));
   },
-  setView: view => { set({ view }); localStorage.setItem('sqet-current-view', view); },
+  setView: view => navigateView(get().view, view, () => { set({ view }); localStorage.setItem('sqet-current-view', view); }),
   setPlayer: patch => set(state => ({ player: { ...state.player, ...patch } })),
+  setSongGenres: (path, genres) => {
+    if (!get().songs.some(song => song.audioPath === path)) return;
+    set(state => {
+      const genreOverrides = { ...state.genreOverrides };
+      if (genres === null) delete genreOverrides[path];
+      else genreOverrides[path] = [...new Set(genres.map(genre => genre.trim()).filter(Boolean))];
+      return { genreOverrides };
+    }); scheduleSave();
+  },
   setSettings: patch => { set(state => ({ settings: { ...state.settings, ...patch } })); scheduleSave(); },
   createCollection: name => {
     const id = crypto.randomUUID();
@@ -143,6 +169,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       return { songs, collections: state.collections.map(c => ({ ...c, songs: c.songs.filter(p => p !== path) })),
         dislikes: clean(state.dislikes), likeTimes: clean(state.likeTimes), stats: clean(state.stats),
         progress: clean(state.progress), actualDuration: clean(state.actualDuration),
+        genreOverrides: clean(state.genreOverrides),
         lastSession: state.lastSession?.audioPath === path ? null : state.lastSession,
         player: { ...state.player, index: songs.findIndex(song => song.audioPath === state.player.song?.audioPath),
           ...(currentDeleted ? { song: null, playing: false, time: 0, duration: 0, lyricText: '' } : {}),

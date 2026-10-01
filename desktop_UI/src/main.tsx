@@ -1,13 +1,13 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
+import './styles.css';
+import './design-system.css';
 import App from './App';
 import DesktopLyrics from './components/DesktopLyrics';
 import { errorMessage } from './api';
 import { persistNow, useAppStore } from './store';
 import { playerService } from './services/player';
 import { notify } from './ui';
-import './styles.css';
-import './design-system.css';
 
 class ErrorBoundary extends Component<{ children:ReactNode },{ error:string }> {
   state = { error:'' };
@@ -25,7 +25,7 @@ if (!lyricsWindow) {
     if (useAppStore.getState().hydrated) await playerService.initialize();
   }).catch(error => notify(errorMessage(error),'error'));
   const keyboard = (event:KeyboardEvent) => {
-    if (event.target instanceof HTMLElement && (event.target.closest('input,textarea,select,button,a,[contenteditable="true"],[role="dialog"],[role="menu"]') || document.querySelector('[role="dialog"]'))) return;
+    if (event.target instanceof HTMLElement && (event.target.closest('input,textarea,select,button,a,summary,[contenteditable="true"],[role="separator"],[role="dialog"],[role="menu"]') || document.querySelector('[role="dialog"]'))) return;
     if (event.code === 'Space') { event.preventDefault(); playerService.toggle(); }
     if (event.ctrlKey && event.key === 'ArrowRight') { event.preventDefault(); playerService.next(1); }
     if (event.ctrlKey && event.key === 'ArrowLeft') { event.preventDefault(); playerService.next(-1); }

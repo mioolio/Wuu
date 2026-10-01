@@ -1052,18 +1052,12 @@ window.addEventListener('resize', () => {
   _resizeTimer = setTimeout(() => { _resizeTimer = null; }, 150);
 });
 window.addEventListener('beforeunload', () => {
+  if (!_userDataReady) return;
   flushDuration();
   saveCurrentProgress();
   // 同步写盘: beforeunload 触发时渲染进程即将销毁, async invoke 可能来不及到达主进程
   // sendSync 阻塞直到主进程 writeFileSync 完成, 确保进度不丢
   if (typeof window.musicAPI.saveUserDataSync === 'function') {
-    window.musicAPI.saveUserDataSync({
-      likes: [...likedSet.entries()].map(([path, ts]) => ({ path, ts })),
-      dislikes: [...dislikedSet.entries()].map(([path, ts]) => ({ path, ts })),
-      collections: (typeof _serializeCollections === 'function') ? _serializeCollections() : [],
-      stats: stats,
-      progress: progress, lastSession: lastSession,
-      actualDuration: actualDuration, settings: appSettings,
-    });
+    window.musicAPI.saveUserDataSync(_serializeUserData());
   }
 });

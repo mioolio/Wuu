@@ -28,6 +28,7 @@ contextBridge.exposeInMainWorld('windowAPI', {
   toggleMaximize: () => ipcRenderer.invoke('window-maximize'),
   close: () => ipcRenderer.invoke('window-close'),
   quit: () => ipcRenderer.invoke('window-quit'),
+  switchInterface: (mode, session) => ipcRenderer.invoke('window-switch-interface', mode, session),
   onWindowState: (cb) => listen('window-state', cb),
 });
 
@@ -83,6 +84,7 @@ contextBridge.exposeInMainWorld('repairAPI', {
 // 桌面歌词窗口接收更新
 contextBridge.exposeInMainWorld('lyricReceiver', {
   onUpdate: (cb) => listen('lyric-update', cb),
+  requestState: () => ipcRenderer.send('lyric-request-state'),
 });
 
 // ===== 桌面端播放状态同步 API (供 renderer 推送状态到主进程) =====

@@ -1,0 +1,28 @@
+const assert=require('node:assert/strict');
+const fs=require('node:fs');
+const path=require('node:path');
+const vm=require('node:vm');
+let mode='modern', packaged=false;
+const sandbox={__dirname:path.join(__dirname,'..','window'),module:{exports:{}},URL,process:{env:{WUU_RENDERER_URL:'http://127.0.0.1:5173/'}},require:name=>{
+  if(name==='electron')return {app:{get isPackaged(){return packaged;}}};
+  if(name==='../core/storage')return {readUserData:()=>({settings:{interfaceMode:mode}})};
+  return require(name);
+}};
+vm.runInNewContext(fs.readFileSync(path.join(sandbox.__dirname,'renderer-entry.js'),'utf8'),sandbox);
+const calls=[];
+const window={loadURL:url=>calls.push({url}),loadFile:(file,options)=>calls.push({file,query:options.query})};
+const {loadRenderer}=sandbox.module.exports;
+loadRenderer(window);
+assert.equal(calls.at(-1).url,'http://127.0.0.1:5173/');
+mode='classic';
+loadRenderer(window,'main',{playing:false,desktopLyrics:true});
+assert.equal(calls.at(-1).file,path.join(__dirname,'..','renderer','index.html'));
+assert.equal(calls.at(-1).query.interfacePaused,'1');
+assert.equal(calls.at(-1).query.desktopLyrics,'1');
+loadRenderer(window,'lyrics');
+assert.equal(calls.at(-1).file,path.join(__dirname,'..','renderer','desktop-lyric.html'));
+assert.equal(calls.at(-1).query.window,'lyrics');
+packaged=true; mode='modern';
+loadRenderer(window);
+assert.equal(calls.at(-1).file,path.join(__dirname,'..','desktop_UI','dist','index.html'));
+console.log('Passed: saved old/new preference selects actual renderer sources in development and packaged startup');

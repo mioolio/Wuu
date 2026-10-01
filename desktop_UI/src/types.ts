@@ -3,6 +3,7 @@ export interface Song {
   songName: string;
   artist: string;
   album?: string;
+  genre?: string[];
   coverPath?: string | null;
   lrcPath?: string | null;
   lyricPath?: string | null;
@@ -34,10 +35,14 @@ export interface Collection {
   createdAt: number;
 }
 
-export interface SongStats { plays: number; duration: number }
+export interface ListeningDay { plays: number; duration: number }
+export interface SongStats { plays: number; duration: number; recentDays?: Record<string, ListeningDay> }
 export type View = 'home' | 'list' | 'liked' | 'player' | 'import' | 'free-music' | 'repair' | 'stats' | 'playlist' | 'management' | 'settings';
 
 export interface Settings {
+  interfaceMode: 'modern' | 'classic';
+  sidebarCollapsed: boolean;
+  sidebarWidth: number;
   playMode: number;
   volume: number;
   fadePause: boolean;

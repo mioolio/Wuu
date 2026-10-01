@@ -29,6 +29,7 @@ function fmtDurationCompact(sec) {
 
 function toUrl(p) {
   if (!p) return '';
+  if (/^(?:https?|file|music|data|blob):/i.test(p)) return p;
   const n = p.replace(/\\/g, '/');
   // 用 file:// 而非 music://: Electron 43 (Chromium 130+) 的 MediaElementAudioSource
   // 对自定义协议执行 CORS 检查, 即使 webSecurity:false 也会静音并触发 PIPELINE_ERROR_READ。

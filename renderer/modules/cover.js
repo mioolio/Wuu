@@ -4,6 +4,18 @@
 let _lastAppliedCoverPath = null;  // 记录上次应用渐变的封面路径, 避免切视图时重复 fade
 let _lastAppliedGradient = null;   // 记录上次生成的渐变字符串
 
+// Current backends return a weighted palette; older bridges can return one RGB color.
+function normalizeCoverPalette(value) {
+  const entries = Array.isArray(value) ? value : [value];
+  return entries.filter(color => color && ['r', 'g', 'b'].every(channel => Number.isFinite(color[channel])))
+    .map(color => ({
+      r: Math.round(Math.max(0, Math.min(255, color.r))),
+      g: Math.round(Math.max(0, Math.min(255, color.g))),
+      b: Math.round(Math.max(0, Math.min(255, color.b))),
+      weight: Number.isFinite(color.weight) ? color.weight : 1,
+    }));
+}
+
 // 判断当前是否应该应用渐变背景
 // 播放器视图 / 试听模式(复用主播放器UI但 currentMode 仍是 qishui/kugou 等) / 跟随封面开关
 // 试听模式下 UI 已切换到主播放器, 用户期望看到封面色背景, 因此必须纳入判断
@@ -60,12 +72,18 @@ async function applyCoverBackground(coverPath) {
     }
     return;
   }
-  const colors = await (
-    /^https?:\/\//i.test(coverPath) || coverPath.startsWith('data:')
-      ? window.musicAPI.extractCoverColorFromURL(coverPath)
-      : window.musicAPI.extractCoverColor(coverPath)
-  );
-  if (!colors || colors.length === 0) {
+  let extracted = null;
+  try {
+    extracted = await (
+      /^https?:\/\//i.test(coverPath) || coverPath.startsWith('data:')
+        ? window.musicAPI.extractCoverColorFromURL(coverPath)
+        : window.musicAPI.extractCoverColor(coverPath)
+    );
+  } catch (error) {
+    console.warn('[cover] 读取封面颜色失败:', error.message);
+  }
+  const colors = normalizeCoverPalette(extracted);
+  if (colors.length === 0) {
     root.style.removeProperty('--cover-accent');
     root.style.removeProperty('--cover-progress-gradient');
     _lastCoverColor = null;

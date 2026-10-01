@@ -219,9 +219,9 @@ audio.addEventListener('pause', () => {
   dbgAudio('pause');
   // 诊断插桩: 暴露触发本次 pause 的完整调用栈 (拖动 bug 定位用, F12 Console 过滤 [SEEK-DIAG])
   console.trace('[SEEK-DIAG] audio.pause 触发, 调用栈:');
+  flushDuration();
   isPlaying = false; btnPlay.innerHTML = ICON_PLAY; stopLrcRAF();
   stopDesktopLyricRAF();
-  flushDuration();
   saveCurrentProgress();
   if (coverEl) coverEl.classList.remove('playing');
   syncDesktopState();
@@ -362,7 +362,7 @@ function flushDuration() {
 // updateContext: 是否用 currentView 更新 playContext
 //   - true: 用户从列表/排行榜手动点歌, playContext = currentView
 //   - false: 自动续播(onEnd) / 上一首下一首按钮, 保持当前 playContext
-async function play(idx, autoResume = true, updateContext = true) {
+async function play(idx, autoResume = true, updateContext = true, countPlay = true) {
   // 首次播放时初始化 WebAudio 增益链 (延迟初始化避开浏览器自动播放策略)
   initWebAudio();
   // 取消可能进行中的暂停渐变 (避免切歌时音量被留在 0)
@@ -505,12 +505,14 @@ async function play(idx, autoResume = true, updateContext = true) {
   if (srcChanged) audio.src = src;
 
   const savedT = autoResume && progress[s.audioPath] ? progress[s.audioPath] : 0;
+  let playbackReady;
+  const playbackStarted = new Promise(resolve => { playbackReady = resolve; });
   const doPlay = () => {
     const dur = getDuration();
     if (savedT > 0 && dur && isFinite(dur) && savedT < dur) {
       audio.currentTime = savedT;
     }
-    audio.play().catch(() => {});
+    audio.play().then(playbackReady, playbackReady);
   };
   if (srcChanged && savedT > 0) {
     let played = false;
@@ -521,7 +523,7 @@ async function play(idx, autoResume = true, updateContext = true) {
     doPlay();
   }
 
-  if (srcChanged) incrPlay(s);
+  if (srcChanged && countPlay) incrPlay(s);
   syncDesktopState();
   syncLrc(audio.currentTime || 0);
   // 切歌时立即重置进度条显示, 避免残留上一首的进度 (onTick 尚未触发时尤为重要)
@@ -536,6 +538,8 @@ async function play(idx, autoResume = true, updateContext = true) {
     window.desktopLyric.send({ type: 'time', t: audio.currentTime || 0, playing: false });
   }
   updCur(); scrollCur();
+  // Callers restoring a paused interface can pause after the deferred resume.
+  await playbackStarted;
 }
 
 function onEnd() {

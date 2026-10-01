@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useUIStore } from '../ui';
+import './global-ui.css';
 
 function Dialog() {
   const dialog = useUIStore(state => state.dialog)!;
@@ -10,18 +11,19 @@ function Dialog() {
   useEffect(() => {
     (card.current?.querySelector('input,button') as HTMLElement)?.focus();
     const keyboard = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
       if (event.key === 'Escape') { event.preventDefault(); finish(null); }
       if (event.key === 'Tab' && card.current) {
         const elements = [...card.current.querySelectorAll<HTMLElement>('button:not(:disabled),input')];
         const first = elements[0], last = elements[elements.length - 1];
-        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
-        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+        if (event.shiftKey && (document.activeElement === first || !card.current.contains(document.activeElement))) { event.preventDefault(); last.focus(); }
+        else if (!event.shiftKey && (document.activeElement === last || !card.current.contains(document.activeElement))) { event.preventDefault(); first.focus(); }
       }
     };
     document.addEventListener('keydown', keyboard);
     return () => { document.removeEventListener('keydown', keyboard); previousFocus.current?.focus(); };
   }, []);
-  return <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) finish(null); }}>
+  return <div className="modal-backdrop global-dialog-surface" onMouseDown={event => { if (event.target === event.currentTarget) finish(null); }}>
     <form className="modal-card" ref={card} role="dialog" aria-modal="true" aria-labelledby="dialog-title" onSubmit={event => { event.preventDefault(); finish(dialog.kind === 'prompt' ? value.trim() : true); }}>
       <h2 id="dialog-title">{dialog.title}</h2>
       {dialog.message && <p className="muted">{dialog.message}</p>}

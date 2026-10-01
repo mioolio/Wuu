@@ -1,0 +1,87 @@
+@property --lyric-color { syntax: '<color>'; inherits: true; initial-value: #fb7299; }
+@property --lyric-secondary { syntax: '<color>'; inherits: true; initial-value: #ffa0bb; }
+
+.lyrics-window .desktop-lyrics {
+  --lyric-color: #fb7299;
+  --lyric-secondary: #ffa0bb;
+  --lyric-wait: rgba(255, 255, 255, .9);
+  --desktop-lyric-size: 30px;
+  --lyric-next-opacity: .55;
+  gap: 8px;
+  padding: 24px 28px 12px;
+  isolation: isolate;
+  transition: --lyric-color 650ms ease, --lyric-secondary 650ms ease;
+}
+.desktop-lyrics .desktop-current-row {
+  flex: 0 0 auto;
+  font-size: clamp(20px, var(--desktop-lyric-size), 42px);
+  font-weight: 750;
+  letter-spacing: .01em;
+  line-height: 1.4;
+  text-align: center;
+  padding-block: 5px;
+  overflow: hidden;
+}
+.desktop-lyrics .desktop-current-row[data-overflow="true"] { text-align: left; }
+.desktop-lyrics .desktop-lyric-track,
+.desktop-lyrics .desktop-char {
+  background: linear-gradient(90deg, var(--lyric-color) 0%, var(--lyric-secondary) var(--fill), var(--lyric-wait) var(--fill), var(--lyric-wait) 100%);
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  -webkit-text-stroke: 1.15px rgba(8, 12, 19, .9);
+  paint-order: stroke fill;
+}
+.desktop-lyrics .desktop-lyric-track { filter: drop-shadow(0 2px 2px rgba(0,0,0,.7)); will-change: transform; }
+.desktop-lyrics .desktop-lyric-track.raw { background: none; }
+.desktop-lyrics .desktop-char { transition: opacity 160ms ease; }
+.desktop-lyrics .desktop-next-row {
+  flex: 0 0 auto;
+  min-height: 24px;
+  font-size: clamp(15px, calc(var(--desktop-lyric-size) * .6), 22px);
+  line-height: 1.4;
+  letter-spacing: .01em;
+  font-weight: 500;
+  color: white;
+  opacity: var(--lyric-next-opacity);
+  -webkit-text-stroke: 1px rgba(8,12,19,.95);
+  text-shadow: 0 2px 4px rgba(0,0,0,.9);
+}
+.desktop-lyrics .desktop-lyric-controls {
+  z-index: 2;
+  top: 0;
+  right: 10px;
+  padding: 3px;
+  gap: 8px;
+  border: 1px solid rgba(255,255,255,.16);
+  border-radius: 24px;
+  background: rgba(16,20,28,.76);
+  backdrop-filter: blur(12px);
+  transition: opacity 180ms ease;
+}
+.desktop-lyrics:hover .desktop-lyric-controls,
+.desktop-lyrics:focus-within .desktop-lyric-controls { opacity: 1; }
+.desktop-lyrics .desktop-lyric-controls button {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: transparent;
+  transition: background 160ms ease, color 160ms ease;
+}
+.desktop-lyrics .desktop-lyric-controls button:hover { background: rgba(255,255,255,.17); color: var(--lyric-color); }
+.desktop-lyrics .desktop-lyric-controls button:active { background: rgba(255,255,255,.24); }
+.desktop-lyrics .desktop-lyric-controls button:focus-visible { outline: 2px solid var(--lyric-color); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) {
+  /* CSS must settle even when Electron throttles animation frames in a covered window. */
+  .lyrics-window .desktop-lyrics { display: grid; grid-template-rows: minmax(0, 1fr) auto; align-items: center; padding: 32px 28px 8px; transition: none; }
+  .desktop-lyrics .desktop-current-row,
+  .desktop-lyrics .desktop-current-row[data-overflow="true"] { text-align: center; min-height: 0; max-height: 100%; font-size: clamp(18px, calc(var(--desktop-lyric-size) * .75), 24px); padding-block: 0; overflow-y: auto; scrollbar-width: thin; -webkit-app-region: no-drag; }
+  .desktop-lyrics .desktop-line-enter { text-align: center; }
+  .desktop-lyrics .desktop-lyric-track { white-space: normal; max-width: 100%; overflow-wrap: anywhere; transform: none !important; will-change: auto; }
+  .desktop-lyrics .desktop-char { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+  .desktop-lyrics .desktop-line-enter, .desktop-lyrics .desktop-next-row { animation: none; }
+  .desktop-lyrics .desktop-char, .desktop-lyrics .desktop-lyric-controls, .desktop-lyrics .desktop-lyric-controls button { transition: none; }
+}

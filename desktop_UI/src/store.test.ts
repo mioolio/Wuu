@@ -20,6 +20,88 @@ beforeEach(() => {
 afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe('现有用户数据迁移',() => {
+  it('旧用户默认收起侧栏，宽度和展开偏好保存时不改动歌曲与播放',async () => {
+    const {useAppStore,persistNow}=await import('./store');
+    await useAppStore.getState().initialize();
+    expect(useAppStore.getState().settings.sidebarCollapsed).toBe(true);
+    expect(useAppStore.getState().settings.sidebarWidth).toBe(184);
+    useAppStore.getState().setPlayer({song:songs[0],playing:true,time:42});
+    const player=useAppStore.getState().player;
+    useAppStore.getState().setSettings({sidebarCollapsed:false,sidebarWidth:232});
+    await persistNow();
+    expect(useAppStore.getState().player).toBe(player);
+    expect(useAppStore.getState().songs).toEqual(songs);
+    expect(saved.mock.calls.at(-1)?.[0].settings).toMatchObject({sidebarCollapsed:false,sidebarWidth:232,volume:1.25});
+  });
+  it('加载已保存的侧栏宽度与展开状态，保留原透明度和颜色强度',async () => {
+    window.musicAPI.getUserData=vi.fn().mockResolvedValue({...source,settings:{...source.settings,sidebarCollapsed:false,sidebarWidth:207.6,glassOpacity:.3,colorIntensity:.95}});
+    const {useAppStore}=await import('./store');
+    await useAppStore.getState().initialize();
+    expect(useAppStore.getState().settings).toMatchObject({sidebarCollapsed:false,sidebarWidth:208,glassOpacity:.3,colorIntensity:.95});
+  });
+  it.each([
+    {sidebarCollapsed:'false',sidebarWidth:NaN,glassOpacity:Infinity,colorIntensity:NaN,expected:[true,184,.72,.85]},
+    {sidebarCollapsed:null,sidebarWidth:500,glassOpacity:-2,colorIntensity:2,expected:[true,260,.12,1]},
+    {sidebarCollapsed:false,sidebarWidth:50,glassOpacity:2,colorIntensity:-1,expected:[false,152,1,0]},
+  ])('修复损坏或越界外观偏好 %#',async ({expected,...settings}) => {
+    window.musicAPI.getUserData=vi.fn().mockResolvedValue({...source,settings:{...source.settings,...settings}});
+    const {useAppStore}=await import('./store');
+    await useAppStore.getState().initialize();
+    const state=useAppStore.getState().settings;
+    expect([state.sidebarCollapsed,state.sidebarWidth,state.glassOpacity,state.colorIntensity]).toEqual(expected);
+  });
+  it('持续播放更新期间也定期保存设置，不无限推迟写盘',async () => {
+    const {useAppStore,scheduleSave}=await import('./store');
+    await useAppStore.getState().initialize();
+    useAppStore.getState().setSettings({lyricSize:24});
+    for(let tick=0;tick<15;tick++) {
+      useAppStore.setState({progress:{[songs[0].audioPath]:tick}});
+      scheduleSave(); await vi.advanceTimersByTimeAsync(100);
+    }
+    expect(saved.mock.calls.length).toBeGreaterThanOrEqual(3);
+    expect(saved.mock.calls.at(-1)?.[0].settings.lyricSize).toBe(24);
+    expect(saved.mock.calls.at(-1)?.[0].progress[songs[0].audioPath]).toBe(14);
+  });
+  it('旧数据默认新版；保存经典界面偏好时保留播放状态和既有设置',async () => {
+    const {useAppStore,serializeUserData,persistNow}=await import('./store');
+    await useAppStore.getState().initialize();
+    expect(useAppStore.getState().settings.interfaceMode).toBe('modern');
+    useAppStore.getState().setPlayer({song:songs[0],playing:true,time:42});
+    const player=useAppStore.getState().player;
+    useAppStore.getState().setSettings({interfaceMode:'classic'});
+    expect(useAppStore.getState().player).toBe(player);
+    expect(serializeUserData().settings.volume).toBe(source.settings.volume);
+    await persistNow();
+    expect(saved.mock.calls.at(-1)?.[0].settings.interfaceMode).toBe('classic');
+  });
+  it('加载已保存的经典界面偏好',async () => {
+    window.musicAPI.getUserData=vi.fn().mockResolvedValue({...source,settings:{...source.settings,interfaceMode:'classic'}});
+    const {useAppStore}=await import('./store');
+    await useAppStore.getState().initialize();
+    expect(useAppStore.getState().settings.interfaceMode).toBe('classic');
+  });
+  it('兼容旧移动端数字播放次数，保留累计次数',async () => {
+    window.musicAPI.getUserData=vi.fn().mockResolvedValue({stats:{[songs[0].audioPath]:7}});
+    const {useAppStore,serializeUserData}=await import('./store');
+    await useAppStore.getState().initialize();
+    expect(serializeUserData().stats[songs[0].audioPath]).toEqual({plays:7,duration:0});
+  });
+  it('保存手工曲风、清空与恢复音频标签不会改动歌曲或旧统计',async () => {
+    window.musicAPI.getUserData=vi.fn().mockResolvedValue({...source,genreOverrides:{[songs[1].audioPath]:['Jazz']}});
+    const {useAppStore,serializeUserData}=await import('./store');
+    await useAppStore.getState().initialize();
+    useAppStore.getState().setSongGenres(songs[0].audioPath,[' Pop ','Pop','']);
+    expect(serializeUserData().genreOverrides[songs[0].audioPath]).toEqual(['Pop']);
+    expect(serializeUserData().genreOverrides[songs[1].audioPath]).toEqual(['Jazz']);
+    useAppStore.getState().setSongGenres(songs[0].audioPath,[]);
+    expect(serializeUserData().genreOverrides[songs[0].audioPath]).toEqual([]);
+    useAppStore.getState().setSongGenres(songs[0].audioPath,null);
+    expect(serializeUserData().genreOverrides).toEqual({[songs[1].audioPath]:['Jazz']});
+    expect(serializeUserData().stats).toEqual(source.stats);
+    expect(useAppStore.getState().songs).toEqual(songs);
+    useAppStore.getState().removeSong(songs[1].audioPath);
+    expect(serializeUserData().genreOverrides).toEqual({});
+  });
   it('初始化前不写空数据；加载后保留收藏、进度、统计和自定义音效',async () => {
     const {useAppStore,persistNow,serializeUserData}=await import('./store');
     persistNow(true); expect(saved).not.toHaveBeenCalled();

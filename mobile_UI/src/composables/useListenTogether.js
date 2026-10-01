@@ -49,6 +49,8 @@ function connect() {
   ws.onopen = () => {
     connected.value = true;
     reconnectAttempts = 0;
+    // 重连后服务器的序号可能从头开始。
+    lastAppliedSeq = 0;
   };
   ws.onclose = () => {
     connected.value = false;
@@ -147,6 +149,7 @@ function _applyRemoteOp(entry, isWelcome) {
         break;
       case 'pause':
         player.pause();
+        if (Number.isFinite(entry.payload?.position)) player.seekTo(entry.payload.position);
         break;
       case 'seek': {
         // 歌对不上时忽略进度跳转, 防止把时间同步到另一首歌上
@@ -154,7 +157,7 @@ function _applyRemoteOp(entry, isWelcome) {
         const mySongId = player.currentSong.value ? player.currentSong.value.id : null;
         if (p.songId != null && mySongId != null && p.songId !== mySongId) break;
         if (audio && typeof p.position === 'number') {
-          audio.currentTime = p.position;
+          player.seekTo(p.position);
         }
         if (p.isPlaying) player.resume();
         break;
@@ -181,7 +184,7 @@ function _applyRemoteOp(entry, isWelcome) {
         const target = (p.position || 0) + 0.15;  // 传输延迟估算
         const drift = target - audio.currentTime;
         if (Math.abs(drift) > 0.4) {
-          audio.currentTime = target;                            // 硬校正
+          player.seekTo(target);                                 // 硬校正
         } else if (Math.abs(drift) > 0.12) {
           audio.playbackRate = drift > 0 ? 1.02 : 0.98;          // 微调追赶
         } else {
@@ -205,20 +208,17 @@ function _applySongPayload(payload) {
   if (cur && cur.id === song.id) {
     // 同一首歌: 仅对齐进度与播放态
     if (audio && typeof payload.position === 'number') {
-      audio.currentTime = payload.position;
+      player.seekTo(payload.position);
     }
     if (payload.isPlaying && audio && audio.paused) player.resume();
     if (!payload.isPlaying && audio && !audio.paused) player.pause();
   } else {
-    player.playSong(song);
-    // 切歌后 src 加载需要时间, 延迟对齐进度
-    if (typeof payload.position === 'number' && payload.position > 3) {
-      const pos = payload.position;
-      setTimeout(() => {
-        const a = player.getAudioEl();
-        if (a && Math.abs(a.currentTime - pos) > 1) a.currentTime = pos;
-      }, 500);
-    }
+    player.playSong(song, {
+      position: payload.position,
+      autoplay: !!payload.isPlaying,
+      restoreProgress: false,
+      notify: false,
+    });
   }
 }
 

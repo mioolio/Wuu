@@ -13,7 +13,7 @@ const screenshots = [];
 async function review(empty = false) {
   const app = await electron.launch({
     executablePath:require('electron'), args:[path.join(__dirname, 'smoke-main.cjs')], cwd:root,
-    env:{...process.env, WUU_RENDERER_URL:'', WUU_SMOKE_PACKAGED:'0', WUU_VISUAL_FIXTURE:empty ? 'empty' : '1'}, timeout:30000,
+    env:{...process.env, WUU_RENDERER_URL:'', WUU_SMOKE_PACKAGED:'0', WUU_VISUAL_FIXTURE:empty ? 'empty' : '1', WUU_REVIEW_PROFILE:'visual'}, timeout:30000,
   });
   const errors = [];
   try {
@@ -115,6 +115,22 @@ async function review(empty = false) {
       await resize(1100,720);
       await capture('home-dark-1100x720', '推荐');
       await capture('player-dark-1100x720', '正在播放');
+      await nav.getByRole('button', {name:'音乐列表', exact:true}).click();
+      const longTitle = '等最后一班地铁带我穿过这座还未入睡的城市';
+      await page.getByRole('textbox', {name:'搜索本地歌曲'}).fill(longTitle);
+      await page.locator('.song-main').filter({hasText:longTitle}).click();
+      for (const [width, height] of [[1100,720], [800,500]]) {
+        await resize(width, height);
+        await capture(`player-long-title-${width}x${height}`, '正在播放');
+        const layout = await page.evaluate(() => {
+          const title = document.querySelector('.record-info').getBoundingClientRect();
+          const sleeve = document.querySelector('.record-sleeve').getBoundingClientRect();
+          const actions = document.querySelector('.player-actions').getBoundingClientRect();
+          const bar = document.querySelector('.player-bar').getBoundingClientRect();
+          return {titleBelow:title.top >= sleeve.bottom, actionsVisible:actions.bottom < bar.top - 4};
+        });
+        assert.deepEqual(layout, {titleBelow:true, actionsVisible:true}, 'Long song titles remain beneath the artwork with unobscured actions');
+      }
       console.log('Passed: keyboard menu, Escape focus restoration, Space preserves playback on a focused button');
     }
     assert.deepEqual(errors, [], 'Renderer must not report errors');

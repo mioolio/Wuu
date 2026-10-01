@@ -1,0 +1,24 @@
+/* The rail lives beside page snapshots, so navigation never recreates its thumb. */
+.has-scroll-rail { scrollbar-width: none; }
+.has-scroll-rail::-webkit-scrollbar { width: 0; height: 0; }
+.page-scroll-rail {
+  position: absolute; z-index: 4; right: 1px; top: 0; width: 20px;
+  height: var(--rail-height); transform: translateY(var(--rail-top));
+  opacity: 0; pointer-events: none; touch-action: none; outline: none;
+  transition: opacity 180ms ease, transform 380ms var(--ease-out);
+}
+.page-scroll-rail.is-visible { opacity: .62; pointer-events: auto; }
+.page-scroll-rail:hover, .page-scroll-rail:focus-visible, .page-scroll-rail.is-dragging { opacity: 1; }
+.page-scroll-rail:focus-visible { background: var(--accent-soft); border-radius: 8px; outline: 1px solid var(--accent); outline-offset: -2px; }
+.page-scroll-thumb {
+  position: absolute; inset: 0 8px; background: color-mix(in srgb, var(--muted) 70%, transparent);
+  transform: translateY(var(--thumb-position));
+  clip-path: inset(0 0 calc(100% - var(--thumb-size)) 0 round 3px);
+  transition: transform 380ms var(--ease-out), clip-path 380ms var(--ease-out), background 180ms ease;
+}
+.page-scroll-rail:hover .page-scroll-thumb, .page-scroll-rail:focus-visible .page-scroll-thumb, .page-scroll-rail.is-dragging .page-scroll-thumb { background: var(--muted); }
+/* Wheel and drag track native input immediately; only page geometry eases. */
+.page-scroll-rail.is-dragging .page-scroll-thumb, .page-scroll-rail.is-scrolling .page-scroll-thumb { transition: background 180ms ease; }
+@media (prefers-reduced-motion: reduce) {
+  .page-scroll-rail, .page-scroll-thumb { transition: none; }
+}

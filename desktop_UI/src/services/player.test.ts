@@ -25,18 +25,29 @@ let store: (typeof import('../store'))['useAppStore'];
 let media: FakeMedia;
 const reportFailed = vi.fn(async () => {});
 const synchronize = vi.fn(async () => {});
+const extractColor = vi.fn(async (_path: string): Promise<unknown> => null);
+const extractColorURL = vi.fn(async (_url: string): Promise<unknown> => null);
+const desktopSend = vi.fn();
+const rootProperties = new Map<string, string>();
+const getSongs = vi.fn(async (): Promise<Song[]> => songs);
+const mediaSession = { metadata: null as MediaMetadata | null, setActionHandler: vi.fn(), setPositionState: vi.fn(), playbackState: 'none' };
+class FakeMediaMetadata {
+  constructor(data: MediaMetadataInit) { Object.assign(this, data); }
+}
 
 beforeAll(async () => {
   media = new FakeMedia();
   const fakeWindow = Object.assign(new EventTarget(), {
-    musicAPI: { getSongs: async () => songs, getUserData: async () => ({}), getLyrics: async () => '', saveUserData: async () => {}, onDurationUpdate: () => () => {}, extractCoverColor: async () => null, extractCoverColorFromURL: async () => null },
-    desktopLyric: { onClosed: () => () => {}, onLockChanged: () => () => {}, onBoundsSaved: () => () => {}, send: () => {}, toggle: async () => {}, lock: async () => {} },
+    musicAPI: { getSongs, getUserData: async () => ({}), getLyrics: async () => '', saveUserData: async () => {}, onDurationUpdate: () => () => {}, extractCoverColor: extractColor, extractCoverColorFromURL: extractColorURL },
+    desktopLyric: { onClosed: () => () => {}, onLockChanged: () => () => {}, onBoundsSaved: () => () => {}, send: desktopSend, toggle: async () => {}, lock: async () => {} },
     stateAPI: { updateDesktopState: synchronize }, repairAPI: { reportPlayFailed: reportFailed },
+    MediaMetadata: FakeMediaMetadata,
   });
   vi.stubGlobal('window', fakeWindow);
   vi.stubGlobal('HTMLMediaElement', FakeMedia);
-  vi.stubGlobal('navigator', {});
-  vi.stubGlobal('document', { createElement: () => media, documentElement: { style: { setProperty: () => {}, removeProperty: () => {} } } });
+  vi.stubGlobal('navigator', { mediaSession });
+  vi.stubGlobal('MediaMetadata', FakeMediaMetadata);
+  vi.stubGlobal('document', { createElement: () => media, documentElement: { style: { setProperty: (key: string, value: string) => rootProperties.set(key, value), removeProperty: (key: string) => rootProperties.delete(key) } } });
   vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => {} });
   service = (await import('./player')).playerService;
   store = (await import('../store')).useAppStore;
@@ -45,8 +56,118 @@ beforeAll(async () => {
 
 beforeEach(() => {
   service.stop(); media.failedPaths.clear(); reportFailed.mockClear(); synchronize.mockClear();
+  extractColor.mockReset().mockResolvedValue(null); extractColorURL.mockReset().mockResolvedValue(null); desktopSend.mockClear();
+  getSongs.mockReset().mockResolvedValue(songs); mediaSession.metadata = null;
+  store.getState().setPlayer({ desktopLyricOn: false });
   store.setState({ songs: [...songs], collections: [], stats: {}, dislikes: {}, progress: {}, actualDuration: {}, lastSession: null, view: 'home', activeCollectionId: null,
-    settings: { ...store.getState().settings, playMode: 1, volume: 1, fadePause: false } });
+    settings: { ...store.getState().settings, playMode: 1, volume: 1, fadePause: false, themeFollowCover: false, colorIntensity: 0.85 } });
+});
+
+describe('cover colors stay in sync with the active song and desktop lyrics', () => {
+  it('changes the whole window palette immediately when following is enabled and restores neutral surfaces when disabled', async () => {
+    extractColor.mockResolvedValue([{ r: 206, g: 76, b: 87, weight: 1 }]);
+    const song = { ...songs[0], coverPath: 'C:/cover.png' };
+    store.setState({ songs: [song] });
+    await service.playSong(song);
+    await vi.waitFor(() => expect(rootProperties.get('--cover-color')).toBe('rgb(206, 76, 87)'));
+    expect(rootProperties.get('--shell-surface')).toBe('rgb(23, 23, 25)');
+    store.getState().setSettings({ themeFollowCover: true });
+    expect(rootProperties.get('--shell-surface')).not.toBe('rgb(23, 23, 25)');
+    expect(rootProperties.get('--shell-chrome')).not.toBe('rgb(20, 20, 23)');
+    expect(extractColor).toHaveBeenCalledTimes(1);
+    store.getState().setSettings({ themeFollowCover: false });
+    expect(rootProperties.get('--shell-surface')).toBe('rgb(23, 23, 25)');
+    expect(rootProperties.get('--shell-chrome')).toBe('rgb(20, 20, 23)');
+    expect(rootProperties.get('--shell-atmosphere')).toBe('rgba(0, 0, 0, 0)');
+    expect(rootProperties.get('--cover-color')).toBe('rgb(206, 76, 87)');
+  });
+  it('refreshes same-song artwork and media metadata after a library reload without repeating work on time updates', async () => {
+    const song = { ...songs[0], coverPath: 'C:/original.png' };
+    store.setState({ songs: [song] });
+    extractColor.mockResolvedValue([{ r: 206, g: 76, b: 87 }]);
+    await service.playSong(song);
+    extractColor.mockClear().mockResolvedValue([{ r: 42, g: 146, b: 166 }]);
+    const updated = { ...song, coverPath: 'C:/repaired.png' };
+    getSongs.mockResolvedValue([updated]);
+    await store.getState().reloadSongs();
+    await vi.waitFor(() => expect(rootProperties.get('--cover-color')).toBe('rgb(42, 146, 166)'));
+    expect(extractColor).toHaveBeenCalledExactlyOnceWith(updated.coverPath);
+    expect(mediaSession.metadata?.artwork).toEqual([{ src: 'music:///C:/repaired.png' }]);
+    expect(synchronize).toHaveBeenLastCalledWith(expect.objectContaining({ songInfo: expect.objectContaining({ coverPath: updated.coverPath }) }));
+    for (let time = 1; time <= 5; time++) {
+      media.currentTime = time; media.dispatchEvent(new Event('timeupdate'));
+    }
+    getSongs.mockResolvedValue([{ ...updated, realDuration: 130 }]);
+    await store.getState().reloadSongs();
+    expect(extractColor).toHaveBeenCalledTimes(1);
+    getSongs.mockResolvedValue([{ ...updated, coverPath: null }]);
+    await store.getState().reloadSongs();
+    expect(rootProperties.get('--cover-color')).toBe('rgb(251, 114, 153)');
+    expect(mediaSession.metadata?.artwork).toEqual([]);
+  });
+  it.each(['resolve', 'reject'] as const)('ignores an older same-song extraction that later %ss after a cover refresh', async outcome => {
+    let resolveOld!: (color: unknown) => void, rejectOld!: (reason: Error) => void;
+    extractColor.mockImplementationOnce(() => new Promise((resolve, reject) => { resolveOld = resolve; rejectOld = reject; }));
+    extractColor.mockResolvedValue([{ r: 42, g: 146, b: 166 }]);
+    const original = { ...songs[0], coverPath: 'C:/old.png' };
+    store.setState({ songs: [original] });
+    await service.playSong(original);
+    getSongs.mockResolvedValue([{ ...original, coverPath: 'C:/new.png' }]);
+    await store.getState().reloadSongs();
+    await vi.waitFor(() => expect(rootProperties.get('--cover-color')).toBe('rgb(42, 146, 166)'));
+    if (outcome === 'resolve') resolveOld([{ r: 206, g: 76, b: 87 }]);
+    else rejectOld(new Error('Old cover disappeared'));
+    await Promise.resolve();
+    expect(rootProperties.get('--cover-color')).toBe('rgb(42, 146, 166)');
+    expect(mediaSession.metadata?.artwork).toEqual([{ src: 'music:///C:/new.png' }]);
+  });
+  it('reads the palette array and sends the latest color when the desktop window opens later', async () => {
+    extractColor.mockResolvedValue([{ r: 206, g: 76, b: 87, weight: 1 }]);
+    const song = { ...songs[0], coverPath: 'C:/cover.png' };
+    store.setState({ songs: [song], settings: { ...store.getState().settings, themeFollowCover: false } });
+    await service.playSong(song);
+    await vi.waitFor(() => expect(rootProperties.get('--cover-color')).toBe('rgb(206, 76, 87)'));
+    expect(rootProperties.get('--cover-accent')).not.toContain('undefined');
+    await service.toggleDesktopLyric();
+    expect(desktopSend).toHaveBeenCalledWith({ type: 'color', color: { r: 206, g: 76, b: 87 } });
+    desktopSend.mockClear(); service.stop();
+    expect(desktopSend).toHaveBeenCalledWith({ type: 'info', info: { title: '', artist: '' } });
+    expect(desktopSend).toHaveBeenCalledWith({ type: 'time', t: 0, playing: false });
+    expect(desktopSend).toHaveBeenCalledWith({ type: 'color', color: null });
+  });
+  it('routes remote library covers to the URL decoder and local preview covers to the file decoder', async () => {
+    const song = { ...songs[0], coverPath: 'https://example.test/cover.png' };
+    store.setState({ songs: [song] });
+    await service.playSong(song);
+    expect(extractColorURL).toHaveBeenCalledWith(song.coverPath);
+    expect(extractColor).not.toHaveBeenCalled();
+    await service.playPreview({ name: 'Local art', artist: 'Artist', url: 'https://example.test/song.mp3', cover: 'C:/cover.png' });
+    expect(extractColor).toHaveBeenCalledWith('C:/cover.png');
+  });
+  it('ignores a delayed old color request and resets colors when playback stops', async () => {
+    let resolveOld!: (color: unknown) => void;
+    extractColor.mockImplementationOnce(() => new Promise(resolve => { resolveOld = resolve; }));
+    extractColor.mockResolvedValue([{ r: 42, g: 146, b: 166 }]);
+    const first = { ...songs[0], coverPath: 'C:/first.png' }, second = { ...songs[1], coverPath: 'C:/second.png' };
+    store.setState({ songs: [first, second] });
+    await service.playSong(first); await service.playSong(second);
+    await vi.waitFor(() => expect(rootProperties.get('--cover-color')).toBe('rgb(42, 146, 166)'));
+    resolveOld([{ r: 206, g: 76, b: 87 }]);
+    await Promise.resolve();
+    expect(rootProperties.get('--cover-color')).toBe('rgb(42, 146, 166)');
+    service.stop();
+    expect(rootProperties.get('--cover-color')).toBe('rgb(251, 114, 153)');
+  });
+  it('uses the fallback after a failed current artwork request', async () => {
+    extractColor.mockRejectedValue(new Error('Unreadable cover'));
+    const song = { ...songs[0], coverPath: 'C:/broken.png' };
+    store.setState({ songs: [song] });
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await service.playSong(song);
+    await vi.waitFor(() => expect(warning).toHaveBeenCalled());
+    expect(rootProperties.get('--cover-color')).toBe('rgb(251, 114, 153)');
+    warning.mockRestore();
+  });
 });
 afterAll(async () => { service.dispose(); await (await import('../store')).persistNow(); vi.unstubAllGlobals(); });
 

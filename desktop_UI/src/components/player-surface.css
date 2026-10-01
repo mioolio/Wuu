@@ -1,0 +1,20 @@
+/* Transitions reverse from their current frame when a close is interrupted. */
+.player-dialog-surface[data-state] { view-transition-name: none; animation: none; opacity: 1; transition: opacity 170ms ease-out; }
+.player-dialog-surface[data-state] > .modal-card { animation: none; opacity: 1; transform: none; transition: opacity 280ms cubic-bezier(.2,.8,.2,1), transform 280ms cubic-bezier(.2,.8,.2,1); }
+.player-dialog-surface[data-state="closing"] { pointer-events: none; opacity: 0; transition-timing-function: ease-in; }
+.player-dialog-surface[data-state="closing"] > .modal-card { opacity: 0; transform: translateY(6px) scale(.985); transition-duration: 170ms; transition-timing-function: ease-in; }
+.player-dialog-surface[data-state="closed"] { opacity: 0; }
+.player-queue.listening-queue[data-state] { animation: none; opacity: 1; transform: none; transition: opacity 300ms cubic-bezier(.2,.8,.2,1), transform 300ms cubic-bezier(.2,.8,.2,1); }
+.player-queue.listening-queue[data-state="closing"] { pointer-events: none; opacity: 0; transform: translateX(10px); transition-duration: 170ms; transition-timing-function: ease-in; }
+.player-queue.listening-queue[data-state="closed"] { opacity: 0; }
+@starting-style {
+  .player-dialog-surface[data-state="open"] { opacity: 0; }
+  .player-dialog-surface[data-state="open"] > .modal-card { opacity: 0; transform: translateY(12px) scale(.975); }
+  .player-queue.listening-queue[data-state="open"] { opacity: 0; transform: translateX(18px); }
+}
+.audio-fx-panel .fx-band { transition: color 180ms ease, background 180ms ease, box-shadow 180ms ease; }
+.audio-fx-panel .fx-band:focus-within { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent); }
+@media (prefers-reduced-motion: reduce) {
+  .player-dialog-surface[data-state], .player-dialog-surface[data-state] > .modal-card, .player-queue.listening-queue[data-state] { animation: none; transition: none; }
+  .audio-fx-panel .fx-band { transition: none; }
+}

@@ -3,10 +3,11 @@
 // 最大化/还原用手动保存/恢复 bounds (transparent 下 unmaximize() 不可靠)
 // 关闭按钮隐藏到托盘, 仅托盘右键"退出"才真正退出
 const path = require('path');
+const fs = require('fs');
 const { BrowserWindow, ipcMain, Tray, Menu, nativeImage, app } = require('electron');
 const state = require('../core/state');
 const { createDesktopLyricWindow, destroyDesktopLyricWindow } = require('./desktop-lyric');
-const { loadRenderer } = require('./renderer-entry');
+const { loadRenderer, rendererPath } = require('./renderer-entry');
 
 let tray = null;
 let isQuitting = false;
@@ -203,6 +204,37 @@ ipcMain.handle('window-maximize', () => {
   }
 });
 ipcMain.handle('window-close', () => { state.getMainWindow()?.close(); });
+let switchingInterface = false;
+ipcMain.handle('window-switch-interface', (event, mode, session = {}) => {
+  const mainWindow = state.getMainWindow();
+  if (!mainWindow || event.sender !== mainWindow.webContents) return { ok:false, message:'主窗口不可用' };
+  if (mode !== 'classic' && mode !== 'modern') return { ok:false, message:'不支持的界面版本' };
+  if (switchingInterface) return { ok:false, message:'正在切换界面' };
+  if (!fs.existsSync(rendererPath('main', mode))) return { ok:false, message:'界面文件缺失，请重新构建或安装应用' };
+  const { readUserData, writeUserData } = require('../core/storage');
+  const previousMode = /\/renderer\/index\.html(?:\?|$)/.test(mainWindow.webContents.getURL()) ? 'classic' : 'modern';
+  const data = readUserData();
+  data.settings = { ...data.settings, interfaceMode:mode };
+  if (writeUserData(data) === false) return { ok:false, message:'界面偏好保存失败' };
+  const desktopLyrics = state.getLyricWin()?.isVisible() || false;
+  switchingInterface = true;
+  // Resolve IPC before replacing the document that invoked it.
+  setTimeout(async () => {
+    try {
+      destroyDesktopLyricWindow();
+      createDesktopLyricWindow();
+      await loadRenderer(mainWindow, 'main', { mode, playing:session.playing !== false, desktopLyrics });
+    } catch (error) {
+      console.error('[interface switch]', error.message);
+      const restored = readUserData();
+      restored.settings = { ...restored.settings, interfaceMode:previousMode };
+      writeUserData(restored);
+      destroyDesktopLyricWindow(); createDesktopLyricWindow();
+      await loadRenderer(mainWindow, 'main', {mode:previousMode,playing:session.playing !== false,desktopLyrics}).catch(() => {});
+    } finally { switchingInterface = false; }
+  }, 50);
+  return { ok:true };
+});
 // 真正退出 (从托盘"退出"或 UI 主动退出, 绕过 hide-to-tray)
 ipcMain.handle('window-quit', () => {
   isQuitting = true;

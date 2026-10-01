@@ -5,12 +5,15 @@ const path = require('path');
 const root = path.join(__dirname, '..');
 const runtimeRoot = process.env.WUU_SMOKE_PACKAGED === '1' ? path.join(root, 'dist', 'win-unpacked', 'resources', 'app.asar') : root;
 const artifacts = path.join(root, '.test-artifacts');
+const polishFixture = process.env.WUU_PLAYER_POLISH_FIXTURE === '1';
+const coverStartup = polishFixture && ['hidden', 'minimized'].includes(process.env.WUU_COVER_STARTUP) ? process.env.WUU_COVER_STARTUP : '';
 const visualFixture = ['1', 'empty'].includes(process.env.WUU_VISUAL_FIXTURE);
 const emptyFixture = process.env.WUU_VISUAL_FIXTURE === 'empty';
-const profile = path.join(artifacts, visualFixture ? `electron-visual-profile${emptyFixture ? '-empty' : ''}` : process.env.WUU_SMOKE_PACKAGED === '1' ? 'electron-packed-profile' : 'electron-profile');
+const reviewProfile = /^[a-z0-9-]+$/.test(process.env.WUU_REVIEW_PROFILE || '') ? '-' + process.env.WUU_REVIEW_PROFILE : '';
+const profile = path.join(artifacts, (polishFixture ? `electron-player-polish-profile${coverStartup ? '-' + coverStartup : ''}` : visualFixture ? `electron-visual-profile${emptyFixture ? '-empty' : ''}` : process.env.WUU_SMOKE_PACKAGED === '1' ? 'electron-packed-profile' : 'electron-profile') + reviewProfile);
 fs.mkdirSync(profile, { recursive: true });
 app.setPath('userData', profile);
-const fixture = path.join(artifacts, visualFixture ? '视觉验证音乐' : '音乐 文件');
+const fixture = path.join(artifacts, polishFixture ? '播放器细节验证音乐' : visualFixture ? '视觉验证音乐' : '音乐 文件');
 fs.mkdirSync(fixture, { recursive: true });
 const audioPath = path.join(fixture, 'React 测试歌曲.wav');
 const lyricPath = path.join(fixture, '测试歌词.lrc');
@@ -62,17 +65,89 @@ if (visualFixture) {
     settings:{playMode:1,volume:.5,serverEnabled:false,mobileEnabled:false,discCover:false},
   };
 }
+// The polish suite deliberately exercises the production palette IPC and PNG decoder.
+// Existing smoke/visual fixtures keep their original small, deterministic RGB stub.
+const polish = { lyricPayloads: [], expectedColors: [[206, 76, 87], [42, 146, 166]], lines: [], imageRules:{}, imageRequests:[] };
+if (polishFixture) {
+  const zlib = require('zlib');
+  const crc32 = buffer => {
+    let crc = 0xffffffff;
+    for (const byte of buffer) {
+      crc ^= byte;
+      for (let bit = 0; bit < 8; bit++) crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
+    }
+    return (crc ^ 0xffffffff) >>> 0;
+  };
+  const chunk = (type, data) => {
+    const body = Buffer.concat([Buffer.from(type), data]);
+    const size = Buffer.alloc(4); size.writeUInt32BE(data.length);
+    const crc = Buffer.alloc(4); crc.writeUInt32BE(crc32(body));
+    return Buffer.concat([size, body, crc]);
+  };
+  const writeCover = (file, rgb) => {
+    const width = 128, height = 128;
+    const header = Buffer.alloc(13); header.writeUInt32BE(width); header.writeUInt32BE(height, 4); header[8] = 8; header[9] = 6;
+    const pixels = Buffer.alloc((width * 4 + 1) * height);
+    for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+      const offset = y * (width * 4 + 1) + 1 + x * 4;
+      pixels[offset] = rgb[0]; pixels[offset + 1] = rgb[1]; pixels[offset + 2] = rgb[2]; pixels[offset + 3] = 255;
+    }
+    fs.writeFileSync(file, Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]), chunk('IHDR', header), chunk('IDAT', zlib.deflateSync(pixels)), chunk('IEND', Buffer.alloc(0))]));
+  };
+  polish.lines = [
+    [0, '晚风'], [5, '沿着海岸慢慢走'], [10, '把喧嚣留在身后'], [16, '下一站会有温柔'],
+    [22, '我们把今天的故事留给漫长的海岸线然后一起穿过那座仍然灯火通明的城市继续向着星光走去直到下一次日出再把没有说完的话慢慢说给彼此听'],
+    [34, '听'], [40, '这一刻让时间停留'], [48, '日落之后还有星光'], [56, '沿着来时的路'], [64, '一起回家'], [76, '明天见'],
+  ];
+  const rawPath = path.join(fixture, '逐字与长短行.raw');
+  fs.writeFileSync(rawPath, '[lyricist:Wuu 测试]\n[composer:Wuu 测试]\n' + polish.lines.map(([time, text], index) => {
+    const duration = ((polish.lines[index + 1]?.[0] || 88) - time) * 1000;
+    const step = Math.min(700, Math.floor(duration / [...text].length));
+    return `[${time * 1000},${duration}]` + [...text].map((character, i) => `<${i * step},${step},0>${character}`).join('');
+  }).join('\n'), 'utf8');
+  songs = ['玫瑰色的黄昏', '蓝色海岸', '没有封面的歌'].map((songName, index) => {
+    const file = path.join(fixture, `${songName}.wav`); fs.copyFileSync(audioPath, file);
+    const coverPath = index < 2 ? path.join(fixture, `${songName}.png`) : null;
+    if (coverPath) writeCover(coverPath, polish.expectedColors[index]);
+    return { id:index, audioPath:file, songName, artist:'Wuu 细节验证', album:'封面与歌词', coverPath, lrcPath:lyricPath, rawPath, realDuration:seconds };
+  });
+  polish.makeCoverVariant = (index, tag, rule = {}) => {
+    const file = path.join(fixture, `${songs[index].songName}-${tag}.png`);
+    writeCover(file, polish.expectedColors[index]);
+    songs[index].coverPath = file;
+    polish.imageRules[file.toLowerCase()] = { ...rule };
+    return file;
+  };
+  if (coverStartup) polish.makeCoverVariant(0, `startup-${coverStartup}`, { delayMs:coverStartup === 'hidden' ? 9200 : 1200 });
+  userData = { likes:[], dislikes:[], collections:[], stats:{}, progress:{}, actualDuration:{}, lastSession:null,
+    settings:{ playMode:1, volume:.5, fadePause:false, serverEnabled:false, mobileEnabled:false, discCover:true, themeFollowCover:false,
+      progressColorEnabled:false, simulateLrcProgress:true, marqueeEnabled:true, marqueeSpeed:90, marqueePause:.3, lyricSize:20, lyricWait:.55, lyricDone:.9 } };
+  ipcMain.on('lyric-data', (_event, payload) => {
+    polish.lyricPayloads.push(payload);
+    if (polish.lyricPayloads.length > 2000) polish.lyricPayloads.shift();
+  });
+}
 let serverRunning = false, accepted = false;
 const calls = [];
-global.__wuuSmoke = { songs,calls,get data() { return userData; } };
+global.__wuuSmoke = { songs,calls,polish,get data() { return userData; } };
 const handle = (channel, callback) => ipcMain.handle(channel, (event,...args) => { calls.push(channel); return callback(event,...args); });
 handle('get-songs', () => songs);
 handle('get-userdata', () => userData);
 handle('save-userdata', (_event,data) => { userData=data; });
 ipcMain.on('save-userdata-sync',(event,data) => { userData=data; event.returnValue=true; });
 handle('get-lyrics',(_event,file) => fs.readFileSync(file,'utf8'));
-handle('extract-cover-color',() => ({r:212,g:117,b:158}));
-handle('extract-cover-color-url',() => ({r:212,g:117,b:158}));
+if (!polishFixture) {
+  const visualColor = source => {
+    if (visualFixture && typeof source === 'string' && source.startsWith('data:image/svg+xml')) {
+      const svg = decodeURIComponent(source.slice(source.indexOf(',') + 1));
+      const color = /<circle[^>]+fill="(#\w{6})"/.exec(svg)?.[1];
+      if (color) return { r:parseInt(color.slice(1,3),16), g:parseInt(color.slice(3,5),16), b:parseInt(color.slice(5,7),16) };
+    }
+    return {r:212,g:117,b:158};
+  };
+  handle('extract-cover-color',(_event, source) => visualColor(source));
+  handle('extract-cover-color-url',(_event, source) => visualColor(source));
+}
 handle('desktop-state-update',() => ({ok:true}));
 handle('report-play-failed',() => ({ok:true}));
 handle('scan-damaged-songs',() => []);
@@ -100,17 +175,37 @@ require.cache[storage] = { id:storage,filename:storage,loaded:true,exports:{read
 protocol.registerSchemesAsPrivileged([{scheme:'music',privileges:{stream:true,supportFetchAPI:true,bypassCSP:true,corsEnabled:true}}]);
 app.whenReady().then(() => {
   Menu.setApplicationMenu(null);
-  protocol.handle('music', request => {
-    const file = decodeURIComponent(request.url.replace(/^music:\/\/\/?/,''));
+  if (polishFixture) require(path.join(runtimeRoot, 'cover', 'color'));
+  protocol.handle('music', async request => {
+    const file = decodeURIComponent(request.url.replace(/^music:\/\/\/?/,'').split(/[?#]/)[0]);
+    if (polishFixture && /\.png$/i.test(file)) {
+      const rule = polish.imageRules[file.replace(/\//g, path.sep).toLowerCase()];
+      const log = {file, startedAt:Date.now(), delayMs:rule?.delayMs || 0, status:'pending'};
+      polish.imageRequests.push(log);
+      if (rule?.delayMs) await new Promise(resolve => setTimeout(resolve, rule.delayMs));
+      if (rule?.failuresRemaining > 0) {
+        rule.failuresRemaining--; log.status = 'failed'; log.finishedAt = Date.now();
+        return new Response('Fixture image temporarily unavailable', {status:503, headers:{'Cache-Control':'no-store'}});
+      }
+      log.status = 'served'; log.finishedAt = Date.now();
+    }
     const content = fs.readFileSync(file);
     const range = request.headers.get('range')?.match(/bytes=(\d+)-(\d*)/);
     const start = range ? Number(range[1]) : 0;
     const end = range && range[2] ? Math.min(Number(range[2]),content.length-1) : content.length-1;
-    return new Response(content.subarray(start,end+1),{status:range?206:200,headers:{'Content-Type':'audio/wav','Accept-Ranges':'bytes','Access-Control-Allow-Origin':'*','Content-Length':String(end-start+1),...(range?{'Content-Range':`bytes ${start}-${end}/${content.length}`}:{})}});
+    return new Response(content.subarray(start,end+1),{status:range?206:200,headers:{'Content-Type':polishFixture && /\.png$/i.test(file) ? 'image/png' : 'audio/wav','Accept-Ranges':'bytes','Access-Control-Allow-Origin':'*','Content-Length':String(end-start+1),...(polishFixture && /\.png$/i.test(file) ? {'Cache-Control':'no-store'} : {}),...(range?{'Content-Range':`bytes ${start}-${end}/${content.length}`}:{})}});
   });
   const netease = require(path.join(runtimeRoot, 'tools', 'netease-api', 'main'));
   if (typeof netease.login_qr_key !== 'function') throw new Error('Packaged NetEase dependencies are incomplete');
   require(path.join(runtimeRoot, 'window', 'main-window')).createWindow();
+  if (coverStartup) {
+    const mainWindow = require(path.join(runtimeRoot, 'core', 'state')).getMainWindow();
+    // Hide after the initial document exists so Electron emits real page visibility.
+    // The delayed PNG is still pending throughout this native transition.
+    mainWindow.webContents.once('did-finish-load', () => {
+      if (coverStartup === 'hidden') mainWindow.hide(); else mainWindow.minimize();
+    });
+  }
   for (const window of BrowserWindow.getAllWindows()) window.webContents.setAudioMuted(true);
 });
 app.on('before-quit',() => { require(path.join(runtimeRoot, 'window', 'desktop-lyric')).destroyDesktopLyricWindow(); });

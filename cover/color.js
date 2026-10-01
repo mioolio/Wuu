@@ -55,8 +55,8 @@ function extractColorFromBitmap(bitmap) {
   // 返回所有非空桶, 按像素数降序, 含相对权重
   // 特殊处理: 灰度桶(idx=0)强制中性化, 消除微绿/微红等偏色
   return buckets
-    .filter(b => b.count > 0)
     .map((b, idx) => {
+      if (!b.count) return null;
       const lum = Math.round((b.r + b.g + b.b) / (3 * b.count));
       return {
         r: idx === 0 ? lum : Math.round(b.r / b.count),
@@ -65,6 +65,7 @@ function extractColorFromBitmap(bitmap) {
         weight: b.count / total,
       };
     })
+    .filter(Boolean)
     .sort((a, b) => b.weight - a.weight);
 }
 
@@ -98,7 +99,16 @@ function extractColorFromBuffer(buf) {
       const img = nativeImage.createFromBuffer(buf);
       if (img.isEmpty()) return null;
       const small = img.resize({ width: 48, height: 48 });
-      bitmap = small.toBitmap();
+      // NativeImage/Skia uses BGRA on Electron's little-endian platforms;
+      // jpeg-js above supplies RGBA, so normalize the native branch as well.
+      const nativeBitmap = small.toBitmap();
+      bitmap = new Uint8Array(nativeBitmap.length);
+      for (let i = 0; i < nativeBitmap.length; i += 4) {
+        bitmap[i] = nativeBitmap[i + 2];
+        bitmap[i + 1] = nativeBitmap[i + 1];
+        bitmap[i + 2] = nativeBitmap[i];
+        bitmap[i + 3] = nativeBitmap[i + 3];
+      }
     } catch (e) {
       return null;
     }

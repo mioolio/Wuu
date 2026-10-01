@@ -1,7 +1,7 @@
 // =========== 用户数据: 喜欢列表 / 播放统计 / 进度 / 时长 ===========
 
 function _applyDurUpdate(idx, duration) {
-  if (idx < 0 || idx >= songs.length) return;
+  if (!Number.isInteger(idx) || idx < 0 || idx >= songs.length || !Number.isFinite(duration) || duration <= 0) return;
   const s = songs[idx];
   s.realDuration = duration;
   if (idx === curIdx) {
@@ -12,9 +12,13 @@ function _applyDurUpdate(idx, duration) {
     }
   }
 }
-window.musicAPI.onDurationUpdate(({ idx, duration }) => {
-  if (songs.length === 0) { _pendingDurUpdates.push({ idx, duration }); return; }
-  _applyDurUpdate(idx, duration);
+function _applyDurationPayload(payload) {
+  const idx = payload.audioPath ? songs.findIndex(song => song.audioPath === payload.audioPath) : payload.idx;
+  _applyDurUpdate(idx, Number(payload.realDuration || payload.duration));
+}
+window.musicAPI.onDurationUpdate(payload => {
+  if (songs.length === 0) { _pendingDurUpdates.push(payload); return; }
+  _applyDurationPayload(payload);
 });
 
 function isLiked(s) { return s && likedSet.has(s.audioPath); }
@@ -37,7 +41,23 @@ function toggleDislike(s) {
 
 function getStats(s) {
   if (!s) return { plays: 0, duration: 0 };
-  return stats[s.audioPath] || { plays: 0, duration: 0 };
+  return _normalizeSongStats(stats[s.audioPath]);
+}
+
+function _normalizeSongStats(entry) {
+  const previous = entry && typeof entry === 'object' && !Array.isArray(entry) ? entry : { plays: typeof entry === 'number' ? entry : 0 };
+  const positive = value => Number.isFinite(Number(value)) ? Math.max(0, Number(value)) : 0;
+  return { ...previous, plays: positive(previous.plays), duration: positive(previous.duration) };
+}
+
+function _listeningDateKey(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function _recentListeningDays(entry, now) {
+  const earliest = new Date(now); earliest.setDate(earliest.getDate() - 89);
+  const cutoff = _listeningDateKey(earliest), today = _listeningDateKey(now);
+  return Object.fromEntries(Object.entries(entry.recentDays || {}).filter(([day]) => /^\d{4}-\d{2}-\d{2}$/.test(day) && day >= cutoff && day <= today));
 }
 
 // =========== 多歌单(collections)管理 ===========
@@ -219,35 +239,26 @@ function _serializeCollections() {
   }));
 }
 
+function _serializeUserData() {
+  return {
+    likes: [...likedSet.entries()].map(([path, ts]) => ({ path, ts })),
+    dislikes: [...dislikedSet.entries()].map(([path, ts]) => ({ path, ts })),
+    collections: _serializeCollections(), stats, progress, lastSession,
+    actualDuration, settings: appSettings, genreOverrides,
+  };
+}
+
 function saveUserData() {
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
-    window.musicAPI.saveUserData({
-      likes: [...likedSet.entries()].map(([path, ts]) => ({ path, ts })),
-      dislikes: [...dislikedSet.entries()].map(([path, ts]) => ({ path, ts })),
-      collections: _serializeCollections(),
-      stats: stats,
-      progress: progress,
-      lastSession: lastSession,
-      actualDuration: actualDuration,
-      settings: appSettings,
-    });
     saveTimer = null;
+    if (_userDataReady) window.musicAPI.saveUserData(_serializeUserData());
   }, 1200);
 }
 
 function saveUserDataImmediate() {
   if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
-  window.musicAPI.saveUserData({
-    likes: [...likedSet.entries()].map(([path, ts]) => ({ path, ts })),
-    dislikes: [...dislikedSet.entries()].map(([path, ts]) => ({ path, ts })),
-    collections: _serializeCollections(),
-    stats: stats,
-    progress: progress,
-    lastSession: lastSession,
-    actualDuration: actualDuration,
-    settings: appSettings,
-  });
+  if (_userDataReady) return window.musicAPI.saveUserData(_serializeUserData());
 }
 
 function getDuration() {
@@ -289,22 +300,36 @@ function saveCurrentProgress() {
   const t = audio.currentTime;
   progress[s.audioPath] = (dur - t < 3) ? 0 : t;
   lastSession = { audioPath: s.audioPath, t: progress[s.audioPath] };
-  saveUserDataImmediate();
+  return saveUserDataImmediate();
 }
 
 function incrPlay(s) {
   if (!s) return;
   const k = s.audioPath;
-  if (!stats[k]) stats[k] = { plays: 0, duration: 0 };
-  stats[k].plays += 1;
+  const entry = _normalizeSongStats(stats[k]);
+  const now = new Date(), day = _listeningDateKey(now);
+  const recentDays = _recentListeningDays(entry, now);
+  const previous = _normalizeSongStats(recentDays[day]);
+  recentDays[day] = { ...previous, plays: previous.plays + 1 };
+  stats[k] = { ...entry, plays: entry.plays + 1, recentDays };
   saveUserData();
 }
 
 function addDuration(s, sec) {
-  if (!s || sec <= 0) return;
+  if (!s || !Number.isFinite(sec) || sec <= 0 || sec > 5) return;
   const k = s.audioPath;
-  if (!stats[k]) stats[k] = { plays: 0, duration: 0 };
-  stats[k].duration += sec;
+  const entry = _normalizeSongStats(stats[k]);
+  const end = new Date(), recentDays = _recentListeningDays(entry, end);
+  let cursor = end.getTime() - sec * 1000;
+  while (cursor < end.getTime()) {
+    const start = new Date(cursor), midnight = new Date(start);
+    midnight.setHours(24, 0, 0, 0);
+    const next = Math.min(midnight.getTime(), end.getTime());
+    const day = _listeningDateKey(start), previous = _normalizeSongStats(recentDays[day]);
+    recentDays[day] = { ...previous, duration: previous.duration + (next - cursor) / 1000 };
+    cursor = next;
+  }
+  stats[k] = { ...entry, duration: entry.duration + sec, recentDays };
   saveUserData();
 }
 

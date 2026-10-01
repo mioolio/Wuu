@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useAppStore } from '../store';
 import { notify } from '../ui';
 import { configToCustom, DEFAULT_FX_PARAMS, EQ_FREQUENCIES, FX_PARAMETERS, FX_PRESETS, normalizeFxSettings, resolveFxConfig, type FxParams, type FxSettings } from '../services/audioFx';
+import Icon from './Icon';
 
 export default function AudioFxPanel({ onClose }: { onClose?: () => void }) {
   const saved = useAppStore(state => state.settings.audioFx);
@@ -27,13 +28,13 @@ export default function AudioFxPanel({ onClose }: { onClose?: () => void }) {
   const frequencies = config.eqFreqs || EQ_FREQUENCIES;
   const qs = config.eqQs || EQ_FREQUENCIES.map(() => 1.1);
   return <div className="audio-fx-panel panel">
-    <header className="page-header"><div><h2>音效与均衡器</h2><p className="muted">{config.name || '自定义'} · 10 段均衡器</p></div>{onClose && <button className="icon-button" aria-label="关闭音效" onClick={onClose}>×</button>}</header>
-    <div className="toolbar fx-presets">{Object.entries(FX_PRESETS).map(([key, preset]) => <button key={key} className={`button ${settings.preset === key ? 'active' : ''}`} onClick={() => save({ ...settings, preset: key })}>{preset.name}</button>)}<button className={`button ${settings.preset === 'custom' ? 'active' : ''}`} onClick={() => save({ ...settings, ...configToCustom(config), preset: 'custom' })}>自定义</button></div>
-    {!!settings.customs.length && <div className="toolbar">{settings.customs.map((custom, index) => <span className="row" key={`${index}:${custom.name}`}><button className={`button ${settings.preset === `custom:${index}` ? 'active' : ''}`} onClick={() => save({ ...settings, preset: `custom:${index}` })}>{custom.name}</button><button className="icon-button danger" aria-label={`删除音效方案 ${custom.name}`} onClick={() => deletePreset(index)}>×</button></span>)}</div>}
+    <header className="page-header"><div><h2>音效与均衡器</h2><p className="muted">{config.name || '自定义'} · 10 段均衡器</p></div>{onClose && <button className="icon-button" aria-label="关闭音效" onClick={onClose}><Icon name="close" size={18} /></button>}</header>
+    <div className="toolbar fx-presets" role="group" aria-label="音效预设">{Object.entries(FX_PRESETS).map(([key, preset]) => <button key={key} className={`button ${settings.preset === key ? 'active' : ''}`} aria-pressed={settings.preset === key} onClick={() => save({ ...settings, preset: key })}>{preset.name}</button>)}<button className={`button ${settings.preset === 'custom' ? 'active' : ''}`} aria-pressed={settings.preset === 'custom'} onClick={() => save({ ...settings, ...configToCustom(config), preset: 'custom' })}>自定义</button></div>
+    {!!settings.customs.length && <div className="toolbar" role="group" aria-label="已保存的音效方案">{settings.customs.map((custom, index) => <span className="row" key={`${index}:${custom.name}`}><button className={`button ${settings.preset === `custom:${index}` ? 'active' : ''}`} aria-pressed={settings.preset === `custom:${index}`} onClick={() => save({ ...settings, preset: `custom:${index}` })}>{custom.name}</button><button className="icon-button danger" aria-label={`删除音效方案 ${custom.name}`} onClick={() => deletePreset(index)}><Icon name="close" size={16} /></button></span>)}</div>}
     <div className="fx-equalizer" style={{ display: 'grid', gridTemplateColumns: 'repeat(10, minmax(0, 1fr))', gap: 8 }}>
-      {config.eq.map((value, index) => <label className={`fx-band ${band === index ? 'selected' : ''}`} key={index} onClick={() => setBand(index)}>
+      {config.eq.map((value, index) => <label className={`fx-band ${band === index ? 'selected' : ''}`} key={index} onClick={() => setBand(index)} onFocus={() => setBand(index)}>
         <output>{value > 0 ? '+' : ''}{value.toFixed(1)} dB</output>
-        <input aria-label={`均衡器频段 ${index + 1} 增益`} type="range" min={-12} max={12} step={0.5} value={value} style={{ writingMode: 'vertical-lr', direction: 'rtl', height: 120, width: 22 }} onChange={event => edit(draft => { draft.eq[index] = Number(event.target.value); })} />
+        <input aria-label={`均衡器频段 ${index + 1} 增益`} aria-valuetext={`${value > 0 ? '+' : ''}${value.toFixed(1)} dB`} type="range" min={-12} max={12} step={0.5} value={value} style={{ writingMode: 'vertical-lr', direction: 'rtl', height: 120, width: 22 }} onChange={event => { setBand(index); edit(draft => { draft.eq[index] = Number(event.target.value); }); }} />
         <span>{frequencies[index] >= 1000 ? `${(frequencies[index] / 1000).toFixed(1)}k` : frequencies[index]} Hz</span>
       </label>)}
     </div>

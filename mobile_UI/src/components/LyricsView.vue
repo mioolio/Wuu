@@ -1,253 +1,198 @@
 <!-- =========== 歌词视图 (播放器左滑进入) =========== -->
 <!-- 功能: LRC 解析(逐字+标准) / 逐字走字填充 / 胶囊高亮 / 自动滚动 / 点击跳转 -->
 <script setup>
-import { ref, computed, watch, nextTick, onUnmounted } from 'vue';
+import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue';
 import { usePlayer } from '../composables/usePlayer.js';
+import { parseLyrics, readLyricTime, activeLyricIndex, isCurrentLyric, lyricCharProgress, lyricLineProgress } from '../services/lyrics.js';
 
-const { lyricText, currentTime, duration, seek, getAudioEl } = usePlayer();
-
-// 解析后的歌词行: { time, text, chars? }
-// chars: [{ offset, dur, text }] 逐字格式才有, offset/dur 单位秒
+const { lyricText, currentTime, duration, isPlaying, seek, seekTo, getAudioEl } = usePlayer();
 const lines = ref([]);
 const curIdx = ref(-1);
 const listRef = ref(null);
-// 当前帧的填充进度 (rAF 更新, 触发当前行重渲染)
-const tick = ref(0);
-
-// 解析 LRC: 支持逐字格式 [startMs,durMs]<offset,dur,0>text 和标准格式 [mm:ss.xx]
-function parseLRC(text) {
-  if (!text || !text.trim()) return [];
-  const result = [];
-  const rawLineRegex = /^\[(\d+),(\d+)\](.*)/;
-  const stdLineRegex = /\[(\d+):(\d+(?:\.\d+)?)\]/g;
-
-  for (const line of text.split('\n')) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-
-    const rawMatch = trimmed.match(rawLineRegex);
-    if (rawMatch) {
-      // 逐字格式: [startMs,durMs]<offset,dur,0>text<offset,dur,0>text...
-      const startSec = parseInt(rawMatch[1]) / 1000;
-      const chars = parseRawChars(rawMatch[3]);
-      if (chars.length) {
-        const fullText = chars.map(c => c.text).join('');
-        result.push({ time: startSec, text: fullText, chars });
-      }
-      continue;
-    }
-
-    // 标准格式 [mm:ss.xx] (一行可能有多个时间戳)
-    const matches = [...trimmed.matchAll(stdLineRegex)];
-    if (matches.length > 0) {
-      const content = trimmed.replace(stdLineRegex, '').trim();
-      if (!content) continue;
-      for (const m of matches) {
-        const min = parseInt(m[1]);
-        const sec = parseFloat(m[2]);
-        result.push({ time: min * 60 + sec, text: content });
-      }
-    }
-  }
-  return result.sort((a, b) => a.time - b.time);
-}
-
-// 解析逐字内容: 提取每个字的 offset/dur/text
-// 格式1: text<tag>text<tag>...  (tag 描述其前面的 text)
-// 格式2: <tag>text<tag>text...  (tag 描述其后面的 text)
-function parseRawChars(content) {
-  const tagRe = /<(\d+),(\d+),\d+>/g;
-  const parts = content.split(/<[^>]+>/);
-  const offs = [];
-  let m;
-  tagRe.lastIndex = 0;
-  while ((m = tagRe.exec(content))) {
-    offs.push({
-      offset: parseInt(m[1]) / 1000,
-      dur: Math.max(0.1, parseInt(m[2]) / 1000),
-    });
-  }
-  if (!offs.length) return [];
-
-  const chars = [];
-  const startsWithTag = parts.length > 0 && parts[0] === '';
-  for (let i = 0; i < offs.length; i++) {
-    const textPart = startsWithTag ? parts[i + 1] : parts[i];
-    if (!textPart) continue;
-    chars.push({
-      offset: offs[i].offset,
-      dur: offs[i].dur,
-      text: textPart,
-    });
-  }
-  // 尾部无标签文本
-  const trailingThreshold = startsWithTag ? offs.length + 1 : offs.length;
-  if (parts.length > trailingThreshold && parts[parts.length - 1]) {
-    const lastOff = chars.length > 0 ? chars[chars.length - 1].offset + chars[chars.length - 1].dur : 0;
-    chars.push({ offset: lastOff, dur: 0.4, text: parts[parts.length - 1] });
-  }
-  return chars;
-}
-
-// 歌词文本变化时重新解析
-watch(lyricText, (txt) => {
-  lines.value = parseLRC(txt);
-  curIdx.value = -1;
-}, { immediate: true });
-
-// 根据当前播放时间高亮对应行
-watch(currentTime, (t) => {
-  if (!lines.value.length) return;
-  let idx = -1;
-  for (let i = 0; i < lines.value.length; i++) {
-    if (t >= lines.value[i].time) idx = i;
-    else break;
-  }
-  if (idx !== curIdx.value) {
-    curIdx.value = idx;
-    scrollToCur(idx);
-  }
-});
-
-// ===== rAF 循环: 60fps 更新当前行走字进度 =====
-// timeupdate 事件约 4Hz, 不够流畅; 用 rAF 读取 audio.currentTime 独立更新
-let rafId = null;
-function rafLoop() {
-  tick.value++;  // 触发当前行重渲染
-  rafId = requestAnimationFrame(rafLoop);
-}
-rafId = requestAnimationFrame(rafLoop);
-onUnmounted(() => {
-  if (rafId) cancelAnimationFrame(rafId);
-});
-
-// 读取当前播放时间 (优先用 audioEl.currentTime, rAF 级别流畅)
-function getNow() {
-  const el = getAudioEl();
-  return el ? el.currentTime : currentTime.value;
-}
-
-// 计算某个字的填充进度 (0-1)
-function charProgress(ch, lineTime, now) {
-  const start = lineTime + ch.offset;
-  const end = start + ch.dur;
-  if (now >= end) return 1;
-  if (now <= start) return 0;
-  return (now - start) / ch.dur;
-}
-
-// 字的样式: 已唱=强调色, 正在唱=渐变填充, 未唱=半透明
-function charStyle(ch, line) {
-  // tick.value 触发重算 (rAF 每帧 +1)
-  void tick.value;
-  const now = getNow();
-  const p = charProgress(ch, line.time, now);
-  if (p >= 1) {
-    // 已唱完: 强调色
-    return { color: 'var(--accent)' };
-  }
-  if (p <= 0) {
-    // 未开始: 半透明默认色
-    return { color: 'var(--text-secondary)', opacity: 0.6 };
-  }
-  // 正在唱: 渐变填充 (已唱部分强调色, 未唱部分半透明)
-  const pct = (p * 100).toFixed(1);
-  return {
-    backgroundImage: `linear-gradient(to right, var(--accent) ${pct}%, var(--text-secondary) ${pct}%)`,
-    WebkitBackgroundClip: 'text',
-    backgroundClip: 'text',
-    WebkitTextFillColor: 'transparent',
-  };
-}
-
-// 无 chars 的当前行: 用行级进度填充
-function lineProgress(line) {
-  void tick.value;
-  const now = getNow();
-  const next = nextLineTime(line);
-  const span = next - line.time;
-  if (span <= 0) return 0;
-  return Math.max(0, Math.min(1, (now - line.time) / span));
-}
-
-function nextLineTime(line) {
-  const idx = lines.value.indexOf(line);
-  if (idx < 0 || idx + 1 >= lines.value.length) {
-    return duration.value || line.time + 5;
-  }
-  return lines.value[idx + 1].time;
-}
-
-// 时间格式化 mm:ss
-function formatTime(s) {
-  if (!s || !isFinite(s)) return '0:00';
-  const m = Math.floor(s / 60);
-  const sec = Math.floor(s % 60);
-  return `${m.toString().padStart(2, '0')}:${sec.toString().padStart(2, '0')}`;
-}
-
-// 滚动到当前行
-function scrollToCur(idx) {
-  if (idx < 0 || !listRef.value) return;
-  nextTick(() => {
-    const el = listRef.value.children[idx];
-    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  });
-}
-
-// 点击歌词行跳转
-function onLineClick(line) {
-  if (line.time != null && duration.value > 0) {
-    seek((line.time / duration.value) * 100);
-  }
-}
-
-const showEmpty = computed(() => !lines.value.length);
-
-// 已唱/未唱 样式 class
-function lineClass(i) {
-  if (i === curIdx.value) return 'cur';
-  if (i < curIdx.value) return 'sung';
-  return 'unsung';
-}
-
-// ===== 右滑手势: 返回封面视图 =====
+const viewRef = ref(null);
+const frameTime = ref(0);
 const emit = defineEmits(['swipe-left']);
+const showEmpty = computed(() => !lines.value.length);
+let mounted = false;
+let disposed = false;
+let viewVisible = true;
+let visibilityObserver = null;
+let rafId = null;
+let boundAudio = null;
+let scrollVersion = 0;
 let touchStartX = 0;
 let touchStartY = 0;
 let touchMoved = false;
+let touchActive = false;
+let manualUntil = 0;
+let pendingFollow = false;
 
-function onTouchStart(e) {
-  touchStartX = e.touches[0].clientX;
-  touchStartY = e.touches[0].clientY;
+function stopFrames() {
+  if (rafId !== null) cancelAnimationFrame(rafId);
+  rafId = null;
+}
+function canAnimate() {
+  const audio = getAudioEl();
+  return mounted && !disposed && viewVisible && !document.hidden && lines.value.some(line => Number.isFinite(line.time)) && (audio ? !audio.paused && !audio.ended : isPlaying.value);
+}
+function startFrames() {
+  if (!canAnimate()) { stopFrames(); return; }
+  if (rafId === null) rafId = requestAnimationFrame(rafLoop);
+}
+function rafLoop() {
+  rafId = null;
+  syncPosition();
+  startFrames();
+}
+function followAllowed() { return !touchActive && performance.now() >= manualUntil; }
+function syncPosition(force = false, behavior = 'smooth') {
+  frameTime.value = readLyricTime(getAudioEl(), currentTime.value);
+  const idx = activeLyricIndex(lines.value, frameTime.value);
+  const changed = idx !== curIdx.value;
+  curIdx.value = idx;
+  if (changed || force || pendingFollow) {
+    if (force || followAllowed()) {
+      pendingFollow = false;
+      scrollToCur(idx, behavior);
+    } else pendingFollow = true;
+  }
+}
+function scrollToCur(idx, behavior) {
+  const request = ++scrollVersion;
+  nextTick(() => {
+    if (!mounted || disposed || !viewVisible || document.hidden || request !== scrollVersion || idx !== curIdx.value || idx < 0) return;
+    const container = viewRef.value, list = listRef.value;
+    const first = list?.children[idx];
+    if (!container || !first) return;
+    let last = idx;
+    while (last + 1 < lines.value.length && isCurrentLyric(lines.value, last + 1, idx)) last++;
+    const top = first.getBoundingClientRect().top;
+    const bottom = list.children[last].getBoundingClientRect().bottom;
+    const target = container.scrollTop + (top + bottom) / 2 - container.getBoundingClientRect().top - container.clientHeight / 2;
+    const reduced = typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    container.scrollTo({ top: Math.max(0, target), behavior: reduced ? 'auto' : behavior });
+  });
+}
+const mediaEvents = ['timeupdate', 'seeking', 'seeked', 'loadedmetadata', 'playing', 'play', 'pause', 'ended', 'emptied'];
+function onMediaChange() { syncPosition(); startFrames(); }
+function bindAudio() {
+  const audio = getAudioEl();
+  if (audio === boundAudio) return;
+  if (boundAudio) mediaEvents.forEach(event => boundAudio.removeEventListener(event, onMediaChange));
+  boundAudio = audio;
+  if (boundAudio) mediaEvents.forEach(event => boundAudio.addEventListener(event, onMediaChange));
+}
+function onVisibilityChange() {
+  if (document.hidden) stopFrames();
+  else { bindAudio(); syncPosition(true, 'auto'); startFrames(); }
+}
+function onResize() { syncPosition(true, 'auto'); }
+watch(lyricText, text => {
+  lines.value = parseLyrics(text);
+  manualUntil = 0;
+  pendingFollow = false;
+  syncPosition(true, 'auto');
+  bindAudio();
+  startFrames();
+}, { immediate: true });
+watch(currentTime, () => { bindAudio(); syncPosition(); startFrames(); });
+watch(isPlaying, onMediaChange);
+watch(duration, () => syncPosition());
+watch(listRef, () => syncPosition(true, 'auto'), { flush: 'post' });
+onMounted(() => {
+  mounted = true;
+  bindAudio();
+  syncPosition(true, 'auto');
+  startFrames();
+  document.addEventListener('visibilitychange', onVisibilityChange);
+  window.addEventListener('resize', onResize);
+  if (typeof IntersectionObserver === 'function' && viewRef.value) {
+    visibilityObserver = new IntersectionObserver(entries => {
+      if (disposed) return;
+      viewVisible = entries.some(entry => entry.isIntersecting);
+      if (viewVisible) { syncPosition(true, 'auto'); startFrames(); }
+      else stopFrames();
+    }, { threshold: 0.01 });
+    visibilityObserver.observe(viewRef.value);
+  }
+});
+onUnmounted(() => {
+  disposed = true;
+  mounted = false;
+  scrollVersion++;
+  stopFrames();
+  visibilityObserver?.disconnect();
+  if (boundAudio) mediaEvents.forEach(event => boundAudio.removeEventListener(event, onMediaChange));
+  boundAudio = null;
+  document.removeEventListener('visibilitychange', onVisibilityChange);
+  window.removeEventListener('resize', onResize);
+});
+function isCurrent(i) { return isCurrentLyric(lines.value, i, curIdx.value); }
+function lineClass(i) {
+  if (!Number.isFinite(lines.value[i].time)) return 'plain';
+  if (isCurrent(i)) return 'cur';
+  return i < curIdx.value ? 'sung' : 'unsung';
+}
+function charStyle(char, line) {
+  const progress = lyricCharProgress(char, line.time, frameTime.value);
+  if (progress >= 1) return { color: 'var(--accent)' };
+  if (progress <= 0) return { color: 'var(--text)', opacity: 0.8 };
+  const percent = (progress * 100).toFixed(1);
+  return { backgroundImage: `linear-gradient(to right, var(--accent) ${percent}%, var(--text) ${percent}%)`, WebkitBackgroundClip: 'text', backgroundClip: 'text', WebkitTextFillColor: 'transparent' };
+}
+function lineProgress(i) { return lyricLineProgress(lines.value, i, frameTime.value, duration.value); }
+function formatTime(s) {
+  if (!Number.isFinite(s) || s < 0) return '0:00';
+  return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+}
+function onLineClick(line) {
+  if (touchMoved || !Number.isFinite(line.time)) return;
+  if (duration.value > 0) seek(Math.max(0, Math.min(100, line.time / duration.value * 100)));
+  else if (typeof seekTo === 'function') seekTo(Math.max(0, line.time));
+  else return;
+  manualUntil = 0;
+  syncPosition(true);
+}
+function onWheel() { manualUntil = performance.now() + 6000; pendingFollow = true; }
+function onTouchStart(event) {
+  const touch = event.touches[0];
+  if (!touch) return;
+  touchStartX = touch.clientX;
+  touchStartY = touch.clientY;
   touchMoved = false;
+  touchActive = true;
 }
-function onTouchMove(e) {
-  const dx = e.touches[0].clientX - touchStartX;
-  const dy = e.touches[0].clientY - touchStartY;
-  if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 30) {
-    touchMoved = true;
-  }
+function onTouchMove(event) {
+  const touch = event.touches[0];
+  if (!touch) return;
+  const dx = touch.clientX - touchStartX, dy = touch.clientY - touchStartY;
+  if (Math.max(Math.abs(dx), Math.abs(dy)) > 10) touchMoved = true;
+  if (Math.abs(dy) >= Math.abs(dx) && Math.abs(dy) > 10) onWheel();
 }
-function onTouchEnd(e) {
-  if (!touchMoved) return;
-  const dx = e.changedTouches[0].clientX - touchStartX;
-  if (dx > 80) {
-    emit('swipe-left');
-  }
+function onTouchEnd(event) {
+  touchActive = false;
+  const touch = event.changedTouches[0];
+  if (!touch || !touchMoved) return;
+  const dx = touch.clientX - touchStartX, dy = touch.clientY - touchStartY;
+  if (dx > 80 && Math.abs(dx) > Math.abs(dy)) emit('swipe-left');
+  else if (Math.abs(dy) >= Math.abs(dx)) onWheel();
 }
+function onTouchCancel() { touchActive = false; touchMoved = false; }
 </script>
 
 <template>
   <div
     class="lyrics-view"
+    ref="viewRef"
     @touchstart="onTouchStart"
     @touchmove="onTouchMove"
     @touchend="onTouchEnd"
+    @touchcancel="onTouchCancel"
+    @wheel.passive="onWheel"
   >
     <!-- 无歌词 -->
     <div v-if="showEmpty" class="empty">
-      <span>纯音乐,请欣赏</span>
+      <span>暂无歌词</span>
     </div>
     <!-- 歌词列表 -->
     <div v-else class="lyric-list" ref="listRef">
@@ -259,7 +204,7 @@ function onTouchEnd(e) {
         @click="onLineClick(line)"
       >
         <!-- 当前行 + 有逐字数据: 每个字独立 span, 逐字填充 -->
-        <span v-if="i === curIdx && line.chars" class="lyric-text char-fill">
+        <span v-if="isCurrent(i) && line.chars" class="lyric-text char-fill">
           <span
             v-for="(ch, ci) in line.chars"
             :key="ci"
@@ -269,10 +214,10 @@ function onTouchEnd(e) {
         </span>
         <!-- 当前行 + 无逐字数据: 行级渐变填充 -->
         <span
-          v-else-if="i === curIdx"
+          v-else-if="isCurrent(i)"
           class="lyric-text"
           :style="{
-            backgroundImage: `linear-gradient(to right, var(--accent) ${(lineProgress(line) * 100).toFixed(1)}%, var(--text-secondary) ${(lineProgress(line) * 100).toFixed(1)}%)`,
+            backgroundImage: `linear-gradient(to right, var(--accent) ${(lineProgress(i) * 100).toFixed(1)}%, var(--text) ${(lineProgress(i) * 100).toFixed(1)}%)`,
             WebkitBackgroundClip: 'text',
             backgroundClip: 'text',
             WebkitTextFillColor: 'transparent',
@@ -288,7 +233,7 @@ function onTouchEnd(e) {
           <span class="line-time">{{ formatTime(line.time) }}</span>
         </div>
         <!-- hover 时显示的时间戳(非当前行) -->
-        <div v-else class="hover-meta">
+        <div v-else-if="Number.isFinite(line.time)" class="hover-meta">
           <span class="line-time">{{ formatTime(line.time) }}</span>
         </div>
       </div>
@@ -302,7 +247,7 @@ function onTouchEnd(e) {
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
   padding: 60px 28px;
-  scroll-behavior: smooth;
+  scroll-behavior: auto;
   position: relative;
 }
 
@@ -365,6 +310,8 @@ function onTouchEnd(e) {
   opacity: 0.5;
 }
 
+.lyric-line.plain { color: var(--text); cursor: default; }
+
 /* 当前行: 胶囊背景 + 放大 */
 .lyric-line.cur {
   color: var(--text);
@@ -397,5 +344,9 @@ function onTouchEnd(e) {
   font-size: 13px;
   font-variant-numeric: tabular-nums;
   font-weight: 600;
+}
+@media (prefers-reduced-motion: reduce) {
+  .lyrics-view { scroll-behavior: auto; }
+  .lyric-line { transition: none; transform: none; }
 }
 </style>

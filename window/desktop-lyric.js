@@ -126,13 +126,17 @@ ipcMain.handle('lyric-toggle', (event, show) => {
 ipcMain.handle('lyric-lock', (event, locked) => {
   const lyricWin = state.getLyricWin();
   if (!lyricWin || lyricWin.isDestroyed()) return;
-  lyricWin.setIgnoreMouseEvents(locked, { forward: true });
+  const isLocked = locked === true;
+  lyricWin.setIgnoreMouseEvents(isLocked, { forward: true });
+  latestLyricPayloads.set('lock', { type: 'lock', locked: isLocked });
 });
 
 // 桌面歌词窗口内按钮锁定状态变更, 广播给主窗口同步 (主窗口锁按钮跟随)
 // preload onLyricLockChanged 订阅 'lyric-lock-changed', 参数 { locked }
 ipcMain.on('lyric-lock-changed', (event, payload) => {
-  state.sendToMain('lyric-lock-changed', payload && payload.locked === true);
+  const locked = payload && payload.locked === true;
+  latestLyricPayloads.set('lock', { type: 'lock', locked });
+  state.sendToMain('lyric-lock-changed', locked);
 });
 
 // 锁定状态下临时恢复/恢复穿透交互 (鼠标悬停控制按钮时恢复交互, 离开后继续穿透)
@@ -180,6 +184,13 @@ ipcMain.on('lyric-data', (event, payload) => {
     latestLyricPayloads.set(payload.type, payload);
   }
   state.sendToLyric('lyric-update', payload);
+});
+
+// Replay after React registers its listener, even when playback is paused.
+ipcMain.on('lyric-request-state', (event) => {
+  const lyricWin = state.getLyricWin();
+  if (!lyricWin || lyricWin.isDestroyed() || event.sender !== lyricWin.webContents || event.sender.isDestroyed()) return;
+  for (const payload of latestLyricPayloads.values()) event.sender.send('lyric-update', payload);
 });
 
 // 桌面歌词窗口通过X按钮关闭时, 通知主窗口同步按钮状态

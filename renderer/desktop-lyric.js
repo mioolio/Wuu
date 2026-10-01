@@ -86,6 +86,7 @@ function applyLockButtonUi(lockedState) {
 btnLock.addEventListener('click', async () => {
   locked = !locked;
   await window.desktopLyric.lock(locked);
+  if (!locked) hoverInteractive = false;
   applyLockButtonUi(locked);
   // 广播给主窗口同步主窗口锁按钮 (主窗口 preload onLockChanged 监听 lyric-lock-changed)
   window.desktopLyric.notifyLockChanged(locked);
@@ -142,8 +143,8 @@ window.lyricReceiver.onUpdate((payload) => {
     if (locked !== payload.locked) {
       locked = payload.locked;
       applyLockButtonUi(locked);
-      // 恢复悬停交互状态一致性: 解锁时取消临时可交互
-      if (!locked && hoverInteractive) setHoverInteractive(false);
+      // The native lock call already restored interaction; only reset the hover flag.
+      if (!locked) hoverInteractive = false;
     }
   } else if (payload.type === 'clear') {
     lrcData = null;

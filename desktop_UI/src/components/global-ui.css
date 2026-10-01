@@ -1,0 +1,2 @@
+/* Prompts opened from a player dialog remain above that dialog after portal mounting. */
+.modal-backdrop.global-dialog-surface { z-index: 120; view-transition-name: none; }

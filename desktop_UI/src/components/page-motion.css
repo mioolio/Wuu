@@ -1,0 +1,47 @@
+/* The glass background stays live and stationary; snapshots contain page content only. */
+:root { view-transition-name: none; }
+.main-content { view-transition-name: none; isolation: isolate; }
+.page-host { position: relative; width: 100%; height: 100%; min-height: 0; overflow: hidden; }
+.page-host:not([hidden]) { view-transition-name: wuu-page; }
+::view-transition { pointer-events: none; }
+::view-transition-group(wuu-page) { animation-duration: 320ms; animation-timing-function: var(--ease-out); }
+::view-transition-old(wuu-page) { animation: page-leave 320ms var(--ease-out) both; }
+::view-transition-new(wuu-page) { animation: page-arrive 320ms var(--ease-out) both; }
+html[data-page-transition="from-player"]::view-transition-old(wuu-page) { animation-name: page-leave-down; }
+html[data-page-transition="from-player"]::view-transition-new(wuu-page) { animation-name: page-arrive-down; }
+::view-transition-group(wuu-artwork) { animation-duration: 620ms; animation-timing-function: cubic-bezier(.22,.8,.16,1); z-index: 2; }
+::view-transition-old(wuu-artwork) { animation-duration: 300ms; }
+::view-transition-new(wuu-artwork) { animation-duration: 500ms; }
+@keyframes page-leave { to { opacity: 0; transform: translateY(-4px); } }
+@keyframes page-arrive { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes page-leave-down { to { opacity: 0; transform: translateY(4px); } }
+@keyframes page-arrive-down { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+
+/* Short feedback is shared; larger surfaces settle more gently. */
+.app-shell button:not(:disabled) { transition: color 180ms ease, background 180ms ease, border-color 180ms ease, box-shadow 220ms ease, scale 160ms var(--ease-out); }
+.app-shell button:active:not(:disabled) { scale: .97; }
+.sidebar button:active:not(:disabled) { scale: .985; }
+.sidebar { position: relative; }
+.sidebar button.active::before { content: none; }
+.nav-selection-marker { position: absolute; top: 0; left: 0; width: 3px; height: 16px; border-radius: 0 3px 3px 0; background: var(--accent); pointer-events: none; }
+.nav-selection-marker.is-ready { transition: transform 360ms var(--ease-out), opacity 140ms ease, background 220ms ease; }
+.nav-playing i, .track-playing i { transform-origin: bottom; animation: equalizer-level 950ms ease-in-out infinite alternate; }
+.nav-playing i:nth-child(2), .track-playing i:nth-child(2) { animation-delay: -420ms; animation-duration: 730ms; }
+.nav-playing i:nth-child(3), .track-playing i:nth-child(3) { animation-delay: -670ms; animation-duration: 1100ms; }
+@keyframes equalizer-level { from { transform: scaleY(.45); } to { transform: scaleY(1); } }
+.modal-backdrop { animation: overlay-arrive 180ms ease-out both; }
+.modal-card { transform-origin: 50% 65%; animation: dialog-arrive 320ms cubic-bezier(.2,.8,.2,1) both; }
+.player-queue.listening-queue { animation: queue-arrive 340ms var(--ease-out) both; }
+.song-context-menu { transform-origin: top right; animation: menu-arrive 180ms var(--ease-out) both; }
+.toast { animation: toast-arrive 260ms var(--ease-out) both; }
+@keyframes overlay-arrive { from { opacity: 0; } to { opacity: 1; } }
+@keyframes dialog-arrive { from { opacity: 0; transform: translateY(12px) scale(.97); } to { opacity: 1; transform: none; } }
+@keyframes queue-arrive { from { opacity: 0; transform: translateX(18px); } to { opacity: 1; transform: none; } }
+@keyframes menu-arrive { from { opacity: 0; transform: translateY(-4px) scale(.98); } to { opacity: 1; transform: none; } }
+@keyframes toast-arrive { from { opacity: 0; translate: 0 8px; } to { opacity: 1; translate: 0 0; } }
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation: none !important; }
+  .app-shell button:active:not(:disabled) { scale: 1; }
+  .nav-selection-marker.is-ready { transition: none; }
+  .nav-playing i, .track-playing i, .modal-backdrop, .modal-card, .player-queue.listening-queue, .song-context-menu, .toast { animation: none; }
+}

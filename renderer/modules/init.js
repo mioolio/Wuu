@@ -7,8 +7,9 @@
     window.musicAPI.getUserData(),
   ]);
   songs = songList;
+  genreOverrides = userData.genreOverrides && typeof userData.genreOverrides === 'object' && !Array.isArray(userData.genreOverrides) ? userData.genreOverrides : {};
   if (_pendingDurUpdates.length) {
-    _pendingDurUpdates.forEach(u => _applyDurUpdate(u.idx, u.duration));
+    _pendingDurUpdates.forEach(_applyDurationPayload);
     _pendingDurUpdates = [];
   }
 
@@ -87,12 +88,14 @@
 
   // 重建 likedSet (所有歌单歌曲的并集), 保留已设置的 timestamp
   rebuildLikedSet();
-  stats = userData.stats || {};
+  stats = Object.fromEntries(Object.entries(userData.stats || {}).map(([path, entry]) => [path, _normalizeSongStats(entry)]));
   progress = userData.progress || {};
   lastSession = userData.lastSession || null;
   actualDuration = userData.actualDuration || {};
 
   if (userData.settings) {
+    // Keep settings used by the newer renderer when saving from the original UI.
+    appSettings = { ...appSettings, ...userData.settings, interfaceMode: 'classic' };
     appSettings.showFloatListBtn = userData.settings.showFloatListBtn !== false;
     appSettings.glassOpacity = typeof userData.settings.glassOpacity === 'number'
       ? userData.settings.glassOpacity : 0.72;
@@ -169,7 +172,10 @@
       btnMode.title = MODE_NAMES[playMode];
     }
   }
+  _userDataReady = true;
   applySettings();
+  const interfaceParams = new URLSearchParams(location.search);
+  const pauseAfterInterfaceSwitch = interfaceParams.get('interfacePaused') === '1';
 
   // 初始化歌单分享模块 (绑定 modal 事件, 供主页分享按钮直接调用)
   // 必须在 songs + collections 加载完成后调用, 因为 buildExportSources 依赖它们
@@ -187,7 +193,7 @@
   // 桌面歌词持久化: 启动时自动打开桌面歌词 (用户在设置中开启了持久化)
   // 必须在 lastSession play() 之前执行, 避免被后续 return 跳过
   // 桌面歌词窗口创建后, 后续 play() 会通过 RAF 同步歌词数据
-  if (appSettings.desktopLyricPersist && typeof toggleDesktopLyric === 'function' && !desktopLyricOn) {
+  if ((appSettings.desktopLyricPersist || interfaceParams.get('desktopLyrics') === '1') && typeof toggleDesktopLyric === 'function' && !desktopLyricOn) {
     try {
       await toggleDesktopLyric();
     } catch (e) {
@@ -211,14 +217,16 @@
       }
       // updateContext=false: 不让 play() 用 currentView 覆盖刚设好的 playContext
       playContext = ctx;
-      play(lastIdx, true, false);
+      await play(lastIdx, true, false, interfaceParams.get('interfaceSwitch') !== '1');
+      if (pauseAfterInterfaceSwitch) audio.pause();
       // 恢复刷新前所在的视图(F12/Ctrl+R 后不再强制回到播放器)
-      const savedView = (() => { try { return localStorage.getItem('sqet-current-view'); } catch (e) { return null; } })();
+      const savedView = (() => { try { const view = localStorage.getItem('sqet-current-view'); return view === 'player' ? 'home' : view; } catch (e) { return null; } })();
       if (savedView && savedView !== 'home' && savedView !== 'liked') {
         // 非列表类视图: 恢复到该视图, 后台仍正常播放
         currentView = savedView;
         navItems.forEach(n => n.classList.toggle('active', n.dataset.view === savedView));
-        if (savedView === 'stats') showStatsView();
+        if (savedView === 'list') { listTitle.textContent = '音乐列表'; showListView(); renderList(); }
+        else if (savedView === 'stats') showStatsView();
         else if (savedView === 'settings') showSettingsView();
         else if (savedView === 'repair') showRepairView();
         else if (savedView === 'free-music') showFreeMusicView();
@@ -242,13 +250,15 @@
   if (songs.length > 0) {
     playContext = 'home';
     // updateContext=false: 启动时已手动设置 playContext
-    play(0, true, false);
+    await play(0, true, false);
+    if (pauseAfterInterfaceSwitch) audio.pause();
     // 恢复刷新前所在的视图(无上次播放记录时也恢复)
-    const savedView2 = (() => { try { return localStorage.getItem('sqet-current-view'); } catch (e) { return null; } })();
+    const savedView2 = (() => { try { const view = localStorage.getItem('sqet-current-view'); return view === 'player' ? 'home' : view; } catch (e) { return null; } })();
     if (savedView2 && savedView2 !== 'home') {
       currentView = savedView2;
       navItems.forEach(n => n.classList.toggle('active', n.dataset.view === savedView2));
-      if (savedView2 === 'liked') { activeCollectionId = null; listTitle.textContent = '我的歌单'; showListView(); renderList(); }
+      if (savedView2 === 'list') { listTitle.textContent = '音乐列表'; showListView(); renderList(); }
+      else if (savedView2 === 'liked') { activeCollectionId = null; listTitle.textContent = '我的歌单'; showListView(); renderList(); }
       else if (savedView2 === 'stats') showStatsView();
       else if (savedView2 === 'settings') showSettingsView();
       else if (savedView2 === 'repair') showRepairView();

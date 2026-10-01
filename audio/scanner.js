@@ -7,9 +7,9 @@ const { ipcMain } = require('electron');
 const { dbgLog } = require('../core/logger');
 const { getCachedDuration } = require('../core/storage');
 const { parseDurationsInBackground } = require('./duration');
+const { getCachedGenres, enrichSongGenres } = require('./genres');
 
-function scanMusicFiles() {
-  const outputDir = path.join(__dirname, '..', 'output');
+function scanMusicFiles(outputDir = path.join(__dirname, '..', 'output')) {
   const songs = [];
   if (!fs.existsSync(outputDir)) return songs;
 
@@ -115,6 +115,7 @@ function scanMusicFiles() {
       songName,
       artist,
       album,
+      genre: getCachedGenres(audioPath), // Local embedded tags; [] means no known genre.
       audioPath,
       lrcPath: lrcFile ? path.join(folderPath, lrcFile) : null,
       rawPath: rawFile ? path.join(folderPath, rawFile) : null,
@@ -129,9 +130,13 @@ function scanMusicFiles() {
   return songs;
 }
 
-// IPC: 获取歌曲列表 (瞬时返回缓存时长, 后台异步解析未缓存的)
-ipcMain.handle('get-songs', () => {
-  const songs = scanMusicFiles();
+async function scanMusicFilesWithGenres(outputDir) {
+  return enrichSongGenres(scanMusicFiles(outputDir));
+}
+
+// IPC: 获取歌曲列表 (复用时长缓存, 补充本地曲风标签后返回)
+ipcMain.handle('get-songs', async () => {
+  const songs = await scanMusicFilesWithGenres();
   // 延迟 300ms 启动后台解析, 确保渲染进程已注册 duration-update 监听器
   setTimeout(() => parseDurationsInBackground(songs), 300);
   return songs;
@@ -143,4 +148,4 @@ ipcMain.handle('get-lyrics', (event, filePath) => {
   return fs.readFileSync(filePath, 'utf-8');
 });
 
-module.exports = { scanMusicFiles };
+module.exports = { scanMusicFiles, scanMusicFilesWithGenres };

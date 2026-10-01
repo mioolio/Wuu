@@ -5,6 +5,8 @@ import type { PreviewSong, Song } from '../types';
 import { AudioEffects, normalizeFxSettings } from './audioFx';
 import { parseLyrics, type LyricsData } from './lyrics';
 import { isVideo, positive, preferredDuration, safeSeekTime, shuffled } from './playbackUtils';
+import { createCoverPalette, createShellPalette, normalizeCoverColor } from './coverPalette';
+import { recordListening, recordPlay } from './listeningHistory';
 export { isVideo, preferredDuration, safeSeekTime, shuffled } from './playbackUtils';
 
 class PlayerService {
@@ -22,6 +24,7 @@ class PlayerService {
   private shufflePaths: string[] = [];
   private shufflePos = -1;
   private version = 0;
+  private coverRequest = 0;
   private sourcePath = '';
   private requestedTime = 0;
   private lastWall = 0;
@@ -74,6 +77,14 @@ class PlayerService {
     });
     this.bind('desktopLyric', 'onLockChanged', (locked: boolean) => useAppStore.getState().setSettings({ desktopLyricLocked: !!locked }));
     this.unsubscribes.push(useAppStore.subscribe((state, previous) => {
+      const song = state.player.song;
+      // A library refresh can replace the sleeve without reopening its audio.
+      // Compare paths so progress ticks and duration metadata never re-extract it.
+      if (song && song.audioPath === previous.player.song?.audioPath &&
+          (song.coverPath || '') !== (previous.player.song?.coverPath || '')) {
+        void this.updateCoverColor(song.coverPath ? mediaUrl(song.coverPath) : '', song.coverPath || undefined, this.version);
+        this.updateMediaMetadata(); this.syncDesktop(true);
+      }
       if (state.settings.volume !== previous.settings.volume) { this.cancelFade(); this.applyVolume(state.settings.volume); }
       if (state.settings.audioFx !== previous.settings.audioFx) this.effects?.apply(normalizeFxSettings(state.settings.audioFx));
       if (state.settings !== previous.settings) {
@@ -87,19 +98,22 @@ class PlayerService {
     window.addEventListener('beforeunload', beforeUnload);
     this.unsubscribes.push(() => window.removeEventListener('beforeunload', beforeUnload));
     this.applyVolume(useAppStore.getState().settings.volume);
+    this.applyCoverTheme();
     this.installMediaSession();
-    if (useAppStore.getState().settings.desktopLyricPersist && !useAppStore.getState().player.desktopLyricOn) {
+    const interfaceSession = new URLSearchParams(globalThis.location?.search || '');
+    if ((useAppStore.getState().settings.desktopLyricPersist || interfaceSession.get('desktopLyrics') === '1') && !useAppStore.getState().player.desktopLyricOn) {
       await this.toggleDesktopLyric().catch(error => console.error('桌面歌词自动开启失败', error));
     }
     const state = useAppStore.getState();
     const previous = state.songs.find(song => song.audioPath === state.lastSession?.audioPath);
     if (previous) {
       this.likedContext = state.collections.some(collection => collection.songs.includes(previous.audioPath));
-      await this.openSong(previous, true);
+      await this.openSong(previous, true, interfaceSession.get('interfaceSwitch') !== '1');
     } else if (state.songs.length) {
       const initial = this.playlist()[0];
       if (initial) await this.openSong(initial, true);
     }
+    if (interfaceSession.get('interfacePaused') === '1') this.media.pause();
   }
 
   private bind(name: Parameters<typeof subscribe>[0], method: string, listener: (...args: any[]) => void): void {
@@ -115,6 +129,7 @@ class PlayerService {
     // Retain the MediaElementSource: a media element can only be connected once.
     void this.context?.suspend().catch(() => {});
   }
+  prepareInterfaceSwitch(): void { this.flushDuration(); this.saveProgress(); }
 
   private initAudio(): void {
     if (this.context) { void this.context.resume().catch(() => {}); return; }
@@ -149,7 +164,7 @@ class PlayerService {
     await this.openSong(song, restore);
   }
 
-  private async openSong(candidate: Song, restore: boolean): Promise<void> {
+  private async openSong(candidate: Song, restore: boolean, countPlay = true): Promise<void> {
     this.initAudio(); this.cancelFade(); this.flushDuration(); this.saveProgress();
     const version = ++this.version;
     const state = useAppStore.getState();
@@ -163,7 +178,7 @@ class PlayerService {
     if (changed) {
       this.media.src = mediaUrl(song.audioPath);
       this.media.load();
-      this.incrementPlay(song.audioPath);
+      if (countPlay) this.incrementPlay(song.audioPath);
     } else if (!restore) this.seek(0);
     this.setLyrics('', isVideo(song));
     this.sendInfo(); this.syncDesktop(true); this.updateMediaMetadata();
@@ -222,7 +237,7 @@ class PlayerService {
       }).catch(error => console.warn('远程歌单歌词读取失败', error));
     }
     this.sendInfo(); this.syncDesktop(true); this.updateMediaMetadata();
-    void this.updateCoverColor(preview.cover || '', undefined, version);
+    void this.updateCoverColor(preview.cover ? mediaUrl(preview.cover) : '', preview.cover || undefined, version);
     await this.playMedia(version);
   }
 
@@ -256,7 +271,8 @@ class PlayerService {
     this.media.pause(); this.media.removeAttribute('src'); this.media.load(); this.sourcePath = '';
     this.lyrics = { raw: false, lines: [] };
     useAppStore.getState().setPlayer({ song: null, preview: null, index: -1, time: 0, duration: 0, playing: false, loading: false, lyricText: '', error: '' });
-    this.send({ type: 'clear' }); this.syncDesktop(true);
+    this.coverColor = null; this.applyCoverTheme();
+    this.send({ type: 'clear' }); this.sendInfo(); this.sendTime(); this.send({ type: 'color', color: null }); this.syncDesktop(true);
   }
 
   private playlist(): Song[] {
@@ -385,7 +401,7 @@ class PlayerService {
   private duration(): number { const state = useAppStore.getState(); return preferredDuration(state.player.song, this.media.duration, !!state.player.preview); }
   private updateDuration(): void { useAppStore.getState().setPlayer({ duration: this.duration() }); }
   private incrementPlay(path: string): void {
-    useAppStore.setState(state => ({ stats: { ...state.stats, [path]: { plays: (state.stats[path]?.plays || 0) + 1, duration: state.stats[path]?.duration || 0 } } })); scheduleSave();
+    useAppStore.setState(state => ({ stats: { ...state.stats, [path]: recordPlay(state.stats[path]) } })); scheduleSave();
   }
   private flushDuration(): void {
     const now = performance.now();
@@ -395,7 +411,7 @@ class PlayerService {
     const path = state.player.song?.audioPath;
     const delta = (now - previous) / 1000;
     if (!path || state.player.preview || !previous || delta <= 0 || delta > 5) return;
-    useAppStore.setState(current => ({ stats: { ...current.stats, [path]: { plays: current.stats[path]?.plays || 0, duration: (current.stats[path]?.duration || 0) + delta } } }));
+    useAppStore.setState(current => ({ stats: { ...current.stats, [path]: recordListening(current.stats[path], delta) } }));
     scheduleSave();
   }
   private saveProgress(): void {
@@ -529,23 +545,45 @@ class PlayerService {
   }
 
   private async updateCoverColor(url: string, path: string | undefined, version: number): Promise<void> {
-    this.coverColor = null; this.applyCoverTheme(); this.send({ type: 'color', color: null });
-    if (!url) return;
+    const request = ++this.coverRequest;
+    // Keep the previous hue during extraction so a change of song never flashes pink.
+    if (!url) { this.coverColor = null; this.applyCoverTheme(); this.send({ type: 'color', color: null }); return; }
     try {
       const api = getBridge('musicAPI');
-      const color = path ? await api.extractCoverColor(path) : await api.extractCoverColorFromURL(url);
-      if (version !== this.version) return;
+      const source = path || url;
+      let localPath = source;
+      if (/^(file:|music:)/i.test(source)) {
+        const parsed = new URL(source);
+        localPath = decodeURIComponent(parsed.pathname).replace(/^\/(?=[a-z]:)/i, '');
+        if (parsed.hostname) localPath = `//${parsed.hostname}${localPath}`;
+      }
+      const result = /^(https?:|data:)/i.test(source) ? await api.extractCoverColorFromURL(source) : await api.extractCoverColor(localPath);
+      if (version !== this.version || request !== this.coverRequest) return;
+      const color = normalizeCoverColor(result);
       this.coverColor = color; this.applyCoverTheme(); this.send({ type: 'color', color });
-    } catch (error) { console.warn('封面主题色读取失败', error); }
+    } catch (error) {
+      if (version !== this.version || request !== this.coverRequest) return;
+      this.coverColor = null; this.applyCoverTheme(); this.send({ type: 'color', color: null });
+      console.warn('封面主题色读取失败', error);
+    }
   }
   private applyCoverTheme(): void {
     const settings = useAppStore.getState().settings;
-    const color = this.coverColor;
+    const palette = createCoverPalette(this.coverColor);
+    const shell = createShellPalette(this.coverColor, settings.themeFollowCover, settings.colorIntensity);
     const root = document.documentElement;
-    if (!settings.themeFollowCover || !color) { root.style.removeProperty('--cover-color'); root.style.removeProperty('--cover-color-rgb'); return; }
-    root.style.setProperty('--cover-color', `rgb(${color.r}, ${color.g}, ${color.b})`);
-    root.style.setProperty('--cover-color-rgb', `${color.r}, ${color.g}, ${color.b}`);
+    root.style.setProperty('--cover-color', palette.color);
+    root.style.setProperty('--cover-color-rgb', palette.rgb);
+    root.style.setProperty('--cover-accent', palette.accent);
+    root.style.setProperty('--cover-accent-secondary', palette.secondary);
+    root.style.setProperty('--cover-accent-ink', palette.ink);
+    root.style.setProperty('--cover-glow', palette.glow);
     root.style.setProperty('--cover-intensity', String(settings.colorIntensity));
+    root.style.setProperty('--cover-atmosphere', createShellPalette(this.coverColor, true, settings.colorIntensity).atmosphere);
+    root.style.setProperty('--shell-surface', shell.surface);
+    root.style.setProperty('--shell-chrome', shell.chrome);
+    root.style.setProperty('--shell-atmosphere', shell.atmosphere);
+    root.style.setProperty('--shell-muted', shell.muted);
   }
   private syncDesktop(force = false): void {
     const now = performance.now(); if (!force && now - this.lastSyncWall < 3000) return; this.lastSyncWall = now;

@@ -26,6 +26,8 @@ let likedSet = new Map();
 // 与 likedSet 互斥: 点倒赞时自动从喜欢列表移除, 反之亦然
 let dislikedSet = new Map();
 let stats = {};
+let genreOverrides = {};
+let _userDataReady = false;
 let progress = {};
 let actualDuration = {};
 let seekInProgress = false;
@@ -60,6 +62,7 @@ let desktopLyricLocked = false;
 
 // 应用设置
 let appSettings = {
+  interfaceMode: 'classic',
   showFloatListBtn: true,
   glassOpacity: 0.72,
   discCover: true,
