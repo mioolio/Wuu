@@ -36,6 +36,16 @@ describe('LRC metadata and readable lyric content', () => {
     expect(enhanced.lines.map(lineText)).toEqual(['开头中间结尾', 'Translation']);
   });
 
+  it('skips whitespace-only RAW rows so the previous real lyric keeps focus until the next one', () => {
+    const data = parseLyrics('[1000,500]<0,500,0>First\n[3000,3000]<0,1000,0> <1000,1000,0>\n[9000,1000]<0,500,0>Next');
+    expect(data.lines.map(lineText)).toEqual(['First', 'Next']);
+    expect(activeLyricIndex(data.lines, 5)).toBe(0);
+    expect(activeLyricIndex(data.lines, 8.999)).toBe(0);
+    expect(activeLyricIndex(data.lines, 9)).toBe(1);
+    expect(activeLyricIndex(data.lines, 2), 'rewind restores the first real line').toBe(0);
+    expect(parseLyrics('[0,1000]<0,500,0>Keep <500,500,0>spaces').lines.map(lineText)).toEqual(['Keep spaces']);
+  });
+
   it('extracts timed credits into two footer fields and excludes production rows from singing', () => {
     const text = '[ti:唯一]\n[00:00.00]作词 : 作者甲\n[00:01.00]曲：作者乙\n[00:02.00]编曲:丙\n[00:03.00]制作人:丁\n[00:04.00]混音：戊\n[00:05.00]母带:己\n[00:06.00]录音:庚\n[00:10.00]唯一\n[00:10.00]The only one\n[00:20.00]你是我的唯一';
     const data = parseLyrics(text);

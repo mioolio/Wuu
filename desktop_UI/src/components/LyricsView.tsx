@@ -2,19 +2,11 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { useAppStore } from '../store';
 import { activeLyricIndex, hasLyricContent, lineText, lineTime, parseLyrics, type LyricLine } from '../services/lyrics';
 import { playerService, isVideo } from '../services/player';
-import { lyricGroupFinished } from '../services/lyricPresentation';
+import { lyricGroupStart } from '../services/lyricPresentation';
 import Icon from './Icon';
 import './lyrics-view.css';
 
 interface Word { text: string; start: number; end: number }
-
-function groupStart(lines: LyricLine[], index: number): number {
-  // Track changes render the new (possibly empty) lyrics before active state resets.
-  if (!lines.length || index < 0) return -1;
-  index = Math.min(index, lines.length - 1);
-  while (index > 0 && lineTime(lines[index - 1]) === lineTime(lines[index])) index--;
-  return index;
-}
 
 function wordsForLine(line: LyricLine, next: LyricLine | undefined, duration: number, simulate: boolean): Word[] {
   if ('chars' in line) return line.chars.map(word => ({ text: word.text, start: line.start + word.offset, end: line.start + word.offset + word.dur }));
@@ -47,14 +39,12 @@ export default function LyricsView() {
   const synced = data.raw || /\[\d{1,3}[.:]\d{1,2}(?:[.:]\d{1,3})?\]/.test(text);
   const hasLyrics = hasLyricContent(text);
   const [active, setActive] = useState(-1);
-  const [finished, setFinished] = useState(false);
   const [following, setFollowing] = useState(true);
   const [reducedMotion, setReducedMotion] = useState(() => window.matchMedia('(prefers-reduced-motion: reduce)').matches);
   const container = useRef<HTMLDivElement>(null);
   const lines = useRef<(HTMLButtonElement | null)[]>([]);
   const wordRefs = useRef<(HTMLSpanElement | null)[][]>([]);
   const activeRef = useRef(-1);
-  const finishedRef = useRef(false);
   const followingRef = useRef(true);
   const keyboardBrowsing = useRef(false);
   const pointerBrowsing = useRef(false);
@@ -66,7 +56,7 @@ export default function LyricsView() {
   const centerLine = useCallback((index: number, immediate = false) => {
     const box = container.current;
     const last = Math.max(0, index);
-    const node = lines.current[groupStart(data.lines, last)];
+    const node = lines.current[lyricGroupStart(data.lines, last)];
     const end = lines.current[last];
     if (!box || !node || !end || !synced) return;
     const startRect = node.getBoundingClientRect();
@@ -128,12 +118,10 @@ export default function LyricsView() {
   useLayoutEffect(() => {
     clearResume();
     activeRef.current = -1;
-    finishedRef.current = false;
     followingRef.current = true;
     keyboardBrowsing.current = false;
     pointerBrowsing.current = false;
     setActive(-1);
-    setFinished(false);
     setFollowing(true);
     lines.current = lines.current.slice(0, words.length);
     wordRefs.current = wordRefs.current.slice(0, words.length);
@@ -152,10 +140,9 @@ export default function LyricsView() {
       frame = 0;
       const time = media.currentTime || 0;
       const index = activeLyricIndex(data.lines, time);
-      const groupFinished = lyricGroupFinished(data, index, time, duration);
       if (index !== activeRef.current) {
         const oldIndex = activeRef.current;
-        for (let row = groupStart(data.lines, oldIndex); row <= oldIndex; row++) {
+        for (let row = lyricGroupStart(data.lines, oldIndex); row <= oldIndex; row++) {
           wordRefs.current[row]?.forEach(node => {
             if (node) { node.style.opacity = ''; node.style.removeProperty('--word-progress'); }
           });
@@ -163,11 +150,7 @@ export default function LyricsView() {
         activeRef.current = index;
         setActive(index);
       }
-      if (groupFinished !== finishedRef.current) {
-        finishedRef.current = groupFinished;
-        setFinished(groupFinished);
-      }
-      const first = groupStart(data.lines, index);
+      const first = lyricGroupStart(data.lines, index);
       for (let row = first; row <= index; row++) words[row]?.forEach((word, wordIndex) => {
         const progress = word.end <= word.start ? (time >= word.start ? 1 : 0) : Math.max(0, Math.min(1, (time - word.start) / (word.end - word.start)));
         const node = wordRefs.current[row]?.[wordIndex];
@@ -227,7 +210,7 @@ export default function LyricsView() {
     });
     observer.observe(box);
     return () => observer.disconnect();
-  }, [active, finished, words, songKey, visible, reducedMotion, settings.lyricSize, settings.currentLyricSize, settings.interfaceMode, centerLine]);
+  }, [active, words, songKey, visible, reducedMotion, settings.lyricSize, settings.currentLyricSize, settings.interfaceMode, centerLine]);
 
   useEffect(() => {
     if (!visible) clearResume();
@@ -250,7 +233,7 @@ export default function LyricsView() {
     '--lyric-current-size': `${currentLyricSize}px`,
     '--lyric-wait-color': '#fff',
   } as CSSProperties;
-  const firstActive = groupStart(data.lines, active);
+  const firstActive = lyricGroupStart(data.lines, active);
 
   return <section className={`lyrics-panel polished-lyrics ${!synced ? 'unsynced-lyrics' : ''}`} aria-label="歌词" style={style}>
     {!hasLyrics ? <div className="lyrics-empty" role="status"><Icon name="headphones" size={30} /><p>{loading ? '正在载入歌词' : '让旋律陪你片刻'}</p><span>{loading ? '音乐与文字，即将相遇' : '这首歌暂时没有歌词'}</span></div> : <>
@@ -260,8 +243,8 @@ export default function LyricsView() {
         onFocusCapture={event => { if (event.target.matches(':focus-visible')) { keyboardBrowsing.current = true; pauseFollowing(true); } }}
         onBlurCapture={event => { if (!event.currentTarget.contains(event.relatedTarget)) { keyboardBrowsing.current = false; pauseFollowing(); } }}>
         <div className="lyrics-lines" key={songKey}>{data.lines.map((line, index) => {
-          const current = synced && !finished && active >= 0 && index >= firstActive && index <= active;
-          const passed = synced && firstActive >= 0 && (index < firstActive || (finished && index <= active));
+          const current = synced && active >= 0 && index >= firstActive && index <= active;
+          const passed = synced && firstActive >= 0 && index < firstActive;
           const stamp = `${Math.floor(lineTime(line) / 60)}:${String(Math.floor(lineTime(line) % 60)).padStart(2, '0')}`;
           return <button key={`${index}:${lineTime(line)}:${lineText(line)}`} type="button" ref={node => { lines.current[index] = node; }}
             className={`lyric-line ${current ? 'current' : ''} ${current && index > firstActive ? 'lyric-companion' : ''} ${passed && !current ? 'passed' : ''}`} aria-current={current ? 'true' : undefined}

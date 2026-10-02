@@ -102,7 +102,7 @@ export function parseRaw(text: string): WordLyricLine[] {
       // Deduplicating provider text must not shorten its declared line lifetime:
       // word durations are capped for fill, while the final note can continue.
     }
-    if (chars.length) lines.push({ start, duration, chars });
+    if (chars.length && deduped.trim()) lines.push({ start, duration, chars });
   }
   return lines.sort((a, b) => a.start - b.start);
 }

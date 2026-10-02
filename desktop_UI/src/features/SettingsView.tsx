@@ -142,9 +142,9 @@ export default function SettingsView() {
           </Group>
         </div>
         <div id="settings-panel-lyrics" className="settings-category" role="tabpanel" aria-labelledby="settings-tab-lyrics" hidden={category !== 'lyrics'}>
-          <Group title="歌词阅读" description="唱到当前一句时放大，唱完立即恢复普通字号。">
+          <Group title="歌词阅读" description="唱到当前一句时放大，下一句开始后，上句恢复普通字号。">
             <Range label="当前歌词字号" value={settings.currentLyricSize} min={settings.lyricSize} max={60} unit=" px" onChange={value => setSettings({ currentLyricSize: value })} />
-            <Advanced title="普通歌词字号" description="已唱、未唱与未同步歌词使用此字号">
+            <Advanced title="普通歌词字号" description="当前句以外及未同步歌词使用此字号">
               <Range label="普通歌词字号" value={settings.lyricSize} min={12} max={36} unit=" px" onChange={value => setSettings({ lyricSize: value })} />
             </Advanced>
             <Toggle label="普通歌词模拟逐字进度" description="为没有逐字时间的歌词添加播放进度" checked={settings.simulateLrcProgress} onChange={value => setSettings({ simulateLrcProgress: value })} />

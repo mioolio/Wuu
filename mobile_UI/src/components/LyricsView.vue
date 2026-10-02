@@ -3,13 +3,12 @@
 <script setup>
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue';
 import { usePlayer } from '../composables/usePlayer.js';
-import { parseLyrics, lyricCredits, readLyricTime, activeLyricIndex, isCurrentLyric, lyricGroupFinished, lyricCharProgress, lyricLineProgress } from '../services/lyrics.js';
+import { parseLyrics, lyricCredits, readLyricTime, activeLyricIndex, isCurrentLyric, lyricCharProgress, lyricLineProgress } from '../services/lyrics.js';
 import { useLyricPreferences } from '../composables/useLyricPreferences.js';
 
 const { lyricText, currentTime, duration, isPlaying, seek, seekTo, getAudioEl } = usePlayer();
 const lines = ref([]);
 const curIdx = ref(-1);
-const finished = ref(false);
 const listRef = ref(null);
 const viewRef = ref(null);
 const frameTime = ref(0);
@@ -52,10 +51,8 @@ function followAllowed() { return !touchActive && performance.now() >= manualUnt
 function syncPosition(force = false, behavior = 'smooth') {
   frameTime.value = readLyricTime(getAudioEl(), currentTime.value);
   const idx = activeLyricIndex(lines.value, frameTime.value);
-  const completed = lyricGroupFinished(lines.value, idx, frameTime.value, duration.value);
-  const changed = idx !== curIdx.value || completed !== finished.value;
+  const changed = idx !== curIdx.value;
   curIdx.value = idx;
-  finished.value = completed;
   if (changed || force || pendingFollow) {
     if (force || followAllowed()) {
       pendingFollow = false;
@@ -141,11 +138,11 @@ onUnmounted(() => {
   document.removeEventListener('visibilitychange', onVisibilityChange);
   window.removeEventListener('resize', onResize);
 });
-function isCurrent(i) { return !finished.value && isCurrentLyric(lines.value, i, curIdx.value); }
+function isCurrent(i) { return isCurrentLyric(lines.value, i, curIdx.value); }
 function lineClass(i) {
   if (!Number.isFinite(lines.value[i].time)) return 'plain';
   if (isCurrent(i)) return 'cur';
-  return i < curIdx.value || (finished.value && isCurrentLyric(lines.value, i, curIdx.value)) ? 'sung' : 'unsung';
+  return i < curIdx.value ? 'sung' : 'unsung';
 }
 function charStyle(char, line) {
   const progress = lyricCharProgress(char, line.time, frameTime.value);

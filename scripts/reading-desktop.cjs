@@ -285,7 +285,8 @@ async function setInput(locator,value) {
     report.checks.push('past lyrics retain cover color and return to ordinary size, future lyrics stay white, current lyrics use the selected absolute size/stronger weight without a marker, and backward seeks clear obsolete progress');
 
     // Keep the real audio and provider word timings, but give the first RAW
-    // line a genuine 3–5s silence interval through this isolated fixture IPC.
+    // line a genuine 3–5s silence interval (including a whitespace-only RAW
+    // row) and end the final fill early. Only a real lyric can take over focus.
     // Read fixture files in this Node process: serialized main-process callbacks
     // do not have CommonJS require. No media or lyric files are rewritten.
     const lyricFiles=await app.evaluate(()=>({rawPath:global.__wuuSmoke.songs[0].rawPath,
@@ -294,14 +295,16 @@ async function setInput(locator,value) {
     const rawGap=await app.evaluate(({ipcMain},{file,lyrics})=>{
       const originals=new Map(lyrics),original=originals.get(file);
       if(!original.includes('[0,5000]'))throw new Error('The RAW first-line fixture no longer has its expected declared duration');
-      const content=original.replace('[0,5000]','[0,3000]');
+      if(!original.includes('[76000,12000]'))throw new Error('The RAW final-line fixture no longer has its expected declared duration');
+      const content=original.replace('[0,5000]','[0,3000]').replace('[76000,12000]','[76000,2000]')
+        .replace('\n[5000,','\n[3250,1000]<0,500,0> <500,500,0>\n[5000,');
       global.__readingRawGapEnabled=true;
       ipcMain.removeHandler('get-lyrics');
       ipcMain.handle('get-lyrics',(_event,requested)=>{
         if(!originals.has(requested))throw new Error(`Unknown isolated lyric fixture: ${requested}`);
         return global.__readingRawGapEnabled&&requested===file?content:originals.get(requested);
       });
-      return {declaredEnd:3,nextLineStart:5,lastWordEnd:1.4};
+      return {declaredEnd:3,blankRowStart:3.25,nextLineStart:5,lastWordEnd:1.4,finalDeclaredEnd:78,trackEnd:88};
     },{file:lyricFiles.rawPath,lyrics:lyricContents});
     await page.reload();await nav.waitFor();await go('正在播放');
     if(await page.getByRole('button',{name:'暂停',exact:true}).count())await page.getByRole('button',{name:'暂停',exact:true}).click();
@@ -309,26 +312,41 @@ async function setInput(locator,value) {
       await seek(time);const state=await lyricState();report.lyrics.push({time,label,rawGap,...state});return state;
     };
     const tail=await gapState(2.5,'RAW declared duration preserves the tail');
-    assert.equal(tail.rows[0].state,'current');assert.equal(tail.rows[0].font,26,'A capped last-word fill must not shrink the line before its declared RAW end');
-    const gap=await gapState(3.5,'RAW completed line before next timestamp');
-    assert.equal(gap.rows.filter(row=>row.state==='current').length,0,'A RAW silence interval has no artificially prolonged current line');
-    assert.equal(gap.rows[0].state,'past');assert.equal(gap.rows[0].font,20);assert.equal(gap.rows[0].wordColor,gap.activeColor);assert.equal(gap.rows[0].wordBackground,'none');
+    assert.equal(tail.rows[0].state,'current');assert.equal(tail.rows[0].font,26);assert.equal(tail.rows[0].progress,'100%','Real RAW word fill can finish while the line remains focused');
+    const gap=await gapState(3.5,'RAW complete fill keeps focus before next timestamp');
+    assert.equal(gap.rows.filter(row=>row.state==='current').length,1,'The current RAW line keeps focus throughout a silence interval');
+    assert.equal(gap.rows[0].state,'current');assert.equal(gap.rows[0].font,26);assert.equal(gap.rows[0].progress,'100%');assert.notEqual(gap.rows[0].wordBackground,'none');
     assert.ok(gap.rows.slice(1).every(row=>row.state==='future'&&row.font===20&&row.wordColor==='rgb(255, 255, 255)'),'The next RAW group remains white and ordinary-sized during the gap');
-    await capture('raw-gap-completed-ordinary');
-    const rewind=await gapState(1,'RAW rewind restores current size');
+    await capture('raw-gap-current-retained');
+    const next=await gapState(5.2,'Next timestamp hands over focus');
+    assert.equal(next.rows[0].state,'past');assert.equal(next.rows[0].font,20);assert.equal(next.rows[0].wordColor,next.activeColor);assert.equal(next.rows[0].wordBackground,'none');
+    assert.equal(next.rows[1].state,'current');assert.equal(next.rows[1].font,26);assert.equal(next.rows.filter(row=>row.state==='current').length,1);
+    const rewind=await gapState(1,'RAW rewind restores original group');
     assert.equal(rewind.rows[0].state,'current');assert.equal(rewind.rows[0].font,26);assert.equal(rewind.rows.filter(row=>row.state==='past').length,0);
     assert.ok(rewind.rows[0].wordBackground!=='none'&&rewind.rows.slice(1).every(row=>row.state==='future'&&row.font===20&&row.wordColor==='rgb(255, 255, 255)'&&!row.progress),'Rewinding restores current word fill and clears obsolete historical colors/progress');
     await seek(2.8);await page.getByRole('button',{name:'播放',exact:true}).click();
     await page.waitForFunction(()=>{
       const time=Number(document.querySelector('[aria-label="播放进度"]').value);
-      return time>=3&&time<5&&document.querySelectorAll('.lyrics-panel .lyric-line.current').length===0;
+      return time>=3.2&&time<5&&document.querySelector('.lyrics-panel .lyric-line')?.dataset.lyricState==='current';
     },null,{timeout:2500});
     await page.getByRole('button',{name:'暂停',exact:true}).click();
-    const crossed=await lyricState();report.lyrics.push({time:Number(await page.getByRole('slider',{name:'播放进度',exact:true}).inputValue()),label:'Native audio crosses RAW completion during playback',rawGap,...crossed});
-    assert.equal(crossed.rows[0].state,'past');assert.equal(crossed.rows[0].font,20,'Native playback immediately returns the completed line to the ordinary font');
-    assert.equal(crossed.rows.filter(row=>row.state==='current').length,0);
-    assert.deepEqual(await app.evaluate(()=>({ordinary:global.__wuuSmoke.data.settings.lyricSize,current:global.__wuuSmoke.data.settings.currentLyricSize})),{ordinary:20,current:26},'Completion and rewind never modify either saved font preference');
-    report.checks.push('RAW provider duration keeps the tail enlarged after last-word fill, completion at 3s restores 20px during the 3–5s gap, native playback crosses the boundary, and rewind to 1s restores the saved 26px/current fill');
+    const crossed=await lyricState();report.lyrics.push({time:Number(await page.getByRole('slider',{name:'播放进度',exact:true}).inputValue()),label:'Native audio crosses RAW duration without losing focus',rawGap,...crossed});
+    assert.equal(crossed.rows[0].state,'current');assert.equal(crossed.rows[0].font,26);assert.equal(crossed.rows[0].progress,'100%');
+    await seek(4.7);await page.getByRole('button',{name:'播放',exact:true}).click();
+    await page.waitForFunction(()=>{
+      const time=Number(document.querySelector('[aria-label="播放进度"]').value),rows=document.querySelectorAll('.lyrics-panel .lyric-line');
+      return time>=5&&time<7&&rows[0]?.dataset.lyricState==='past'&&rows[1]?.dataset.lyricState==='current';
+    },null,{timeout:2500});
+    await page.getByRole('button',{name:'暂停',exact:true}).click();
+    const handedOver=await lyricState();report.lyrics.push({time:Number(await page.getByRole('slider',{name:'播放进度',exact:true}).inputValue()),label:'Native audio hands focus to the next timestamp',rawGap,...handedOver});
+    assert.equal(handedOver.rows[0].font,20);assert.equal(handedOver.rows[1].font,26);
+    for(const time of [80,88]){
+      const final=await gapState(time,'Final RAW group retains focus until song replacement');
+      assert.equal(final.rows.at(-1).state,'current');assert.equal(final.rows.at(-1).font,26);assert.equal(final.rows.at(-1).progress,'100%');
+      assert.ok(final.rows.slice(0,-1).every(row=>row.state==='past'&&row.font===20),'Only the last group stays enlarged at the end of the paused track');
+    }
+    assert.deepEqual(await app.evaluate(()=>({ordinary:global.__wuuSmoke.data.settings.lyricSize,current:global.__wuuSmoke.data.settings.currentLyricSize})),{ordinary:20,current:26},'Focus handover and rewind never modify either saved font preference');
+    report.checks.push('Completed RAW fill stays enlarged throughout the 3–5s gap despite a blank RAW row; next real timestamp/native playback hand over old20/new26, rewind restores original focus, and the final group remains26 after its declared end up to the paused track endpoint');
     await app.evaluate(()=>{global.__readingRawGapEnabled=false;});
     await page.reload();await nav.waitFor();await go('正在播放');
     if(await page.getByRole('button',{name:'暂停',exact:true}).count())await page.getByRole('button',{name:'暂停',exact:true}).click();

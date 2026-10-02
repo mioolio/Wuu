@@ -356,10 +356,10 @@ async function touchGesture(locator, direction) {
     assert.ok(probe.samples.every(sample => Math.abs(sample.scrollTop - probe.scrollTop) < 2), 'Live lyric frames do not pull manual reading back to the current phrase beginning');
     report.checks.push('complete long lyrics expose both ends and preserve manual scrolling during real playback');
 
-    // Short word tags do not declare when a sustained RAW phrase ends. The two
-    // same-time phrases deliberately end at 33s and 35s before the next at 50s.
+    // Word fill and phrase duration can finish before the next lyric. Both
+    // timestamp companions must keep focus through that silent gap.
     await app.evaluate(() => {
-      global.__wuuMobileFixture.lyrics[0] = '[30000,3000]<0,200,0>RAW原文持续音\n[30000,5000]<0,200,0>RAW译文延后结束\n[50000,2000]<0,200,0>RAW下一句';
+      global.__wuuMobileFixture.lyrics[0] = '[30000,3000]<0,200,0>RAW原文持续音\n[30000,5000]<0,200,0>RAW译文延后结束\n[34000,3000]<0,1000,0> <1000,1000,0>\n[50000,2000]<0,200,0>RAW下一句';
     });
     await page.setViewportSize({ width: 414, height: 896 });
     await page.reload({ waitUntil: 'domcontentloaded' });
@@ -370,7 +370,7 @@ async function touchGesture(locator, direction) {
     await cover().locator('.play-btn').click();
     await waitUntil(async () => { const media = await audio(); return !media.paused && media.readyState >= 2; }, 'The RAW scene begins genuine buffered playback');
     await openLyrics();
-    await waitUntil(async () => await lyricView().locator('.lyric-line.cur').count() === 2, 'Both RAW timestamp companions remain current until their latest declared end');
+    await waitUntil(async () => await lyricView().locator('.lyric-line.cur').count() === 2, 'Both RAW timestamp companions remain current through the silent gap');
     report.rawBoundaryFrames = await page.evaluate(() => new Promise((resolve, reject) => {
       const frames = [], started = performance.now();
       const sample = () => {
@@ -378,23 +378,78 @@ async function touchGesture(locator, direction) {
         const current = document.querySelectorAll('.lyrics-view .lyric-line.cur').length;
         frames.push({ time: audio.currentTime, current });
         if (audio.currentTime >= 35.2) return resolve(frames);
-        if (performance.now() - started > 10000) return reject(new Error('Native RAW playback did not reach the phrase end'));
+        if (performance.now() - started > 10000) return reject(new Error('Native RAW playback did not reach the silent gap'));
         requestAnimationFrame(sample);
       };
       requestAnimationFrame(sample);
     }));
     assert.ok(report.rawBoundaryFrames.some(frame => frame.time < 35 && frame.current === 2));
-    assert.ok(report.rawBoundaryFrames.some(frame => frame.time >= 35 && frame.time < 35.12 && frame.current === 0), 'RAW phrases return to ordinary text as their real duration ends, before the next timestamp');
-    const rawRows = await lyricView().locator('.lyric-line').evaluateAll(rows => rows.map(row => ({ state: row.className, size: parseFloat(getComputedStyle(row).fontSize), color: getComputedStyle(row).color })));
-    assert.ok(rawRows.slice(0, 2).every(row => row.state.includes('sung') && row.size === beforeOrdinary && row.color !== 'rgb(255, 255, 255)'));
+    assert.ok(report.rawBoundaryFrames.some(frame => frame.time >= 35));
+    assert.ok(report.rawBoundaryFrames.every(frame => frame.current === 2), 'Completing RAW duration never leaves the gap without a current group');
+    const rawRows = await lyricView().locator('.lyric-line').evaluateAll(rows => rows.map(row => ({ state: row.className, size: parseFloat(getComputedStyle(row).fontSize), color: getComputedStyle(row).color,
+      words: [...row.querySelectorAll('.char')].map(char => getComputedStyle(char).color) })));
+    assert.ok(rawRows.slice(0, 2).every(row => row.state.includes('cur') && row.size === 60 && row.words.length && row.words.every(color => color !== 'rgb(255, 255, 255)')), 'The fully sung RAW companions stay enlarged and colored throughout the gap');
     assert.ok(rawRows[2].state.includes('unsung') && rawRows[2].size === beforeOrdinary && rawRows[2].color === 'rgb(255, 255, 255)');
-    await capture('08-raw-gap-ordinary-font');
+    await capture('08-raw-gap-current-font');
+    await closeLyrics(); if (!(await audio()).paused) await cover().locator('.play-btn').click();
+    await seekCoverTo(48.5);
+    await waitUntil(async () => Math.abs((await audio()).time - 48.5) < .2, 'The production progress control seeks before the next RAW group');
+    await cover().locator('.play-btn').click(); await openLyrics();
+    report.rawNextFrames = await page.evaluate(() => new Promise((resolve, reject) => {
+      const frames = [], started = performance.now();
+      const sample = () => {
+        const audio = document.querySelector('audio');
+        const current = [...document.querySelectorAll('.lyrics-view .lyric-line.cur .lyric-text')].map(text => text.textContent.trim());
+        frames.push({ time: audio.currentTime, current });
+        if (audio.currentTime >= 50.2) return resolve(frames);
+        if (performance.now() - started > 10000) return reject(new Error('Native RAW playback did not reach the next timestamp'));
+        requestAnimationFrame(sample);
+      };
+      requestAnimationFrame(sample);
+    }));
+    assert.ok(report.rawNextFrames.some(frame => frame.time < 50 && frame.current.length === 2), 'The previous RAW group keeps focus right up to the next timestamp');
+    const rawNext = report.rawNextFrames.find(frame => frame.time >= 50 && frame.current.length === 1 && frame.current[0] === 'RAW下一句');
+    assert.ok(rawNext && rawNext.time - 50 < .12, 'The next RAW group takes focus within a few native media frames');
+    const afterNext = await lyricView().locator('.lyric-line').evaluateAll(rows => rows.map(row => ({ state: row.className, size: parseFloat(getComputedStyle(row).fontSize) })));
+    assert.ok(afterNext.slice(0, 2).every(row => row.state.includes('sung') && row.size === beforeOrdinary), 'Only the next timestamp returns the previous companions to the ordinary size');
+    assert.ok(afterNext[2].state.includes('cur') && afterNext[2].size === 60);
+    await capture('09-raw-next-group-current-font');
     await closeLyrics(); if (!(await audio()).paused) await cover().locator('.play-btn').click(); await openLyrics();
     await lyricView().locator('.lyric-line').first().click();
     await waitUntil(async () => Math.abs((await audio()).time - 30) < .2 && await lyricView().locator('.lyric-line.cur').count() === 2, 'Paused backward RAW seeking restores both current companion lines');
     assert.ok((await lyricView().locator('.lyric-line.cur').evaluateAll(rows => rows.map(row => parseFloat(getComputedStyle(row).fontSize)))).every(size => size === 60));
-    await capture('09-raw-seek-restores-current-font');
-    report.checks.push('RAW sustained phrase groups finish at the latest provider duration, restore ordinary text in the gap and enlarge again on backward seek');
+    const rewoundWords = await lyricView().locator('.lyric-line.cur .char').evaluateAll(words => words.map(word => getComputedStyle(word).color));
+    assert.ok(rewoundWords.length && rewoundWords.every(color => color === 'rgb(255, 255, 255)'), 'Backward RAW seeking also restores unsung word fill');
+    await capture('10-raw-seek-restores-current-font');
+    report.checks.push('RAW companions retain enlarged colored focus through silent gaps, shrink only when the next timestamp starts and restore white fill on backward seek');
+
+    // Observe the native ended event without suppressing normal automatic next
+    // song behavior. The final group still owns focus until the song changes.
+    await closeLyrics(); await seekCoverTo(88.5);
+    await waitUntil(async () => Math.abs((await audio()).time - 88.5) < .2, 'The production progress control seeks near the actual track end');
+    await openLyrics(); await requireLine('RAW下一句', 'The final RAW group keeps focus after its word and phrase duration');
+    assert.equal((await styles()).current.fontSize, 60);
+    await capture('11-final-lyric-before-track-end');
+    await page.evaluate(() => {
+      window.__mobileEndedFocus = null;
+      const audio = document.querySelector('audio');
+      audio.addEventListener('ended', () => {
+        const rows = [...document.querySelectorAll('.lyrics-view .lyric-line.cur')];
+        window.__mobileEndedFocus = { time: audio.currentTime, duration: audio.duration,
+          source: audio.currentSrc, current: rows.map(row => ({ text: row.textContent.trim(), size: parseFloat(getComputedStyle(row).fontSize),
+            words: [...row.querySelectorAll('.char')].map(word => getComputedStyle(word).color) })) };
+      }, { once: true });
+    });
+    await closeLyrics(); await cover().locator('.play-btn').click(); await openLyrics();
+    await waitUntil(() => page.evaluate(() => !!window.__mobileEndedFocus), 'Native audio reaches the actual track end');
+    report.finalFocus = await page.evaluate(() => window.__mobileEndedFocus);
+    assert.ok(Math.abs(report.finalFocus.time - report.finalFocus.duration) < .02);
+    assert.ok(report.finalFocus.source.endsWith('/api/stream/0'));
+    assert.equal(report.finalFocus.current.length, 1);
+    assert.equal(report.finalFocus.current[0].text, 'RAW下一句');
+    assert.equal(report.finalFocus.current[0].size, 60);
+    assert.ok(report.finalFocus.current[0].words.length && report.finalFocus.current[0].words.every(color => color !== 'rgb(255, 255, 255)'));
+    report.checks.push('the final fully sung lyric stays enlarged through native track end until automatic song change');
 
     report.fixture = await app.evaluate(() => ({ origin: global.__wuuMobileFixture.origin, requests: global.__wuuMobileFixture.requests }));
     const delayedAudio = report.fixture.requests.find(request => request.path.startsWith('/api/stream') && request.delayMs === 900 && request.servedAt);

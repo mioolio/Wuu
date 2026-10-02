@@ -7,14 +7,14 @@ const sameTime = (a, b) => Number.isFinite(a) && Number.isFinite(b) && Math.abs(
 const metadataPrefix = /^(?:\s*\[(?:[a-zA-Z][\w-]*|[\u3400-\u9fff]+)\s*[:：][^\]]*\])+\s*/;
 const lyricistLabels = new Set(['作词', '词', '填词', '作词人', '词作者', 'lyricist', 'lyrics']);
 const composerLabels = new Set(['作曲', '曲', '作曲人', '曲作者', 'composer', 'music']);
-const combinedLabels = new Set(['词曲', '词/曲', '作词/作曲']);
-const productionLabels = new Set(['编曲', '制作人', '制作', '混音', '混音师', '母带', '母带处理', '母带工程师', '录音', '录音师', '录音室', '和声', '和声编写', '音乐总监', '监制', '发行', '出品', '版权', 'op', 'sp', 'arranger', 'arrangement', 'producer', 'production', 'mixing', 'mastering', 'recording']);
+const combinedLabels = new Set(['词曲', '作词作曲', '词/曲', '作词/作曲']);
+const productionLabels = new Set(['编曲', '制作人', '制作', '混音', '混音师', '母带', '母带处理', '母带工程师', '录音', '录音师', '录音室', '和声', '和声编写', '音乐总监', '监制', '发行', '出品', '出品人', '版权', '后期', 'op', 'sp', 'arranger', 'arrangement', 'producer', 'production', 'mixing', 'mastering', 'recording']);
 
 function stripMetadata(line) { return line.trim().replace(metadataPrefix, ''); }
 function readCredit(text) {
   const match = /^([^:：]+)\s*[:：]\s*(.*)$/.exec(text.trim());
   if (!match) return null;
-  const label = match[1].trim().replace(/\s*\/\s*/g, '/').toLowerCase();
+  const label = match[1].trim().replace(/\s*[/／]\s*/g, '/').toLowerCase();
   const kind = lyricistLabels.has(label) ? 'lyricist' : composerLabels.has(label) ? 'composer' : combinedLabels.has(label) ? 'combined' : productionLabels.has(label) ? 'production' : null;
   return kind ? { kind, value: match[2].trim() } : null;
 }
@@ -72,7 +72,7 @@ export function parseLyrics(text) {
     if (krc) {
       const chars = parseRawChars(krc[3]);
       const words = chars.map(char => char.text).join('');
-      if (chars.length && !readCredit(words)) result.push({ time: Number(krc[1]) / 1000 + offset, duration: Number(krc[2]) / 1000, text: words, chars, timing: 'raw' });
+      if (words.trim() && !readCredit(words)) result.push({ time: Number(krc[1]) / 1000 + offset, duration: Number(krc[2]) / 1000, text: words, chars, timing: 'raw' });
       continue;
     }
     const stamps = [...body.matchAll(stampPattern)];
@@ -106,7 +106,8 @@ export function readLyricTime(audio, fallback) {
   return Number.isFinite(value) ? Math.max(0, value) : 0;
 }
 
-// Select the first row of a timestamp group so original and translation share focus.
+// Select the first row of a timestamp group so original and translation share
+// focus until the next group starts, including silent gaps and the final line.
 export function activeLyricIndex(lines, time) {
   if (!Number.isFinite(time)) return -1;
   let low = 0, high = lines.length - 1, result = -1;
@@ -121,25 +122,6 @@ export function activeLyricIndex(lines, time) {
 
 export function isCurrentLyric(lines, index, active) {
   return active >= 0 && sameTime(lines[index]?.time, lines[active]?.time);
-}
-
-// RAW declares a whole-phrase duration; enhanced word offsets do not. A
-// timestamp group returns to ordinary size only after its latest real end.
-export function lyricGroupFinished(lines, active, time, duration) {
-  if (active < 0 || active >= lines.length || !Number.isFinite(time)) return false;
-  const start = lines[active].time;
-  if (!Number.isFinite(start)) return false;
-  let first = active, last = active;
-  while (first > 0 && sameTime(lines[first - 1].time, start)) first--;
-  while (last + 1 < lines.length && sameTime(lines[last + 1].time, start)) last++;
-  const fallbackEnd = lines[last + 1]?.time ?? (Number.isFinite(duration) && duration > start ? duration : Infinity);
-  let declaredEnd = -Infinity;
-  for (let index = first; index <= last; index++) {
-    const line = lines[index];
-    if (line.timing === 'raw' && Number.isFinite(line.duration) && line.duration > 0) declaredEnd = Math.max(declaredEnd, line.time + line.duration);
-  }
-  const end = Number.isFinite(declaredEnd) ? declaredEnd : fallbackEnd;
-  return Number.isFinite(end) && time >= end;
 }
 
 export function lyricCharProgress(char, lineTime, now) {

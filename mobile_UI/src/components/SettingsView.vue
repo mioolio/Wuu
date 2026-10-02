@@ -4,11 +4,11 @@
 
     <section class="settings-group" aria-label="歌词设置">
       <div class="group-title">歌词</div>
-      <label class="setting-row" for="mobile-current-lyric-size"><span class="setting-info"><span class="setting-name">当前歌词字号</span><span class="setting-desc">仅放大正在播放的一行，唱完恢复普通字号</span></span><output for="mobile-current-lyric-size" class="lyric-size-value">{{ currentLyricSize }} px</output></label>
+      <label class="setting-row" for="mobile-current-lyric-size"><span class="setting-info"><span class="setting-name">当前歌词字号</span><span class="setting-desc">下一句开始后，上句恢复普通字号</span></span><output for="mobile-current-lyric-size" class="lyric-size-value">{{ currentLyricSize }} px</output></label>
       <input id="mobile-current-lyric-size" class="lyric-size-range" type="range" aria-label="当前歌词字号" :aria-valuetext="currentLyricSize + ' 像素'" :min="lyricSize" :max="MAX_CURRENT_LYRIC_SIZE" step="1" :value="currentLyricSize" @input="setCurrentLyricSize(Number($event.target.value))" />
       <details class="lyric-advanced">
         <summary>高级歌词设置</summary>
-        <label class="setting-row" for="mobile-lyric-size"><span class="setting-info"><span class="setting-name">普通歌词字号</span><span class="setting-desc">用于未播放和已唱完的歌词</span></span><output for="mobile-lyric-size" class="lyric-size-value">{{ lyricSize }} px</output></label>
+        <label class="setting-row" for="mobile-lyric-size"><span class="setting-info"><span class="setting-name">普通歌词字号</span><span class="setting-desc">用于当前句以外的歌词</span></span><output for="mobile-lyric-size" class="lyric-size-value">{{ lyricSize }} px</output></label>
         <input id="mobile-lyric-size" class="lyric-size-range" type="range" aria-label="普通歌词字号" :aria-valuetext="lyricSize + ' 像素'" :min="MIN_LYRIC_SIZE" :max="MAX_LYRIC_SIZE" step="1" :value="lyricSize" @input="setLyricSize(Number($event.target.value))" />
       </details>
     </section>

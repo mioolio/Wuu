@@ -36,6 +36,19 @@ test('raw prefix and suffix tags preserve words, trailing text and line duration
   assert.equal(lyrics.lyricCharProgress({ offset: 0, dur: 0 }, 10, 10.05).toFixed(1), '0.5');
 });
 
+test('blank RAW rows cannot take focus during a gap and real phrase spaces and duration remain intact', () => {
+  const lines = lyrics.parseLyrics('[1000,500]<0,500,0>First\n[3000,3000]<0,1000,0> <1000,1000,0>\n[9000,1000]<0,500,0>Next');
+  assert.deepEqual(lines.map(line => [line.time, line.text]), [[1, 'First'], [9, 'Next']]);
+  const active = lyrics.activeLyricIndex(lines, 5);
+  assert.equal(lines[active].text, 'First', 'a whitespace-only provider row must not steal focus from the last visible lyric');
+  assert.equal(lyrics.isCurrentLyric(lines, 0, active), true);
+  assert.equal(lines[lyrics.activeLyricIndex(lines, 9)].text, 'Next');
+  const spaced = lyrics.parseLyrics('[1000,6000]<0,500,0>First <500,500,0>word')[0];
+  assert.equal(spaced.text, 'First word');
+  assert.deepEqual(spaced.chars.map(char => char.text), ['First ', 'word']);
+  assert.equal(spaced.duration, 6, 'filtering blank lines cannot replace the provider whole-phrase duration');
+});
+
 test('missing metadata uses restored progress and unsynchronized text remains visible', () => {
   assert.equal(lyrics.readLyricTime({ readyState: 0, currentTime: 0 }, 42), 42);
   assert.equal(lyrics.readLyricTime({ readyState: 2, currentTime: 12 }, 42), 12);
@@ -66,18 +79,38 @@ test('word-timed credits are reconstructed before filtering and combined authors
   assert.deepEqual(lyrics.parseLyrics('[00:00]词 / 曲：共同作者\n[00:10]唯一'), [{ time: 10, text: '唯一' }]);
 });
 
-test('RAW groups finish at the latest declared phrase end, enhanced groups at the next timestamp and final LRC at the track end', () => {
+test('combined credit aliases and production labels never replace real lyrics or claim their focus', () => {
+  for (const label of ['作词作曲', '作词／作曲', '作词 ／ 作曲']) {
+    const text = '[1000,500]<0,500,0>唯一\n[3000,1000]<0,500,0>' + label + '：<500,500,0>共同作者\n[00:04]出品人：制作署名\n[00:05]后期：后期署名\n[00:09]这句提到作词作曲：也是普通歌词';
+    const lines = lyrics.parseLyrics(text);
+    assert.deepEqual(lines.map(line => line.text), ['唯一', '这句提到作词作曲：也是普通歌词']);
+    assert.equal(lines[lyrics.activeLyricIndex(lines, 5)].text, '唯一', 'credit timestamps must not take the active lyric focus');
+    assert.deepEqual(lyrics.lyricCredits(text), { lyricist: '共同作者', composer: '共同作者' });
+  }
+  assert.deepEqual(lyrics.parseLyrics('作词作曲：共同作者\n出品人：制作署名\n唯一'), [{ time: null, text: '唯一' }]);
+});
+
+test('timestamp groups keep focus through RAW gaps and the final line while word fill completes independently', () => {
   const raw = lyrics.parseLyrics('[10000,3000]<0,200,0>长音\n[10000,5000]<0,200,0>Translation\n[20000,2000]<0,200,0>Next');
-  assert.equal(lyrics.lyricGroupFinished(raw, 0, 12, 90), false, 'the short word fill cannot end a sustained whole phrase');
-  assert.equal(lyrics.lyricGroupFinished(raw, 0, 14, 90), false, 'a translated phrase with a later real end keeps its timestamp group current');
-  assert.equal(lyrics.lyricGroupFinished(raw, 0, 15, 90), true, 'the group finishes before a later next lyric starts');
+  for (const time of [12, 14, 15, 19.9]) {
+    const active = lyrics.activeLyricIndex(raw, time);
+    assert.equal(active, 0, 'declared phrase ends cannot remove focus before the next timestamp');
+    assert.equal(lyrics.isCurrentLyric(raw, 0, active), true);
+    assert.equal(lyrics.isCurrentLyric(raw, 1, active), true, 'same-time translation keeps the same focus');
+    assert.equal(lyrics.lyricCharProgress(raw[0].chars[0], raw[0].time, time), 1, 'fully sung words remain colored during the gap');
+  }
+  assert.equal(lyrics.activeLyricIndex(raw, 20), 2);
+  assert.equal(lyrics.isCurrentLyric(raw, 0, 2), false);
+  assert.equal(lyrics.isCurrentLyric(raw, 2, 2), true);
   const enhanced = lyrics.parseLyrics('[00:10]你[00:10.50]好\n[00:20]Next');
-  assert.equal(lyrics.lyricGroupFinished(enhanced, 0, 19, 90), false, 'enhanced word fill does not imply a reliable phrase end');
-  assert.equal(lyrics.lyricGroupFinished(enhanced, 0, 20, 90), true);
+  assert.equal(lyrics.activeLyricIndex(enhanced, 19), 0);
+  assert.equal(lyrics.lyricCharProgress(enhanced[0].chars.at(-1), 10, 19), 1);
+  assert.equal(lyrics.activeLyricIndex(enhanced, 20), 1);
   const standard = lyrics.parseLyrics('[00:10]Last');
-  assert.equal(lyrics.lyricGroupFinished(standard, 0, 89, 90), false);
-  assert.equal(lyrics.lyricGroupFinished(standard, 0, 90, 90), true);
-  assert.equal(lyrics.lyricGroupFinished(standard, 0, 90, 0), false, 'unknown duration cannot invent a last-line end');
+  assert.equal(lyrics.activeLyricIndex(standard, 90), 0, 'the final group remains current at the track end');
+  assert.equal(lyrics.lyricLineProgress(standard, 0, 90, 90), 1);
+  assert.equal(lyrics.activeLyricIndex(raw, 10), 0, 'backward seeking restores the earlier group');
+  assert.equal(lyrics.lyricCharProgress(raw[0].chars[0], raw[0].time, 10), 0);
 });
 
 const source = readFileSync(new URL('../components/LyricsView.vue', import.meta.url), 'utf8');
@@ -257,21 +290,32 @@ test('current font updates do not enlarge ordinary lyrics and remain independent
   reopened.unmount();
 });
 
-test('RAW gap and final track end restore ordinary lyrics while backward seeking restores the current group', async () => {
+test('RAW gaps retain current companions, the next group shrinks them, and the final focus survives ended until a song changes', async () => {
   const fixture = mountFixture({ time: 12, paused: false });
   fixture.player.lyricText.value = '[10000,3000]<0,200,0>原文\n[10000,5000]<0,200,0>Translation\n[20000,2000]<0,200,0>Next';
   await flush();
   assert.equal(fixture.run('lineClass(0)'), 'cur'); assert.equal(fixture.run('lineClass(1)'), 'cur');
   fixture.audio.currentTime = 15; fixture.step(); await flush();
-  assert.equal(fixture.run('lineClass(0)'), 'sung'); assert.equal(fixture.run('lineClass(1)'), 'sung');
+  assert.equal(fixture.run('lineClass(0)'), 'cur'); assert.equal(fixture.run('lineClass(1)'), 'cur');
+  assert.equal(fixture.run('charStyle(lines.value[0].chars[0], lines.value[0]).color'), 'var(--lyric-sung)');
+  assert.equal(fixture.run('charStyle(lines.value[1].chars[0], lines.value[1]).color'), 'var(--lyric-sung)');
   assert.equal(fixture.run('lineClass(2)'), 'unsung');
+  fixture.audio.currentTime = 20; fixture.step(); await flush();
+  assert.equal(fixture.run('lineClass(0)'), 'sung'); assert.equal(fixture.run('lineClass(1)'), 'sung');
+  assert.equal(fixture.run('lineClass(2)'), 'cur');
   fixture.audio.currentTime = 12; fixture.audio.dispatchEvent(new Event('seeked')); await flush();
   assert.equal(fixture.run('lineClass(0)'), 'cur'); assert.equal(fixture.run('lineClass(1)'), 'cur');
+  fixture.audio.currentTime = 10; fixture.audio.dispatchEvent(new Event('seeked')); await flush();
+  assert.equal(fixture.run('charStyle(lines.value[0].chars[0], lines.value[0]).color'), 'var(--lyric-wait)');
   fixture.player.lyricText.value = '[00:20]Last'; fixture.audio.currentTime = 120;
   fixture.audio.ended = true; fixture.audio.paused = true; fixture.audio.dispatchEvent(new Event('ended')); await flush();
-  assert.equal(fixture.run('lineClass(0)'), 'sung'); assert.equal(fixture.frames.size, 0);
+  assert.equal(fixture.run('lineClass(0)'), 'cur'); assert.equal(fixture.run('lineProgress(0)'), 1); assert.equal(fixture.frames.size, 0);
   fixture.audio.ended = false; fixture.audio.currentTime = 25; fixture.audio.dispatchEvent(new Event('seeked')); await flush();
   assert.equal(fixture.run('lineClass(0)'), 'cur');
+  fixture.player.lyricText.value = ''; await flush();
+  assert.equal(fixture.run('curIdx.value'), -1, 'a song change clears the previous focus with its lyrics');
+  fixture.audio.currentTime = 0; fixture.player.lyricText.value = '[00:00]New song'; await flush();
+  assert.equal(fixture.run('lineClass(0)'), 'cur'); assert.equal(fixture.run('lines.value[0].text'), 'New song');
   fixture.unmount();
 });
 
