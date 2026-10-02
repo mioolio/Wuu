@@ -19,7 +19,9 @@
 .home-page .home-browse-button { padding: 10px 1px; border: 0; background: transparent; color: var(--text); font-size: 12px; gap: 7px; }
 .home-page .home-browse-button:hover { color: var(--accent); background: transparent; }
 .home-page .home-hero-cover { position: relative; min-width: 0; display: flex; flex-direction: column; gap: 10px; width: 100%; padding: 0; border: 0; background: transparent; }
-.home-hero-cover > .home-artwork { width: min(100%, 140px); aspect-ratio: 1; position: relative; transform: none; filter: drop-shadow(0 16px 18px #0005); transition: transform .25s ease; }
+.home-hero-cover > .home-artwork { width: min(100%, 140px); aspect-ratio: 1; position: relative; transform: none; transition: transform .25s ease; }
+.home-page .home-hero-cover:is(:hover, :focus-visible, :active):not(:disabled),
+.home-page .home-album-card:is(:hover, :focus-visible, :active):not(:disabled) { background: transparent; border-color: transparent; box-shadow: none; }
 .home-hero-cover:hover > .home-artwork { transform: translateY(-2px); }
 .home-artwork { display: block; position: relative; width: 100%; height: 100%; overflow: hidden; border-radius: 9px; background: var(--surface-2); }
 .home-artwork > .cover-thumb { width: 100%; height: 100%; aspect-ratio: 1; border-radius: inherit; display: block; overflow: hidden; background: transparent; }
@@ -39,8 +41,8 @@
 .home-page .home-album-card { display: flex; flex-direction: column; align-items: flex-start; gap: 0; border: 0; border-radius: 9px; background: transparent; padding: 0; min-width: 0; text-align: left; }
 .home-page .home-album-card:hover { background: transparent; }
 .home-card-image { width: 100%; aspect-ratio: 1; position: relative; display: block; border-radius: 9px; }
-.home-card-image > .home-artwork { transition: transform .2s ease, box-shadow .2s ease; }
-.home-album-card:hover .home-artwork { transform: translateY(-3px); box-shadow: 0 9px 18px #0003; }
+.home-card-image > .home-artwork { transition: transform .2s ease; }
+.home-album-card:hover .home-artwork { transform: translateY(-3px); }
 .home-art-tone-1 .home-artwork { background: #a4b5be; }.home-art-tone-1 .home-artwork-disc::before { background: #e6cab3; }
 .home-art-tone-2 .home-artwork { background: #c5a083; }.home-art-tone-2 .home-artwork-disc::before { background: #bcc6a0; }
 .home-art-tone-3 .home-artwork { background: #a49dad; }.home-art-tone-3 .home-artwork-disc::before { background: #cfb9c5; }
@@ -105,9 +107,9 @@
 .home-section-heading { flex-wrap: wrap; row-gap: 8px; }
 .home-section-heading > div { min-width: 0; }
 .home-page .home-hero-cover:focus-visible > .home-artwork { transform: translateY(-2px); }
-.home-hero-cover > .home-artwork { transition: transform 460ms cubic-bezier(.2,.8,.2,1), filter 320ms ease; }
-.home-card-image > .home-artwork { transition: transform 300ms cubic-bezier(.2,.8,.2,1), box-shadow 300ms ease; }
-.home-album-card:focus-visible .home-artwork { transform: translateY(-3px); box-shadow: 0 9px 18px #0003; }
+.home-hero-cover > .home-artwork { transition: transform 460ms cubic-bezier(.2,.8,.2,1); }
+.home-card-image > .home-artwork { transition: transform 300ms cubic-bezier(.2,.8,.2,1); }
+.home-album-card:focus-visible .home-artwork { transform: translateY(-3px); }
 .home-card-play { transition: opacity 220ms ease, transform 280ms cubic-bezier(.2,.8,.2,1); }
 .home-text-link svg, .home-browse-button svg, .home-library-button svg { transition: translate 220ms var(--ease-out); }
 .home-text-link:hover svg, .home-browse-button:hover svg, .home-library-button:hover svg { translate: 3px 0; }

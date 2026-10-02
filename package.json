@@ -25,6 +25,7 @@
     "test:visual": "node scripts/visual-desktop.cjs",
     "test:player-polish": "node scripts/player-polish.cjs",
     "test:motion": "node scripts/motion-desktop.cjs",
+    "test:reading": "node scripts/reading-desktop.cjs",
     "test:detail": "node scripts/detail-desktop.cjs",
     "postinstall": "node scripts/patch-kugoumusicapi.js"
   },

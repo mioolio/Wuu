@@ -356,12 +356,29 @@ async function reviewCoverLifecycle() {
     await waitUntil(async () => !(await mainInk()).includes('243, 189, 71'), 'Disabling custom color returns to artwork-derived color');
     report.checks.push('custom gradient overrides and restores cover colors in both windows');
 
-    // Long raw lines stay readable via marquee, and reduced motion must stop decorative travel.
+    // Main lyrics always expose the complete long line through wrapping,
+    // including paused seeks in either direction. The desktop overlay keeps its
+    // own marquee and reduced-motion font-fitting behavior.
     await seek(31);
     await page.waitForFunction(() => document.querySelector('.lyric-line.current')?.textContent.length > 40);
-    await waitUntil(() => page.locator('.lyric-line.current .lyric-track').evaluate(node => {
-      const transform = getComputedStyle(node).transform; return transform !== 'none' && new DOMMatrixReadOnly(transform).m41 < -1;
-    }), 'A long current line moves to reveal sung words');
+    const longText = fixture.lines.find(([time]) => time === 22)[1];
+    const assertWrappedMainLine = async () => {
+      const wrapped = await page.locator('.lyric-line.current .lyric-track').evaluate(node => {
+        const line = node.closest('.lyric-line'), style = getComputedStyle(node), track = node.getBoundingClientRect(), box = line.getBoundingClientRect();
+        const characters = [...node.querySelectorAll('.lyric-word')].flatMap(word => [...word.getClientRects()]);
+        return {text:node.textContent, whiteSpace:style.whiteSpace, transform:style.transform, textOverflow:style.textOverflow,
+          marquee:line.dataset.marquee, trackWidth:track.width, available:box.width, scrollWidth:node.scrollWidth, clientWidth:node.clientWidth,
+          charactersFit:characters.every(character => character.left >= box.left - 1 && character.right <= box.right + 1)};
+      });
+      report.measurements.push({label:'main long lyric without horizontal marquee', wrapped});
+      assert.equal(wrapped.text, longText, 'The main lyric preserves the complete original long text');
+      assert.notEqual(wrapped.whiteSpace, 'nowrap', 'Main lyrics wrap in normal motion mode');
+      assert.equal(wrapped.transform, 'none', 'Paused and backward seeks never leave the main text shifted to its sung tail');
+      assert.notEqual(wrapped.textOverflow, 'ellipsis', 'Main lyrics do not truncate their tail');
+      assert.ok(!wrapped.marquee && wrapped.trackWidth <= wrapped.available + 2 && wrapped.scrollWidth <= wrapped.clientWidth + 2 && wrapped.charactersFit,
+        'Every lyric character stays within the row horizontally and remains vertically browsable');
+    };
+    for (const time of [31, 24, 31]) { await seek(time); await assertWrappedMainLine(); }
     await screenshot('player-long-line');
     await page.emulateMedia({reducedMotion:'reduce'});
     await desktop.emulateMedia({reducedMotion:'reduce'});
@@ -414,7 +431,7 @@ async function reviewCoverLifecycle() {
     await page.emulateMedia({colorScheme:'light'});
     await screenshot('player-system-light-reduced-motion');
     await screenshot('desktop-reduced-motion', desktop);
-    report.checks.push('long-line marquee', 'reduced motion stops marquee and wraps long text in both windows', 'reduced motion disables decorative animation', 'screenshots under dark and light system preferences');
+    report.checks.push('main long lyrics preserve the full original text through stable wrapping after paused forward and backward seeks', 'reduced motion keeps main wrapping and stops desktop marquee with stable font fitting', 'reduced motion disables decorative animation', 'screenshots under dark and light system preferences');
 
     // Closing and reopening a paused overlay must replay its data, color, and current clock.
     await desktop.getByRole('button', {name:'关闭桌面歌词', exact:true}).click();

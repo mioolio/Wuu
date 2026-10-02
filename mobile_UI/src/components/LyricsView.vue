@@ -3,7 +3,8 @@
 <script setup>
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue';
 import { usePlayer } from '../composables/usePlayer.js';
-import { parseLyrics, readLyricTime, activeLyricIndex, isCurrentLyric, lyricCharProgress, lyricLineProgress } from '../services/lyrics.js';
+import { parseLyrics, lyricCredits, readLyricTime, activeLyricIndex, isCurrentLyric, lyricCharProgress, lyricLineProgress } from '../services/lyrics.js';
+import { useLyricPreferences } from '../composables/useLyricPreferences.js';
 
 const { lyricText, currentTime, duration, isPlaying, seek, seekTo, getAudioEl } = usePlayer();
 const lines = ref([]);
@@ -11,8 +12,10 @@ const curIdx = ref(-1);
 const listRef = ref(null);
 const viewRef = ref(null);
 const frameTime = ref(0);
+const { lyricSize } = useLyricPreferences();
 const emit = defineEmits(['swipe-left']);
 const showEmpty = computed(() => !lines.value.length);
+const credits = computed(() => lyricCredits(lyricText.value));
 let mounted = false;
 let disposed = false;
 let viewVisible = true;
@@ -68,7 +71,11 @@ function scrollToCur(idx, behavior) {
     while (last + 1 < lines.value.length && isCurrentLyric(lines.value, last + 1, idx)) last++;
     const top = first.getBoundingClientRect().top;
     const bottom = list.children[last].getBoundingClientRect().bottom;
-    const target = container.scrollTop + (top + bottom) / 2 - container.getBoundingClientRect().top - container.clientHeight / 2;
+    const containerTop = container.getBoundingClientRect().top;
+    // Tall phrases start at the top instead of hiding their opening words offscreen.
+    const target = bottom - top > container.clientHeight * .8
+      ? container.scrollTop + top - containerTop - 16
+      : container.scrollTop + (top + bottom) / 2 - containerTop - container.clientHeight / 2;
     const reduced = typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     container.scrollTo({ top: Math.max(0, target), behavior: reduced ? 'auto' : behavior });
   });
@@ -84,9 +91,9 @@ function bindAudio() {
 }
 function onVisibilityChange() {
   if (document.hidden) stopFrames();
-  else { bindAudio(); syncPosition(true, 'auto'); startFrames(); }
+  else { bindAudio(); syncPosition(followAllowed(), 'auto'); startFrames(); }
 }
-function onResize() { syncPosition(true, 'auto'); }
+function onResize() { syncPosition(followAllowed(), 'auto'); }
 watch(lyricText, text => {
   lines.value = parseLyrics(text);
   manualUntil = 0;
@@ -99,6 +106,10 @@ watch(currentTime, () => { bindAudio(); syncPosition(); startFrames(); });
 watch(isPlaying, onMediaChange);
 watch(duration, () => syncPosition());
 watch(listRef, () => syncPosition(true, 'auto'), { flush: 'post' });
+watch(lyricSize, () => {
+  if (followAllowed()) syncPosition(true, 'auto');
+  else pendingFollow = true;
+}, { flush: 'post' });
 onMounted(() => {
   mounted = true;
   bindAudio();
@@ -110,7 +121,7 @@ onMounted(() => {
     visibilityObserver = new IntersectionObserver(entries => {
       if (disposed) return;
       viewVisible = entries.some(entry => entry.isIntersecting);
-      if (viewVisible) { syncPosition(true, 'auto'); startFrames(); }
+      if (viewVisible) { syncPosition(followAllowed(), 'auto'); startFrames(); }
       else stopFrames();
     }, { threshold: 0.01 });
     visibilityObserver.observe(viewRef.value);
@@ -135,10 +146,10 @@ function lineClass(i) {
 }
 function charStyle(char, line) {
   const progress = lyricCharProgress(char, line.time, frameTime.value);
-  if (progress >= 1) return { color: 'var(--accent)' };
-  if (progress <= 0) return { color: 'var(--text)', opacity: 0.8 };
+  if (progress >= 1) return { color: 'var(--lyric-sung)' };
+  if (progress <= 0) return { color: 'var(--lyric-wait)' };
   const percent = (progress * 100).toFixed(1);
-  return { backgroundImage: `linear-gradient(to right, var(--accent) ${percent}%, var(--text) ${percent}%)`, WebkitBackgroundClip: 'text', backgroundClip: 'text', WebkitTextFillColor: 'transparent' };
+  return { backgroundImage: `linear-gradient(to right, var(--lyric-sung) ${percent}%, var(--lyric-wait) ${percent}%)`, WebkitBackgroundClip: 'text', backgroundClip: 'text', WebkitTextFillColor: 'transparent' };
 }
 function lineProgress(i) { return lyricLineProgress(lines.value, i, frameTime.value, duration.value); }
 function formatTime(s) {
@@ -154,6 +165,9 @@ function onLineClick(line) {
   syncPosition(true);
 }
 function onWheel() { manualUntil = performance.now() + 6000; pendingFollow = true; }
+function onScrollKey(event) {
+  if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key)) onWheel();
+}
 function onTouchStart(event) {
   const touch = event.touches[0];
   if (!touch) return;
@@ -181,14 +195,19 @@ function onTouchCancel() { touchActive = false; touchMoved = false; }
 </script>
 
 <template>
+  <section class="lyrics-shell" :style="{ '--lyric-size': lyricSize + 'px' }" aria-label="歌词播放器">
   <div
     class="lyrics-view"
+    tabindex="0"
+    role="region"
+    aria-label="歌词"
     ref="viewRef"
     @touchstart="onTouchStart"
     @touchmove="onTouchMove"
     @touchend="onTouchEnd"
     @touchcancel="onTouchCancel"
     @wheel.passive="onWheel"
+    @keydown="onScrollKey"
   >
     <!-- 无歌词 -->
     <div v-if="showEmpty" class="empty">
@@ -217,7 +236,7 @@ function onTouchCancel() { touchActive = false; touchMoved = false; }
           v-else-if="isCurrent(i)"
           class="lyric-text"
           :style="{
-            backgroundImage: `linear-gradient(to right, var(--accent) ${(lineProgress(i) * 100).toFixed(1)}%, var(--text) ${(lineProgress(i) * 100).toFixed(1)}%)`,
+            backgroundImage: `linear-gradient(to right, var(--lyric-sung) ${(lineProgress(i) * 100).toFixed(1)}%, var(--lyric-wait) ${(lineProgress(i) * 100).toFixed(1)}%)`,
             WebkitBackgroundClip: 'text',
             backgroundClip: 'text',
             WebkitTextFillColor: 'transparent',
@@ -239,17 +258,36 @@ function onTouchCancel() { touchActive = false; touchMoved = false; }
       </div>
     </div>
   </div>
+  <footer v-if="credits.lyricist || credits.composer" class="lyric-credits" aria-label="词曲信息">
+    <span v-if="credits.lyricist">作词 {{ credits.lyricist }}</span>
+    <span v-if="credits.composer">作曲 {{ credits.composer }}</span>
+  </footer>
+  </section>
 </template>
 
 <style scoped>
+.lyrics-shell {
+  --lyric-sung: var(--accent);
+  --lyric-wait: #fff;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
 .lyrics-view {
   flex: 1;
+  min-height: 0;
+  min-width: 0;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
-  padding: 60px 28px;
+  padding: calc(60px + env(safe-area-inset-top)) 22px 60px;
   scroll-behavior: auto;
   position: relative;
 }
+.lyrics-view:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.lyric-credits { flex: 0 0 auto; display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 16px; padding: 6px 22px 10px; color: var(--text-secondary); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+.lyric-credits span { min-width: 0; }
 
 .empty {
   display: flex;
@@ -269,8 +307,9 @@ function onTouchCancel() { touchActive = false; touchMoved = false; }
 }
 
 .lyric-line {
+  flex-shrink: 0;
   position: relative;
-  font-size: 22px;
+  font-size: var(--lyric-size, 22px);
   line-height: 1.6;
   text-align: left;
   padding: 8px 14px;
@@ -301,27 +340,27 @@ function onTouchCancel() { touchActive = false; touchMoved = false; }
 }
 
 .lyric-line.sung {
-  color: color-mix(in srgb, var(--text) 55%, var(--text-secondary) 45%);
-  opacity: 0.72;
+  color: var(--lyric-sung);
+  opacity: 1;
 }
 
 .lyric-line.unsung {
-  color: var(--text-secondary);
-  opacity: 0.5;
+  color: var(--lyric-wait);
+  opacity: 1;
 }
 
-.lyric-line.plain { color: var(--text); cursor: default; }
+.lyric-line.plain { color: var(--lyric-wait); cursor: default; }
 
 /* 当前行: 胶囊背景 + 放大 */
 .lyric-line.cur {
-  color: var(--text);
+  color: var(--lyric-wait);
+  font-size: calc(var(--lyric-size, 22px) * 1.16);
   font-weight: 700;
   background: color-mix(in srgb, var(--text) 12%, transparent);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
-  transform: scale(1.02);
-  transform-origin: left center;
 }
+.lyric-text { flex: 1; min-width: 0; max-height: none; white-space: normal; overflow: visible; overflow-wrap: anywhere; text-wrap: balance; }
 
 /* 逐字填充: 每个 char 独立 span */
 .char-fill .char {
@@ -329,6 +368,8 @@ function onTouchCancel() { touchActive = false; touchMoved = false; }
 }
 
 .cur-meta {
+  align-self: flex-start;
+  margin-top: 8px;
   display: flex;
   align-items: center;
   gap: 6px;

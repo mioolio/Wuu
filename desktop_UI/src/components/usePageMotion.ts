@@ -27,13 +27,15 @@ export function usePageMotion(view: View, loading: boolean) {
       entering.current = [];
     };
     const unregister = registerNavigationAnimator((from, to, commit) => {
+      // Clicking the active page must leave its live entrance/snapshot alone.
+      if (from === to) { commit(); return; }
       // display:none can report scrollTop as zero even though the browser restores
       // its saved position when shown. Read it before hiding the recommendation.
       if (from === 'home') homeScroll.current = document.querySelector('.home-page')?.scrollTop || 0;
       const request = ++generation.current;
       stopVisuals(); clearShared(); transition.current = null;
       const destination = document.querySelector<HTMLElement>(`[data-page="${pageKey(to)}"]`);
-      if (from === to || preference.matches || document.visibilityState === 'hidden' || !document.startViewTransition || !destination) {
+      if (preference.matches || document.visibilityState === 'hidden' || !document.startViewTransition || !destination) {
         commit(); return;
       }
       if ((from === 'home' && to === 'player') || (from === 'player' && to === 'home')) {
@@ -42,8 +44,9 @@ export function usePageMotion(view: View, loading: boolean) {
         const first = sleeve?.querySelector<HTMLImageElement>('.artwork-layer:not(.artwork-outgoing):not(.artwork-pending) img');
         const second = recommendation?.querySelector<HTMLImageElement>('img');
         const homeAtTop = homeScroll.current < 40;
-        // Share only the same loaded artwork. A preview or failed image crossfades normally.
-        if (homeAtTop && sleeve && recommendation && first?.complete && first.naturalWidth && second?.complete && second.naturalWidth && first.src === second.src) {
+        // Share only the same loaded rectangular cover. A circular record, preview
+        // or failed image stays in its page snapshot instead of exposing a square backing.
+        if (homeAtTop && sleeve && !sleeve.closest('.is-disc') && recommendation && first?.complete && first.naturalWidth && second?.complete && second.naturalWidth && first.src === second.src) {
           shared = [sleeve, recommendation];
           shared.forEach(element => { element.style.viewTransitionName = 'wuu-artwork'; });
         }

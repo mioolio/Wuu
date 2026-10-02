@@ -2,6 +2,43 @@
 const stampPattern = /\[(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?\]/g;
 const stampTime = match => Number(match[1]) * 60 + Number(match[2]) + (match[3] ? Number(`0.${match[3]}`) : 0);
 const sameTime = (a, b) => Number.isFinite(a) && Number.isFinite(b) && Math.abs(a - b) < 0.0001;
+// Match complete credit lines, never a label occurring inside sung text. Keep
+// this vocabulary aligned with the desktop lyric parser.
+const metadataPrefix = /^(?:\s*\[(?:[a-zA-Z][\w-]*|[\u3400-\u9fff]+)\s*[:：][^\]]*\])+\s*/;
+const lyricistLabels = new Set(['作词', '词', '填词', '作词人', '词作者', 'lyricist', 'lyrics']);
+const composerLabels = new Set(['作曲', '曲', '作曲人', '曲作者', 'composer', 'music']);
+const combinedLabels = new Set(['词曲', '词/曲', '作词/作曲']);
+const productionLabels = new Set(['编曲', '制作人', '制作', '混音', '混音师', '母带', '母带处理', '母带工程师', '录音', '录音师', '录音室', '和声', '和声编写', '音乐总监', '监制', '发行', '出品', '版权', 'op', 'sp', 'arranger', 'arrangement', 'producer', 'production', 'mixing', 'mastering', 'recording']);
+
+function stripMetadata(line) { return line.trim().replace(metadataPrefix, ''); }
+function readCredit(text) {
+  const match = /^([^:：]+)\s*[:：]\s*(.*)$/.exec(text.trim());
+  if (!match) return null;
+  const label = match[1].trim().replace(/\s*\/\s*/g, '/').toLowerCase();
+  const kind = lyricistLabels.has(label) ? 'lyricist' : composerLabels.has(label) ? 'composer' : combinedLabels.has(label) ? 'combined' : productionLabels.has(label) ? 'production' : null;
+  return kind ? { kind, value: match[2].trim() } : null;
+}
+
+export function lyricCredits(text) {
+  const credits = { lyricist: '', composer: '' };
+  if (typeof text !== 'string') return credits;
+  const add = credit => {
+    if (!credit?.value) return;
+    if ((credit.kind === 'lyricist' || credit.kind === 'combined') && !credits.lyricist) credits.lyricist = credit.value;
+    if ((credit.kind === 'composer' || credit.kind === 'combined') && !credits.composer) credits.composer = credit.value;
+  };
+  // Named LRC headers retain priority over the provider's timed credit rows.
+  for (const raw of text.split(/\r?\n/)) {
+    const prefix = raw.trim().match(metadataPrefix)?.[0] || '';
+    for (const tag of prefix.matchAll(/\[([^\]]+)\]/g)) add(readCredit(tag[1]));
+  }
+  for (const raw of text.split(/\r?\n/)) {
+    const body = stripMetadata(raw), krc = body.match(/^\[(\d+),(\d+)\](.*)/);
+    const words = krc ? parseRawChars(krc[3]).map(char => char.text).join('') : body.replace(stampPattern, '');
+    add(readCredit(words));
+  }
+  return credits;
+}
 
 export function parseRawChars(body) {
   const tags = [...body.matchAll(/<(\d+),(\d+),\d+>/g)];
@@ -29,12 +66,13 @@ export function parseLyrics(text) {
   const result = [], plain = [];
   const offset = Number(text.match(/^\s*\[offset\s*:\s*([+-]?\d+)\]/im)?.[1] || 0) / 1000;
   for (const raw of text.split(/\r?\n/)) {
-    const body = raw.trim();
+    const body = stripMetadata(raw);
     if (!body) continue;
     const krc = body.match(/^\[(\d+),(\d+)\](.*)/);
     if (krc) {
       const chars = parseRawChars(krc[3]);
-      if (chars.length) result.push({ time: Number(krc[1]) / 1000 + offset, duration: Number(krc[2]) / 1000, text: chars.map(char => char.text).join(''), chars });
+      const words = chars.map(char => char.text).join('');
+      if (chars.length && !readCredit(words)) result.push({ time: Number(krc[1]) / 1000 + offset, duration: Number(krc[2]) / 1000, text: words, chars });
       continue;
     }
     const stamps = [...body.matchAll(stampPattern)];
@@ -49,13 +87,14 @@ export function parseLyrics(text) {
           const interval = stamps[index + 1] ? stampTime(stamps[index + 1]) - stampTime(stamp) : 0.4;
           chars.push({ offset: stampTime(stamp) + offset - start, dur: interval > 0 ? interval : 0.1, text: word });
         });
-        if (chars.length) result.push({ time: start, text: chars.map(char => char.text).join(''), chars });
+        const words = chars.map(char => char.text).join('');
+        if (chars.length && !readCredit(words)) result.push({ time: start, text: words, chars });
       } else {
         const last = stamps.at(-1);
         const words = body.slice(last.index + last[0].length).trim();
-        if (words) stamps.forEach(stamp => result.push({ time: stampTime(stamp) + offset, text: words }));
+        if (words && !readCredit(words)) stamps.forEach(stamp => result.push({ time: stampTime(stamp) + offset, text: words }));
       }
-    } else if (!/^\[[^\]]+\]$/.test(body)) {
+    } else if (!/^\[[^\]]+\]$/.test(body) && !readCredit(body)) {
       plain.push({ time: null, text: body });
     }
   }

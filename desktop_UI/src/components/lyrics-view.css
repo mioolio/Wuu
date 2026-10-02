@@ -2,11 +2,15 @@
   position: relative;
   min-width: 0;
   isolation: isolate;
+  display: flex;
+  flex-direction: column;
 }
 
 .lyrics-panel.polished-lyrics .lyrics-scroll {
   position: relative;
-  height: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
+  height: auto;
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior-y: contain;
@@ -21,11 +25,12 @@
 
 .lyrics-panel.polished-lyrics .lyric-line {
   display: block;
+  position: relative;
   width: 100%;
   min-height: calc(var(--lyric-size, 20px) * 2.8);
-  padding: 10px 0;
+  padding: 10px 12px;
   border-radius: 6px;
-  color: var(--text);
+  color: var(--lyric-wait-color);
   text-align: center;
   font-size: var(--lyric-size, 20px);
   font-weight: 500;
@@ -53,8 +58,24 @@
 }
 
 .lyrics-panel.polished-lyrics .lyric-line.current {
-  font-size: calc(var(--lyric-size, 20px) * 1.2);
+  font-size: calc(var(--lyric-size, 20px) * 1.24);
   font-weight: 750;
+  color: var(--lyric-wait-color);
+}
+
+.lyrics-panel.polished-lyrics .lyric-line.current:not(.lyric-companion)::before {
+  content: '';
+  position: absolute;
+  left: 8px;
+  top: 50%;
+  width: 3px;
+  height: 18px;
+  border-radius: 2px;
+  background: var(--lyric-active);
+  transform: translateY(-50%);
+}
+
+.lyrics-panel.polished-lyrics .lyric-line.passed {
   color: var(--lyric-active);
 }
 
@@ -62,6 +83,7 @@
   font-size: var(--lyric-size, 20px);
   font-weight: 600;
   padding-top: 0;
+  min-height: calc(var(--lyric-size, 20px) * 2.1);
 }
 
 .lyrics-panel.polished-lyrics .lyric-line.current .lyric-word {
@@ -69,25 +91,6 @@
   background-clip: text;
   -webkit-background-clip: text;
   color: transparent;
-}
-
-.lyrics-panel.polished-lyrics .lyric-line[data-marquee="measure"] .lyric-track,
-.lyrics-panel.polished-lyrics .lyric-line[data-marquee="true"] .lyric-track {
-  width: max-content;
-  max-width: none;
-  white-space: nowrap;
-  transform: none;
-  transition: none;
-}
-
-.lyrics-panel.polished-lyrics .lyric-line[data-marquee="true"] {
-  text-align: left;
-  overflow: hidden;
-  mask-image: linear-gradient(90deg, transparent, #000 8px, #000 calc(100% - 8px), transparent);
-}
-
-.lyrics-panel.polished-lyrics .lyric-line[data-marquee="true"] .lyric-track {
-  will-change: transform;
 }
 
 .lyrics-panel.polished-lyrics .lyric-line:hover:not(:disabled) {
@@ -148,7 +151,8 @@
 
 .lyrics-panel.polished-lyrics .lyrics-empty {
   display: flex;
-  height: 100%;
+  flex: 1 1 auto;
+  height: auto;
   min-height: 180px;
   flex-direction: column;
   align-items: center;

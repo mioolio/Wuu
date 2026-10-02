@@ -9,9 +9,11 @@
 ::view-transition-new(wuu-page) { animation: page-arrive 320ms var(--ease-out) both; }
 html[data-page-transition="from-player"]::view-transition-old(wuu-page) { animation-name: page-leave-down; }
 html[data-page-transition="from-player"]::view-transition-new(wuu-page) { animation-name: page-arrive-down; }
-::view-transition-group(wuu-artwork) { animation-duration: 620ms; animation-timing-function: cubic-bezier(.22,.8,.16,1); z-index: 2; }
-::view-transition-old(wuu-artwork) { animation-duration: 300ms; }
-::view-transition-new(wuu-artwork) { animation-duration: 500ms; }
+::view-transition-group(wuu-artwork) { animation-duration: 620ms; animation-timing-function: cubic-bezier(.22,.8,.16,1); z-index: 2; overflow: clip; border-radius: 12px; }
+/* The same loaded cover moves as one image. Unequal crossfade durations expose
+   its dark placeholder, and captured shadows extend into a rectangular backing. */
+::view-transition-old(wuu-artwork) { display: none; animation: none; }
+::view-transition-new(wuu-artwork) { animation: none; mix-blend-mode: normal; opacity: 1; height: 100%; object-fit: cover; }
 @keyframes page-leave { to { opacity: 0; transform: translateY(-4px); } }
 @keyframes page-arrive { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 @keyframes page-leave-down { to { opacity: 0; transform: translateY(4px); } }

@@ -1,0 +1,35 @@
+.song-popover-backdrop { position: fixed; inset: 0; z-index: 100; background: transparent; }
+.song-popover-backdrop[hidden] { display: none; }
+.song-popover-card { position: absolute; width: min(340px, calc(100vw - 24px)); max-height: calc(100vh - 24px); overflow-y: auto; padding: 16px; background: rgb(var(--surface)); color: var(--text); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 8px 24px rgb(0 0 0 / 22%); animation: song-popover-in 160ms var(--ease-out) both; }
+.song-popover-heading { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 8px; }
+.song-popover-heading h2 { font-size: 15px; margin: 0; }
+.song-popover-title { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; margin-bottom: 16px; }
+.song-share-options { margin-bottom: 16px; }
+.song-share-options summary { cursor: pointer; font-size: 13px; margin-bottom: 12px; }
+.song-share-options label, .song-share-result label { display: block; font-size: 12px; margin-bottom: 12px; }
+.song-share-options .field, .song-share-result .field { width: 100%; margin-top: 6px; }
+.song-share-off p { font-size: 12px; margin-bottom: 10px; }
+.song-submenu-entry { display: flex; width: 100%; text-align: left; justify-content: space-between; padding: 12px; }
+.song-submenu-entry span { min-width: 0; }
+.song-submenu-entry small { display: block; color: var(--muted); margin-top: 5px; font-size: 12px; white-space: normal; }
+.song-submenu-back { border: 0; padding: 4px 0 12px; background: transparent; font-size: 13px; }
+.song-genre-options { display: flex; flex-wrap: wrap; gap: 8px; max-height: 180px; overflow-y: auto; padding: 3px; margin-bottom: 14px; }
+.song-genre-options label { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; font-size: 12px; max-width: 100%; cursor: pointer; }
+.song-genre-options label:has(:checked) { color: var(--accent); border-color: var(--accent); }
+.song-genre-options span { overflow-wrap: anywhere; min-width: 0; }
+.song-genre-options input { margin: 0; flex-shrink: 0; }
+.song-genre-create { font-size: 12px; margin-bottom: 16px; }
+.song-genre-create > div { display: flex; gap: 8px; margin-top: 6px; }
+.song-genre-create input { min-width: 0; flex: 1; }
+.song-popover-card .toolbar { flex-wrap: wrap; gap: 8px; }
+.song-popover-card .toolbar button { font-size: 12px; }
+.song-popover-backdrop[data-state="closing"] { pointer-events: none; }
+.song-popover-backdrop[data-state="closing"] .song-popover-card { animation: song-popover-out 170ms ease both; }
+@keyframes song-popover-in { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+@keyframes song-popover-out { to { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .song-popover-card { animation: none !important; } }
+.immersive-player .player-actions .collection-entry { min-width: 36px; width: 36px; padding: 0; }
+.immersive-player .player-actions .icon-button.active { color: var(--listening-accent); background: color-mix(in srgb, var(--listening-accent) 8%, transparent); }
+.immersive-player .player-lyrics-column { min-width: 0; min-height: 0; display: flex; flex-direction: column; align-self: stretch; position: relative; left: clamp(-28px, -2.3vw, -16px); }
+.immersive-player .player-lyrics-column .lyrics-panel { flex: 1 1 auto; min-height: 0; left: 0; }
+.immersive-player .player-lyrics-column .player-credits { flex: 0 0 auto; padding: 8px 12px 0; }

@@ -122,9 +122,10 @@ const report = {checks:[], screenshots:[], transitions:[], layouts:[], continuit
     assert.equal(await page.locator('.page-host:not([hidden])').count(), 1);
     await capture('player-lyrics-left');
     const lyricGeometry = await page.evaluate(() => {
-      const lyrics = document.querySelector('.lyrics-panel').getBoundingClientRect();
+      const column = document.querySelector('.player-lyrics-column');
+      const lyrics = column.getBoundingClientRect();
       const active = document.querySelector('.lyric-line.current .lyric-track').getBoundingClientRect();
-      return {offset:parseFloat(getComputedStyle(document.querySelector('.lyrics-panel')).left), centered:Math.abs(active.left + active.width / 2 - lyrics.left - lyrics.width / 2) < 3};
+      return {offset:parseFloat(getComputedStyle(column).left), centered:Math.abs(active.left + active.width / 2 - lyrics.left - lyrics.width / 2) < 3};
     });
     assert.ok(lyricGeometry.offset <= -16 && lyricGeometry.centered, 'The entire lyric column moves left while its text remains centered');
     report.checks.push('lyrics move left while preserving centered alignment');

@@ -2,6 +2,12 @@
   <div class="settings-page">
     <h2 class="settings-title">设置</h2>
 
+    <section class="settings-group" aria-label="歌词设置">
+      <div class="group-title">歌词</div>
+      <label class="setting-row" for="mobile-lyric-size"><span class="setting-info"><span class="setting-name">歌词字号</span><span class="setting-desc">立即应用，在此浏览器中保存</span></span><output for="mobile-lyric-size" class="lyric-size-value">{{ lyricSize }} px</output></label>
+      <input id="mobile-lyric-size" class="lyric-size-range" type="range" aria-label="歌词字号" :aria-valuetext="lyricSize + ' 像素'" :min="MIN_LYRIC_SIZE" :max="MAX_LYRIC_SIZE" step="1" :value="lyricSize" @input="setLyricSize(Number($event.target.value))" />
+    </section>
+
     <!-- 一起听 -->
     <div class="settings-group">
       <div class="group-title">一起听</div>
@@ -53,8 +59,11 @@
 import { computed } from 'vue';
 import { useListenTogether } from '../composables/useListenTogether.js';
 import AudioFxPanel from './AudioFxPanel.vue';
+import { useLyricPreferences } from '../composables/useLyricPreferences.js';
+import { MIN_LYRIC_SIZE, MAX_LYRIC_SIZE } from '../services/lyricPreferences.js';
 
 const { enabled, connected, peerCount } = useListenTogether();
+const { lyricSize, setLyricSize } = useLyricPreferences();
 
 const statusText = computed(() => {
   if (!enabled.value) return '未启用';
@@ -105,6 +114,9 @@ const statusText = computed(() => {
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
 .setting-row:last-child { border-bottom: none; }
+.lyric-size-value { color: var(--text-secondary); font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.lyric-size-range { display: block; width: 100%; height: 44px; margin: 4px 0; padding: 0; border: 0; background: transparent; accent-color: var(--accent); cursor: pointer; }
+.lyric-size-range:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
 
 .setting-info { flex: 1; min-width: 0; }
 .setting-name { font-size: 15px; color: #fff; margin-bottom: 3px; }

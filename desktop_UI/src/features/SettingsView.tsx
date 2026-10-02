@@ -145,13 +145,13 @@ export default function SettingsView() {
           <Group title="歌词阅读">
             <Range label="歌词字号" value={settings.lyricSize} min={12} max={36} unit=" px" onChange={value => setSettings({ lyricSize: value })} />
             <Toggle label="普通歌词模拟逐字进度" description="为没有逐字时间的歌词添加播放进度" checked={settings.simulateLrcProgress} onChange={value => setSettings({ simulateLrcProgress: value })} />
-            <Advanced title="歌词亮度" description="分别调整已唱与未唱歌词">
+            <Advanced title="歌词亮度" description="未唱亮度用于桌面歌词窗口；播放页未唱歌词保持白色">
               <Range label="已唱歌词亮度" value={settings.lyricDone} min={0.3} max={1} step={0.01} onChange={value => setSettings({ lyricDone: value, lyricWait: Math.min(settings.lyricWait, value - 0.1) })} />
               <Range label="未唱歌词亮度" value={settings.lyricWait} min={0.1} max={Math.max(0.1, settings.lyricDone - 0.1)} step={0.01} onChange={value => setSettings({ lyricWait: value })} />
             </Advanced>
           </Group>
-          <Group title="长歌词滚动">
-            <Toggle label="长歌词滚动" description="歌词超出可见宽度时自动横向滚动" checked={settings.marqueeEnabled} onChange={value => setSettings({ marqueeEnabled: value })} />
+          <Group title="桌面歌词滚动" description="独立歌词窗口的滚动行为；播放页长句完整换行">
+            <Toggle label="长歌词滚动" description="桌面歌词超出可见宽度时自动横向滚动" checked={settings.marqueeEnabled} onChange={value => setSettings({ marqueeEnabled: value })} />
             <Advanced title="滚动细节" description="速度、触发长度与两端停留">
               <Range label="滚动速度" value={settings.marqueeSpeed} min={30} max={150} unit=" px/s" disabled={!settings.marqueeEnabled} onChange={value => setSettings({ marqueeSpeed: value })} />
               <Range label="滚动触发阈值" value={settings.marqueeThreshold} min={0.8} max={2} step={0.1} unit=" 倍" disabled={!settings.marqueeEnabled} onChange={value => setSettings({ marqueeThreshold: value })} />

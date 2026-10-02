@@ -24,6 +24,7 @@ const paths: Record<string, string> = {
   muted: 'M11 5 6 9H3v6h3l5 4V5Zm5 4 5 6m0-6-5 6',
   equalizer: 'M5 3v10m0 4v4M12 3v3m0 4v11M19 3v10m0 4v4M2 13h6M9 6h6m1 7h6',
   lyrics: 'M4 4h16v14H7l-3 3V4Zm4 5h8m-8 4h5',
+  comment: 'M21 4H3v13h4v4l5-4h9V4ZM7 10h.01M12 10h.01M17 10h.01',
   lock: 'M6 10h12v11H6V10Zm2 0V6a4 4 0 0 1 8 0v4m-4 4v3',
   unlock: 'M6 10h12v11H6V10Zm2 0V6a4 4 0 0 1 7.5-2m-3.5 10v3',
   headphones: 'M3 14v-3a9 9 0 0 1 18 0v3M3 13h4v8H5a2 2 0 0 1-2-2v-6Zm18 0h-4v8h2a2 2 0 0 0 2-2v-6Z',

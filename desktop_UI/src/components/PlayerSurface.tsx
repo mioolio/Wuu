@@ -69,7 +69,7 @@ export default function PlayerDialog({ open, onClose, label, id, wide = false, t
   // The app frame owns theme/opacity variables and never participates in page
   // motion. Keep full-window dialogs outside a page's transformed snapshot.
   const frame = document.querySelector('.app-shell') || document.body;
-  return createPortal(<div className="modal-backdrop player-dialog-surface" data-state={presence.state} hidden={!presence.visible} inert={!open} onMouseDown={event => { if (open && event.target === event.currentTarget) onClose(); }}>
+  return createPortal(<div className="modal-backdrop player-dialog-surface" data-state={presence.state} hidden={!presence.visible} inert={!open} onMouseDown={event => { if (open && event.target === event.currentTarget) { event.preventDefault(); onClose(); } }}>
     <div className={`modal-card ${wide ? 'wide' : ''}`} ref={card} id={id} role="dialog" aria-modal="true" aria-label={label} aria-hidden={!open} tabIndex={-1}>{children}</div>
   </div>, frame);
 }

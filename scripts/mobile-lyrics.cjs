@@ -7,7 +7,7 @@ const path = require('path');
 const root = path.join(__dirname, '..');
 const artifacts = path.join(root, '.test-artifacts', 'mobile');
 fs.mkdirSync(artifacts, { recursive: true });
-const report = { ok: false, checks: [], screenshots: [], media: [], lyricPositions: [], rendererErrors: [], boundaryFrames: [] };
+const report = { ok: false, checks: [], screenshots: [], media: [], lyricPositions: [], rendererErrors: [], boundaryFrames: [], fonts: [], lyricStyles: [] };
 
 async function waitUntil(check, message, timeout = 15000) {
   const deadline = Date.now() + timeout;
@@ -63,11 +63,26 @@ async function touchGesture(locator, direction) {
       };
       requestAnimationFrame(sample);
     });
-    await app.evaluate(() => { global.__wuuMobileFixture.requests.length = 0; });
+    await app.evaluate(() => {
+      const fixture = global.__wuuMobileFixture;
+      fixture.requests.length = 0;
+      fixture.lyrics[0] = '[作词:真实署名作者][作曲:真实署名作曲]\n[00:02.00]编曲:制作署名\n[00:03.00]混音:混音署名\n' + fixture.lyrics[0];
+    });
     await page.reload({ waitUntil: 'domcontentloaded' });
     const cover = () => page.locator('.player-view');
     const lyricView = () => page.locator('.lyrics-view');
     const currentLine = () => page.locator('.lyrics-view .lyric-line.cur .lyric-text, .lyrics-view .lyric-line.active .lyric-text');
+    const settingsTab = () => page.locator('.bottom-nav').getByRole('button', { name: '设置', exact: true });
+    const recommendTab = () => page.locator('.bottom-nav').getByRole('button', { name: '推荐', exact: true });
+    const fontRange = () => page.getByRole('slider', { name: '歌词字号', exact: true });
+    const fontSize = async () => Number(await page.locator('#mobile-lyric-size').inputValue());
+    const showSettings = async () => { await settingsTab().click(); await page.locator('.settings-page').waitFor({ state: 'visible' }); };
+    const returnToLyrics = async () => { await recommendTab().click(); await lyricView().waitFor({ state: 'visible' }); };
+    const setFont = async value => {
+      await showSettings(); await fontRange().focus(); await fontRange().press('Home');
+      while ((await fontSize()) < value) await fontRange().press('ArrowRight');
+      assert.equal(await fontSize(), value);
+    };
     const audio = () => page.locator('audio').evaluate(element => ({ time: element.currentTime, duration: element.duration,
       paused: element.paused, readyState: element.readyState, source: element.currentSrc || element.src }));
     const capture = async name => {
@@ -93,6 +108,25 @@ async function touchGesture(locator, direction) {
     };
     const openLyrics = async () => { await cover().waitFor({ state: 'visible' }); await touchGesture(cover(), 'left'); await lyricView().waitFor({ state: 'visible' }); };
     const closeLyrics = async () => { await touchGesture(lyricView(), 'right'); await cover().waitFor({ state: 'visible' }); };
+    const styles = () => lyricView().evaluate(element => {
+      const describe = selector => {
+        const line = element.querySelector(selector), text = line?.querySelector('.lyric-text');
+        if (!line || !text) return null;
+        const css = getComputedStyle(line), content = getComputedStyle(text);
+        return { text: text.textContent.trim(), color: css.color, fontSize: parseFloat(css.fontSize), weight: Number(css.fontWeight), opacity: Number(css.opacity), gradient: content.backgroundImage };
+      };
+      return { past: describe('.lyric-line.sung'), current: describe('.lyric-line.cur, .lyric-line.active'), future: describe('.lyric-line.unsung') };
+    });
+    const requireColors = async message => {
+      const value = await styles();
+      assert.ok(value.past && value.current && value.future, message + ': timed rows expose all three states');
+      assert.equal(value.future.color, 'rgb(255, 255, 255)', message + ': future lyrics are white');
+      assert.equal(value.future.opacity, 1, message + ': future white remains readable');
+      assert.notEqual(value.past.color, value.future.color, message + ': past lyrics use the sung color');
+      assert.ok(value.current.gradient.includes(value.past.color) && value.current.gradient.includes(value.future.color), message + ': the current fill uses sung color and white');
+      assert.ok(value.current.fontSize > value.future.fontSize && value.current.weight >= 600, message + ': the current line stands out');
+      report.lyricStyles.push({ step: message, ...value });
+    };
 
     await cover().waitFor({ state: 'visible' });
     await waitUntil(async () => { const media = await audio(); return media.readyState >= 1 && Math.abs(media.time - 35) < .2; }, 'Delayed metadata should apply the pending 35 second seek');
@@ -109,16 +143,73 @@ async function touchGesture(locator, direction) {
     await openLyrics();
     await requireLine('海岸·30秒歌词', 'Opening paused lyrics immediately selects the 30 second line');
     assert.equal((await audio()).paused, true);
+    await requireColors('initial paused lyric colors');
+    const footer = page.locator('footer[aria-label="词曲信息"]');
+    await footer.waitFor({ state: 'visible' });
+    assert.deepEqual((await footer.locator('span').allTextContents()).map(text => text.trim()), ['作词 真实署名作者', '作曲 真实署名作曲']);
+    assert.equal(await lyricView().locator('.lyric-line').count(), 8, 'Credit rows do not occupy the sing-along lyrics');
+    assert.ok(!(await lyricView().textContent()).includes('制作署名') && !(await lyricView().textContent()).includes('混音署名'));
+    report.checks.push('only genuine lyricist and composer credits appear below the lyrics, with production credits excluded from sung rows');
+    assert.equal(await fontRange().count(), 0, 'The playback view exposes no font control');
+    const beforeFont = (await styles()).future.fontSize;
+    await showSettings(); await fontRange().waitFor({ state: 'visible' });
+    const beforeSize = await fontSize();
+    await fontRange().focus(); await fontRange().press(beforeSize < 36 ? 'ArrowRight' : 'ArrowLeft');
+    const chosenSize = await fontSize();
+    assert.notEqual(chosenSize, beforeSize);
+    await page.waitForFunction(value => localStorage.getItem('wuu-mobile-lyric-size') === String(value), chosenSize);
+    await waitUntil(async () => (await styles()).future.fontSize === chosenSize, 'Settings update the existing lyric view immediately');
+    await capture('02a-lyric-size-settings');
+    await returnToLyrics();
+    await waitUntil(async () => (await styles()).future.fontSize !== beforeFont && (await styles()).future.fontSize === chosenSize, 'Returning from settings displays the adjusted lyric size');
+    report.fonts.push({ step: 'keyboard', beforeSize, chosenSize, rendered: (await styles()).future.fontSize });
     await capture('02-paused-current-lyric');
+    await closeLyrics(); await openLyrics();
+    assert.equal(await fontSize(), chosenSize, 'The font preference survives returning to the cover and reopening lyrics');
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await cover().waitFor({ state: 'visible' });
+    await waitUntil(async () => { const media = await audio(); return media.readyState >= 1 && Math.abs(media.time - 35) < .2; }, 'Reload restores the native paused position');
+    await openLyrics(); await requireLine('海岸·30秒歌词', 'Reloaded paused lyrics synchronize before playback');
+    assert.equal(await fontSize(), chosenSize, 'The font preference survives a real page reload');
+    assert.equal((await styles()).future.fontSize, chosenSize);
+    assert.equal(await fontRange().count(), 0, 'Font controls remain confined to settings after reload');
+    report.checks.push('settings lyric size responds to keyboard, updates the existing lyric view and persists across remount and reload');
     await lyricView().locator('.lyric-line').filter({ has: page.locator('.lyric-text', { hasText: /^海岸·50秒歌词$/ }) }).click();
     await waitUntil(async () => Math.abs((await audio()).time - 50) < .2, 'Clicking the 50 second lyric seeks the actual audio');
     await requireLine('海岸·50秒歌词', 'Paused seeking updates the lyric highlight');
+    await requireColors('forward seek lyric colors');
     await capture('03-paused-lyric-seek');
     await closeLyrics();
     assert.equal((await cover().locator('.progress-bar .time').first().textContent()).trim(), '0:50');
     await openLyrics();
     await requireLine('海岸·50秒歌词', 'Reopening paused lyrics keeps the selected 50 second line');
     report.checks.push('paused lyric click seeks, highlights and survives cover/lyrics remount');
+    await lyricView().locator('.lyric-line').filter({ has: page.locator('.lyric-text', { hasText: /^海岸·10秒歌词$/ }) }).click();
+    await waitUntil(async () => Math.abs((await audio()).time - 10) < .2, 'Backward lyric selection seeks the actual audio');
+    await requireLine('海岸·10秒歌词', 'Backward seeking restores the earlier current line');
+    await requireColors('backward seek lyric colors');
+    assert.equal(await lyricView().locator('.lyric-line').filter({ hasText: '海岸·50秒歌词' }).evaluate(row => getComputedStyle(row).color), 'rgb(255, 255, 255)', 'A previously played future row returns to white after seeking backward');
+    report.checks.push('backward seeking restores white future lyrics and colored past lyrics');
+    await lyricView().locator('.lyric-line').filter({ has: page.locator('.lyric-text', { hasText: /^海岸·50秒歌词$/ }) }).click();
+    await requireLine('海岸·50秒歌词', 'Return to the paused 50 second position');
+
+    await page.setViewportSize({ width: 375, height: 812 });
+    await showSettings(); await fontRange().focus(); await fontRange().press('End');
+    assert.equal(await fontSize(), 36, 'Font growth stops at the advertised upper bound');
+    await returnToLyrics();
+    await requireLine('海岸·50秒歌词', 'Maximum font size keeps the current line visible');
+    const narrow = await page.evaluate(() => {
+      const shell = document.querySelector('.lyrics-shell'), view = document.querySelector('.lyrics-view');
+      const box = view.getBoundingClientRect();
+      return { width: innerWidth, shellWidth: shell.clientWidth, shellScroll: shell.scrollWidth, viewWidth: view.clientWidth, viewScroll: view.scrollWidth,
+        rowsInside: [...view.querySelectorAll('.lyric-line')].every(row => { const line = row.getBoundingClientRect(); return line.left >= box.left - 1 && line.right <= box.right + 1; }) };
+    });
+    assert.equal(narrow.width, 375); assert.ok(narrow.shellScroll <= narrow.shellWidth + 1 && narrow.viewScroll <= narrow.viewWidth + 1 && narrow.rowsInside, '375px screens contain maximum-size lyrics without horizontal overflow');
+    report.fonts.push({ step: '375px-maximum', chosenSize: await fontSize(), ...narrow });
+    await capture('03a-375px-maximum-font');
+    await setFont(chosenSize); await returnToLyrics();
+    await page.setViewportSize({ width: 414, height: 896 });
+    report.checks.push('maximum lyric font wraps within a 375px screen');
 
     await closeLyrics();
     // A progress tap is a real production seek; no composable state is accessed.
@@ -176,6 +267,74 @@ async function touchGesture(locator, direction) {
     await waitUntil(async () => (await currentLine().allTextContents()).some(text => text.startsWith('最终·')), 'The final song owns the active lyric as well');
     await capture('05-final-song-after-stale-lyrics');
     report.checks.push('rapid song selection ignores late lyrics from the previous song');
+
+    // A real HTTP lyric response supplies a phrase substantially taller than the
+    // phone. Verify actual first/last glyph visibility rather than a text-only DOM check.
+    const longPhrase = '超长歌词起点' + '我们把今天的故事留给漫长的海岸线再一起穿过灯火通明的城市直到下一次日出把没有说完的话慢慢说给彼此听'.repeat(10) + '完整歌词终点';
+    await setFont(36);
+    await app.evaluate((_electron, text) => {
+      global.__wuuMobileFixture.lyrics[0] = `[00:00.00]开场\n[00:30.00]${text}\n[01:10.00]下一段歌词`;
+    }, longPhrase);
+    await page.setViewportSize({ width: 375, height: 812 });
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await cover().waitFor({ state: 'visible' });
+    await waitUntil(async () => { const media = await audio(); return media.readyState >= 1 && Math.abs(media.time - 35) < .2; }, 'Long lyric scene restores the real audio position');
+    await cover().locator('.play-btn').click();
+    await waitUntil(async () => { const media = await audio(); return !media.paused && media.readyState >= 2; }, 'The long lyric reading scene begins genuine buffered playback');
+    await openLyrics();
+    await waitUntil(async () => (await currentLine().textContent()).trim() === longPhrase, 'The current long phrase is not shortened');
+    assert.equal(await page.locator('.lyric-credits').count(), 0, 'A song without author credits has no invented footer');
+    const longGeometry = () => lyricView().evaluate(element => {
+      const text = [...element.querySelectorAll('.lyric-text')].find(node => node.textContent.startsWith('超长歌词起点'));
+      const node = text.firstChild, box = element.getBoundingClientRect();
+      const endpoint = (start, end) => {
+        const range = document.createRange(); range.setStart(node, start); range.setEnd(node, end);
+        const rect = range.getBoundingClientRect(); return { top: rect.top, bottom: rect.bottom };
+      };
+      return { text: text.textContent, start: endpoint(0, 6), end: endpoint(node.length - 6, node.length),
+        top: box.top, bottom: box.bottom, height: box.height, scrollTop: element.scrollTop,
+        phraseHeight: text.getBoundingClientRect().height, horizontalOverflow: element.scrollWidth > element.clientWidth + 1 };
+    });
+    await waitUntil(async () => { const box = await longGeometry(); return box.start.top >= box.top - 1 && box.start.bottom <= box.bottom + 1; }, 'A tall current phrase initially shows its opening words');
+    const beginning = await longGeometry();
+    assert.ok(beginning.phraseHeight > beginning.height, 'The fixture is genuinely taller than the viewport');
+    assert.equal(beginning.text, longPhrase); assert.equal(beginning.horizontalOverflow, false);
+    await capture('06-long-lyric-start');
+    const box = await lyricView().boundingBox();
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.wheel(0, beginning.end.top - beginning.top - 40);
+    await waitUntil(async () => { const box = await longGeometry(); return box.end.top >= box.top - 1 && box.end.bottom <= box.bottom + 1; }, 'Native scrolling can reveal the final words of the complete phrase');
+    // Observe after Chromium has applied the wheel movement, so the protection
+    // assertion compares stable manual reading rather than native scroll easing.
+    await page.evaluate(() => new Promise((resolve, reject) => {
+      const view = document.querySelector('.lyrics-view'), started = performance.now();
+      let previous = view.scrollTop, stable = 0;
+      const check = () => {
+        const position = view.scrollTop;
+        stable = Math.abs(position - previous) < .5 ? stable + 1 : 0;
+        previous = position;
+        if (stable >= 4) return resolve();
+        if (performance.now() - started > 1500) return reject(new Error('Native manual scrolling did not settle'));
+        requestAnimationFrame(check);
+      };
+      requestAnimationFrame(check);
+    }));
+    const ending = await longGeometry();
+    await capture('07-long-lyric-end');
+    const probe = await page.evaluate(() => new Promise(resolve => {
+      const view = document.querySelector('.lyrics-view'), audio = document.querySelector('audio');
+      const time = audio.currentTime, scrollTop = view.scrollTop, started = performance.now(), samples = [];
+      const measure = () => {
+        samples.push({ time: audio.currentTime, scrollTop: view.scrollTop });
+        if (audio.currentTime >= time + 1 || performance.now() - started >= 4000) return resolve({ time, scrollTop, samples });
+        requestAnimationFrame(measure);
+      };
+      requestAnimationFrame(measure);
+    }));
+    report.longLyrics = { characters: longPhrase.length, beginning, ending, manualPlayback: probe };
+    assert.ok(probe.samples.at(-1).time - probe.time >= .8, 'The manual reading check runs during genuine playback');
+    assert.ok(probe.samples.every(sample => Math.abs(sample.scrollTop - probe.scrollTop) < 2), 'Live lyric frames do not pull manual reading back to the current phrase beginning');
+    report.checks.push('complete long lyrics expose both ends and preserve manual scrolling during real playback');
 
     report.fixture = await app.evaluate(() => ({ origin: global.__wuuMobileFixture.origin, requests: global.__wuuMobileFixture.requests }));
     const delayedAudio = report.fixture.requests.find(request => request.path.startsWith('/api/stream') && request.delayMs === 900 && request.servedAt);
