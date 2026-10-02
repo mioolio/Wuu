@@ -1,5 +1,5 @@
 import { errorMessage, getBridge, mediaUrl, subscribe } from '../api';
-import { persistNow, scheduleSave, useAppStore } from '../store';
+import { applyUserDataChange, persistNow, scheduleSave, useAppStore } from '../store';
 import { notify } from '../ui';
 import type { PreviewSong, Song } from '../types';
 import { AudioEffects, normalizeFxSettings } from './audioFx';
@@ -12,6 +12,9 @@ export { isVideo, preferredDuration, safeSeekTime, shuffled } from './playbackUt
 class PlayerService {
   readonly media = document.createElement('video');
   private initialized = false;
+  private initializationTask: Promise<void> | null = null;
+  private initializationVersion = 0;
+  private startupVersion = 0;
   private unsubscribes: (() => void)[] = [];
   private context: AudioContext | null = null;
   private gain: GainNode | null = null;
@@ -23,6 +26,11 @@ class PlayerService {
   private likedContext = false;
   private shufflePaths: string[] = [];
   private shufflePos = -1;
+  // A shuffle order is a plan, not playback history: it is replaced each round.
+  private songHistory: string[] = [];
+  private songHistoryPosition = -1;
+  private previewHistory: PreviewSong[] = [];
+  private previewHistoryPosition = -1;
   private version = 0;
   private coverRequest = 0;
   private sourcePath = '';
@@ -48,72 +56,89 @@ class PlayerService {
     this.media.crossOrigin = 'anonymous';
   }
 
-  async initialize(): Promise<void> {
-    if (this.initialized) return;
-    this.initialized = true;
-    await useAppStore.getState().initialize();
-    if (!this.initialized) return;
-    for (const [event, handler] of this.handlers) {
-      this.media.addEventListener(event, handler);
-      this.unsubscribes.push(() => this.media.removeEventListener(event, handler));
-    }
-    this.bind('musicAPI', 'onDurationUpdate', (payload: { audioPath?: string; realDuration?: number; idx?: number; duration?: number }) => {
-      const audioPath = payload?.audioPath || (typeof payload?.idx === 'number' ? useAppStore.getState().songs[payload.idx]?.audioPath : undefined);
-      const realDuration = positive(payload?.realDuration) || positive(payload?.duration);
-      if (!audioPath || !realDuration) return;
-      useAppStore.setState(state => ({
-        actualDuration: { ...state.actualDuration, [audioPath]: realDuration },
-        songs: state.songs.map(song => song.audioPath === audioPath ? { ...song, realDuration } : song),
-        player: { ...state.player, song: state.player.song && state.player.song.audioPath === audioPath ? { ...state.player.song, realDuration } : state.player.song },
+  initialize(): Promise<void> {
+    if (this.initializationTask) return this.initializationTask;
+    const task = this.initializeStartup(++this.initializationVersion).finally(() => {
+      if (this.initializationTask === task && !useAppStore.getState().hydrated) this.initializationTask = null;
+    });
+    this.initializationTask = task;
+    return task;
+  }
+
+  private async initializeStartup(lifecycle: number): Promise<void> {
+    if (!this.initialized) {
+      this.startupVersion = this.version;
+      this.initialized = true;
+      for (const [event, handler] of this.handlers) {
+        this.media.addEventListener(event, handler);
+        this.unsubscribes.push(() => this.media.removeEventListener(event, handler));
+      }
+      this.bind('musicAPI', 'onDurationUpdate', (payload: { audioPath?: string; realDuration?: number; idx?: number; duration?: number }) => {
+        const audioPath = payload?.audioPath || (typeof payload?.idx === 'number' ? useAppStore.getState().songs[payload.idx]?.audioPath : undefined);
+        const realDuration = positive(payload?.realDuration) || positive(payload?.duration);
+        if (!audioPath || !realDuration) return;
+        applyUserDataChange(state => ({
+          actualDuration: { ...state.actualDuration, [audioPath]: realDuration },
+          songs: state.songs.map(song => song.audioPath === audioPath ? { ...song, realDuration } : song),
+          player: { ...state.player, song: state.player.song && state.player.song.audioPath === audioPath ? { ...state.player.song, realDuration } : state.player.song },
+        }));
+        this.updateDuration(); scheduleSave();
+      });
+      this.bind('desktopLyric', 'onClosed', () => {
+        useAppStore.getState().setPlayer({ desktopLyricOn: false });
+        this.stopLyricTimer();
+      });
+      this.bind('desktopLyric', 'onBoundsSaved', (bounds: number[]) => {
+        if (Array.isArray(bounds)) useAppStore.getState().setSettings({ desktopLyricBounds: bounds });
+      });
+      this.bind('desktopLyric', 'onLockChanged', (locked: boolean) => useAppStore.getState().setSettings({ desktopLyricLocked: !!locked }));
+      this.unsubscribes.push(useAppStore.subscribe((state, previous) => {
+        const song = state.player.song;
+        // A library refresh can replace the sleeve without reopening its audio.
+        // Compare paths so progress ticks and duration metadata never re-extract it.
+        if (song && song.audioPath === previous.player.song?.audioPath &&
+            (song.coverPath || '') !== (previous.player.song?.coverPath || '')) {
+          void this.updateCoverColor(song.coverPath ? mediaUrl(song.coverPath) : '', song.coverPath || undefined, this.version);
+          this.updateMediaMetadata(); this.syncDesktop(true);
+        }
+        if (state.settings.volume !== previous.settings.volume) { this.cancelFade(); this.applyVolume(state.settings.volume); }
+        if (state.settings.audioFx !== previous.settings.audioFx) this.effects?.apply(normalizeFxSettings(state.settings.audioFx));
+        if (state.settings !== previous.settings) {
+          this.sendSettings();
+          if (state.settings.simulateLrcProgress !== previous.settings.simulateLrcProgress) this.sendLyricData();
+          if (state.settings.playMode !== previous.settings.playMode) { this.resetShuffle(); this.syncDesktop(true); }
+          if (state.settings.themeFollowCover !== previous.settings.themeFollowCover || state.settings.colorIntensity !== previous.settings.colorIntensity) this.applyCoverTheme();
+        }
       }));
-      this.updateDuration(); scheduleSave();
-    });
-    this.bind('desktopLyric', 'onClosed', () => {
-      useAppStore.getState().setPlayer({ desktopLyricOn: false });
-      this.stopLyricTimer();
-    });
-    this.bind('desktopLyric', 'onBoundsSaved', (bounds: number[]) => {
-      if (Array.isArray(bounds)) useAppStore.getState().setSettings({ desktopLyricBounds: bounds });
-    });
-    this.bind('desktopLyric', 'onLockChanged', (locked: boolean) => useAppStore.getState().setSettings({ desktopLyricLocked: !!locked }));
-    this.unsubscribes.push(useAppStore.subscribe((state, previous) => {
-      const song = state.player.song;
-      // A library refresh can replace the sleeve without reopening its audio.
-      // Compare paths so progress ticks and duration metadata never re-extract it.
-      if (song && song.audioPath === previous.player.song?.audioPath &&
-          (song.coverPath || '') !== (previous.player.song?.coverPath || '')) {
-        void this.updateCoverColor(song.coverPath ? mediaUrl(song.coverPath) : '', song.coverPath || undefined, this.version);
-        this.updateMediaMetadata(); this.syncDesktop(true);
-      }
-      if (state.settings.volume !== previous.settings.volume) { this.cancelFade(); this.applyVolume(state.settings.volume); }
-      if (state.settings.audioFx !== previous.settings.audioFx) this.effects?.apply(normalizeFxSettings(state.settings.audioFx));
-      if (state.settings !== previous.settings) {
-        this.sendSettings();
-        if (state.settings.simulateLrcProgress !== previous.settings.simulateLrcProgress) this.sendLyricData();
-        if (state.settings.playMode !== previous.settings.playMode) { this.resetShuffle(); this.syncDesktop(true); }
-        if (state.settings.themeFollowCover !== previous.settings.themeFollowCover || state.settings.colorIntensity !== previous.settings.colorIntensity) this.applyCoverTheme();
-      }
-    }));
-    const beforeUnload = () => { this.flushDuration(); this.saveProgress(); persistNow(true); };
-    window.addEventListener('beforeunload', beforeUnload);
-    this.unsubscribes.push(() => window.removeEventListener('beforeunload', beforeUnload));
+      const beforeUnload = () => { this.flushDuration(); this.saveProgress(); persistNow(true); };
+      window.addEventListener('beforeunload', beforeUnload);
+      this.unsubscribes.push(() => window.removeEventListener('beforeunload', beforeUnload));
+    }
+    // Media and IPC listeners must exist before base songs can be played. Only
+    // automatic startup restoration waits for the original user preferences.
+    await useAppStore.getState().initialize();
+    if (!this.initialized || lifecycle !== this.initializationVersion || !useAppStore.getState().hydrated) return;
     this.applyVolume(useAppStore.getState().settings.volume);
     this.applyCoverTheme();
     this.installMediaSession();
+    if (this.startupVersion !== this.version) return;
+    const startupVersion = this.startupVersion;
     const interfaceSession = new URLSearchParams(globalThis.location?.search || '');
     if ((useAppStore.getState().settings.desktopLyricPersist || interfaceSession.get('desktopLyrics') === '1') && !useAppStore.getState().player.desktopLyricOn) {
       await this.toggleDesktopLyric().catch(error => console.error('桌面歌词自动开启失败', error));
     }
+    if (!this.initialized || lifecycle !== this.initializationVersion || startupVersion !== this.version) return;
     const state = useAppStore.getState();
     const previous = state.songs.find(song => song.audioPath === state.lastSession?.audioPath);
+    const initial = previous || this.playlist()[0];
     if (previous) {
       this.likedContext = state.collections.some(collection => collection.songs.includes(previous.audioPath));
-      await this.openSong(previous, true, interfaceSession.get('interfaceSwitch') !== '1');
-    } else if (state.songs.length) {
-      const initial = this.playlist()[0];
-      if (initial) await this.openSong(initial, true);
     }
-    if (interfaceSession.get('interfacePaused') === '1') this.media.pause();
+    if (initial) await this.openSong(initial, true, !previous || interfaceSession.get('interfaceSwitch') !== '1');
+    // openSong increments once; a newer manual choice during its async work
+    // owns the media and must never be paused by startup session restoration.
+    const restoredVersion = startupVersion + (initial ? 1 : 0);
+    if (this.initialized && lifecycle === this.initializationVersion && restoredVersion === this.version && interfaceSession.get('interfacePaused') === '1') this.media.pause();
   }
 
   private bind(name: Parameters<typeof subscribe>[0], method: string, listener: (...args: any[]) => void): void {
@@ -122,10 +147,12 @@ class PlayerService {
   }
 
   dispose(): void {
+    this.initializationVersion++;
     this.version++;
     this.cancelFade(); this.flushDuration(); this.saveProgress(); this.media.pause();
     this.stopLyricTimer(); this.unsubscribes.splice(0).forEach(unsubscribe => unsubscribe());
     this.initialized = false;
+    this.initializationTask = null;
     // Retain the MediaElementSource: a media element can only be connected once.
     void this.context?.suspend().catch(() => {});
   }
@@ -224,6 +251,7 @@ class PlayerService {
     this.sourcePath = preview.url;
     this.previewQueue = preview.queue || null;
     this.previewPosition = preview.queue ? this.previewPositions.get(preview) ?? this.previewIndex(preview, preview.queue) : -1;
+    if (this.previewPosition >= 0) this.previewPositions.set(preview, this.previewPosition);
     useAppStore.getState().setPlayer({ song: null, index: -1, preview, playing: false, time: 0, duration: 0, loading: true, error: '', lyricText: preview.lyric || '' });
     this.media.src = mediaUrl(preview.url); this.media.load();
     this.setLyrics(preview.lyric || '', isVideo(null, preview));
@@ -270,6 +298,8 @@ class PlayerService {
     this.version++; this.cancelFade(); this.flushDuration(); this.saveProgress();
     this.media.pause(); this.media.removeAttribute('src'); this.media.load(); this.sourcePath = '';
     this.lyrics = { raw: false, lines: [] };
+    this.songHistory = []; this.songHistoryPosition = -1;
+    this.previewHistory = []; this.previewHistoryPosition = -1;
     useAppStore.getState().setPlayer({ song: null, preview: null, index: -1, time: 0, duration: 0, playing: false, loading: false, lyricText: '', error: '' });
     this.coverColor = null; this.applyCoverTheme();
     this.send({ type: 'clear' }); this.sendInfo(); this.sendTime(); this.send({ type: 'color', color: null }); this.syncDesktop(true);
@@ -292,6 +322,44 @@ class PlayerService {
     if (oldPath === newPath) return;
     if (this.queuePaths) this.queuePaths = [...new Set(this.queuePaths.map(path => path === oldPath ? newPath : path))];
     this.shufflePaths = [...new Set(this.shufflePaths.map(path => path === oldPath ? newPath : path))];
+    this.songHistory = this.songHistory.map(path => path === oldPath ? newPath : path);
+  }
+
+  private rememberSong(path: string): void {
+    if (this.songHistory[this.songHistoryPosition] === path) return;
+    this.songHistory.splice(this.songHistoryPosition + 1);
+    this.songHistory.push(path);
+    if (this.songHistory.length > 250) this.songHistory.shift();
+    this.songHistoryPosition = this.songHistory.length - 1;
+  }
+
+  private historySong(direction: number): Song | undefined {
+    const state = useAppStore.getState();
+    const available = new Map(state.songs.filter(song => state.dislikes[song.audioPath] === undefined).map(song => [song.audioPath, song]));
+    for (let position = this.songHistoryPosition + direction; position >= 0 && position < this.songHistory.length; position += direction) {
+      const song = available.get(this.songHistory[position]);
+      if (!song || song.audioPath === state.player.song?.audioPath) continue;
+      this.songHistoryPosition = position;
+      return song;
+    }
+    return undefined;
+  }
+
+  private rememberPreview(preview: PreviewSong): void {
+    const current = this.previewHistory[this.previewHistoryPosition];
+    if (current === preview || (current?.url === preview.url && current?.source === preview.source && current?.queue === preview.queue &&
+        (!preview.queue || this.previewPositions.get(current) === this.previewPosition))) return;
+    this.previewHistory.splice(this.previewHistoryPosition + 1);
+    this.previewHistory.push(preview);
+    if (this.previewHistory.length > 250) this.previewHistory.shift();
+    this.previewHistoryPosition = this.previewHistory.length - 1;
+  }
+
+  private historyPreview(direction: number): PreviewSong | undefined {
+    const position = this.previewHistoryPosition + direction;
+    if (position < 0 || position >= this.previewHistory.length) return undefined;
+    this.previewHistoryPosition = position;
+    return this.previewHistory[position];
   }
 
   private resetShuffle(currentPath = useAppStore.getState().player.song?.audioPath): void {
@@ -307,33 +375,43 @@ class PlayerService {
     const state = useAppStore.getState();
     if (state.player.preview) { void this.nextPreview(direction); return; }
     const playlist = this.playlist();
-    if (!playlist.length) { this.media.pause(); notify('播放队列中没有可推荐的歌曲'); return; }
     let target: Song | undefined;
     const currentPath = state.player.song?.audioPath;
     if (state.settings.playMode === 2) {
+      target = this.historySong(direction < 0 ? -1 : 1);
+      if (target) { void this.openSong(target, true); return; }
+      // At the start of history there is no previously played random track.
+      if (direction < 0) return;
+      if (!playlist.length) { this.media.pause(); notify('播放队列中没有可推荐的歌曲'); return; }
       const valid = new Set(playlist.map(song => song.audioPath));
-      if (this.shufflePaths.length !== valid.size || this.shufflePaths.some(path => !valid.has(path))) this.resetShuffle(currentPath);
+      if (this.shufflePaths.length !== valid.size || this.shufflePaths.some(path => !valid.has(path)) || this.shufflePaths[this.shufflePos] !== currentPath) this.resetShuffle(currentPath);
       if (direction > 0) {
         this.shufflePos++;
         if (this.shufflePos >= this.shufflePaths.length) {
           this.shufflePaths = shuffled([...valid]); this.shufflePos = 0;
           if (this.shufflePaths.length > 1 && this.shufflePaths[0] === currentPath) [this.shufflePaths[0], this.shufflePaths[1]] = [this.shufflePaths[1], this.shufflePaths[0]];
         }
-      } else this.shufflePos = Math.max(0, this.shufflePos - 1);
+      }
       target = playlist.find(song => song.audioPath === this.shufflePaths[this.shufflePos]);
     } else {
+      if (!playlist.length) { this.media.pause(); notify('播放队列中没有可推荐的歌曲'); return; }
       const position = playlist.findIndex(song => song.audioPath === currentPath);
-      target = playlist[position < 0 ? 0 : (position + (direction < 0 ? -1 : 1) + playlist.length) % playlist.length];
+      target = playlist[position < 0 ? (direction < 0 ? playlist.length - 1 : 0) : (position + (direction < 0 ? -1 : 1) + playlist.length) % playlist.length];
     }
     if (target) void this.openSong(target, true);
   }
 
   private async nextPreview(direction: number): Promise<void> {
+    if (useAppStore.getState().settings.playMode === 2) {
+      const previous = this.historyPreview(direction < 0 ? -1 : 1);
+      if (previous) { await this.playPreview(previous); return; }
+      if (direction < 0) return;
+    }
     const preview = useAppStore.getState().player.preview;
     const queue = preview?.queue;
     if (!preview || !queue?.length) { this.media.pause(); return; }
     const position = this.previewQueue === queue && this.previewPosition >= 0 ? this.previewPosition : this.previewIndex(preview, queue);
-    const nextPosition = useAppStore.getState().settings.playMode === 2 && queue.length > 1 ? (position + 1 + Math.floor(Math.random() * (queue.length - 1))) % queue.length : (position + (direction < 0 ? -1 : 1) + queue.length) % queue.length;
+    const nextPosition = position < 0 ? (direction < 0 ? queue.length - 1 : 0) : useAppStore.getState().settings.playMode === 2 && queue.length > 1 ? (position + 1 + Math.floor(Math.random() * (queue.length - 1))) % queue.length : (position + (direction < 0 ? -1 : 1) + queue.length) % queue.length;
     const pendingVersion = ++this.version;
     try {
       let target = queue[nextPosition];
@@ -401,7 +479,8 @@ class PlayerService {
   private duration(): number { const state = useAppStore.getState(); return preferredDuration(state.player.song, this.media.duration, !!state.player.preview); }
   private updateDuration(): void { useAppStore.getState().setPlayer({ duration: this.duration() }); }
   private incrementPlay(path: string): void {
-    useAppStore.setState(state => ({ stats: { ...state.stats, [path]: recordPlay(state.stats[path]) } })); scheduleSave();
+    const now = new Date();
+    applyUserDataChange(state => ({ stats: { ...state.stats, [path]: recordPlay(state.stats[path], now) } })); scheduleSave();
   }
   private flushDuration(): void {
     const now = performance.now();
@@ -411,7 +490,8 @@ class PlayerService {
     const path = state.player.song?.audioPath;
     const delta = (now - previous) / 1000;
     if (!path || state.player.preview || !previous || delta <= 0 || delta > 5) return;
-    useAppStore.setState(current => ({ stats: { ...current.stats, [path]: recordListening(current.stats[path], delta) } }));
+    const end = new Date();
+    applyUserDataChange(current => ({ stats: { ...current.stats, [path]: recordListening(current.stats[path], delta, end) } }));
     scheduleSave();
   }
   private saveProgress(): void {
@@ -421,7 +501,7 @@ class PlayerService {
     if (!path || state.player.preview || !duration) return;
     const position = Math.max(0, this.media.currentTime || this.requestedTime);
     const time = duration - position < 3 ? 0 : position;
-    useAppStore.setState(current => ({ progress: { ...current.progress, [path]: time }, lastSession: { audioPath: path, t: time } })); scheduleSave();
+    applyUserDataChange(current => ({ progress: { ...current.progress, [path]: time }, lastSession: { audioPath: path, t: time } })); scheduleSave();
   }
 
   private handleFailure(message: string): void {
@@ -459,6 +539,9 @@ class PlayerService {
     if (performance.now() - this.lastSaveWall > 2000) { this.lastSaveWall = performance.now(); this.saveProgress(); }
   };
   private onPlay = (): void => {
+    const { song, preview } = useAppStore.getState().player;
+    if (preview) this.rememberPreview(preview);
+    else if (song) this.rememberSong(song.audioPath);
     useAppStore.getState().setPlayer({ playing: true, loading: false, error: '' });
     this.lastWall = performance.now(); this.startLyricTimer(); this.syncDesktop(true);
     if (navigator.mediaSession) navigator.mediaSession.playbackState = 'playing';
@@ -483,7 +566,7 @@ class PlayerService {
     const state = useAppStore.getState();
     if (state.player.song && !state.player.preview) {
       const path = state.player.song.audioPath;
-      useAppStore.setState(current => ({ progress: { ...current.progress, [path]: 0 }, lastSession: { audioPath: path, t: 0 } })); scheduleSave();
+      applyUserDataChange(current => ({ progress: { ...current.progress, [path]: 0 }, lastSession: { audioPath: path, t: 0 } })); scheduleSave();
     }
     if (state.settings.playMode === 0) {
       if (state.player.song) this.incrementPlay(state.player.song.audioPath);
@@ -589,7 +672,7 @@ class PlayerService {
     const now = performance.now(); if (!force && now - this.lastSyncWall < 3000) return; this.lastSyncWall = now;
     const state = useAppStore.getState(); const { song, preview } = state.player;
     try { void Promise.resolve(getBridge('stateAPI').updateDesktopState({ index: state.player.index, playMode: state.settings.playMode, isPlaying: !this.media.paused,
-      currentTime: this.media.currentTime || 0, duration: this.duration(), songInfo: song ? { songName: song.songName, artist: song.artist, album: song.album || '', hasCover: !!song.coverPath, coverPath: song.coverPath || '', audioPath: song.audioPath } : preview ? { songName: preview.name, artist: preview.artist, album: '', hasCover: !!preview.cover, coverPath: preview.cover || '', audioPath: preview.url } : null,
+      currentTime: this.media.currentTime || 0, duration: this.duration(), songInfo: song ? { songName: song.songName, artist: song.artist, album: song.album || '', lyricist: song.lyricist || '', composer: song.composer || '', hasCover: !!song.coverPath, coverPath: song.coverPath || '', audioPath: song.audioPath } : preview ? { songName: preview.name, artist: preview.artist, album: '', hasCover: !!preview.cover, coverPath: preview.cover || '', audioPath: preview.url } : null,
     })).catch(() => {}); } catch { /* Synchronization is optional in browser previews. */ }
     if (navigator.mediaSession && this.duration()) {
       try { navigator.mediaSession.setPositionState({ duration: this.duration(), playbackRate: this.media.playbackRate, position: Math.min(this.duration(), this.media.currentTime || 0) }); } catch { /* Some runtimes lack position support. */ }

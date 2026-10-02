@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from 'react';
 import { getBridge, errorMessage, mediaUrl } from '../api';
-import { useAppStore, scheduleSave } from '../store';
+import { applyUserDataChange, useAppStore, scheduleSave } from '../store';
 import { playerService } from '../services/player';
 import { confirmAction, notify } from '../ui';
 import type { Song } from '../types';
@@ -20,10 +20,11 @@ export default function ManagementView() {
   const allSelected = filtered.length > 0 && filtered.every(song => selected.has(song.audioPath));
 
   function cancelMarks(paths: string[]) {
-    const state = useAppStore.getState();
-    const next = { ...state.dislikes };
-    paths.forEach(path => { delete next[path]; });
-    useAppStore.setState({ dislikes: next });
+    applyUserDataChange(state => {
+      const dislikes = { ...state.dislikes };
+      paths.forEach(path => { delete dislikes[path]; });
+      return { dislikes };
+    });
     scheduleSave();
     setSelected(previous => new Set([...previous].filter(path => !paths.includes(path))));
     notify(`已取消 ${paths.length} 条不推荐标记`, 'success');

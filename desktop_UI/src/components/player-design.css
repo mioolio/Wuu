@@ -72,6 +72,8 @@
 .immersive-player .player-cover.disc.playing { animation-play-state: running; }
 .immersive-player .record-info { min-width: 0; width: 100%; animation: record-info-in var(--motion-content) var(--ease-out) both; }
 .immersive-player .record-info h1 { font-size: clamp(22px, 2.25vw, 30px); line-height: 1.4; font-weight: 650; letter-spacing: -.5px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; text-wrap: balance; overflow-wrap: anywhere; margin: 0 0 8px; }
+.immersive-player .record-credits { display: flex; flex-wrap: wrap; justify-content: center; gap: 2px 12px; min-width: 0; max-height: calc(3em + 2px); overflow: hidden; margin-bottom: 6px; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.immersive-player .record-credits > span { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .immersive-player .record-info > p { color: var(--muted); font-size: 13px; line-height: 1.5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .immersive-player .record-details { display: flex; align-items: center; justify-content: center; gap: 9px; min-width: 0; margin-top: 6px; color: var(--muted); font-size: 12px; line-height: 1.5; }
 .immersive-player .record-details:empty { display: none; }
@@ -92,8 +94,6 @@
 .immersive-player .player-actions .icon-button:hover { color: var(--listening-accent); background: color-mix(in srgb, var(--listening-accent) 8%, transparent); }
 .immersive-player .player-actions .icon-button:active { transform: scale(.94); }
 .immersive-player .record-duration { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 11px; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
-.immersive-player .player-credits { display: flex; flex-wrap: wrap; min-height: 0; padding-top: 16px; gap: 4px 16px; justify-content: center; font-size: 11px; line-height: 1.5; }
-.immersive-player .player-credits:empty { display: none; }
 .immersive-player .lyrics-panel { align-self: stretch; min-height: 220px; max-height: 100%; position: relative; left: clamp(-28px, -2.3vw, -16px); }
 .immersive-player .lyrics-scroll { mask-image: linear-gradient(transparent, black 12%, black 85%, transparent); }
 .immersive-player .lyrics-lines { padding: 42% 0; }
@@ -108,6 +108,7 @@
 .immersive-player .video-record-info { text-align: left; }
 .immersive-player .video-record-info .record-info h1 { font-size: 21px; }
 .immersive-player .video-record-info .record-details { justify-content: flex-start; }
+.immersive-player .video-record-info .record-credits { justify-content: flex-start; }
 .immersive-player .video-record-info .player-actions { margin-top: 0; }
 .player-empty .player-empty-icon { display: flex; align-items: center; justify-content: center; width: 100px; height: 100px; margin-bottom: 12px; color: var(--accent); border-radius: 28px; border: 1px solid color-mix(in srgb, var(--accent) 12%, transparent); background: color-mix(in srgb, var(--accent) 5%, transparent); }
 .player-empty .listening-eyebrow { font-size: 10px; }
@@ -152,7 +153,6 @@
   .immersive-player .record-info h1 { font-size: 23px; margin-bottom: 5px; }
   .immersive-player .record-details { margin-top: 3px; }
   .immersive-player .player-actions { margin-top: 12px; }
-  .immersive-player .player-credits { padding-top: 10px; }
 }
 @media (max-height: 560px) {
   .player-page.immersive-player { padding-top: 12px; padding-bottom: 14px; }
@@ -161,7 +161,7 @@
   .immersive-player .record-info h1 { font-size: 19px; }
   .immersive-player .record-info > p { font-size: 11px; }
   .immersive-player .record-details { font-size: 10px; }
-  .immersive-player .player-credits { padding-top: 7px; font-size: 9px; }
+  .immersive-player .record-credits { font-size: 10px; margin-bottom: 4px; }
   .immersive-player .lyrics-panel { min-height: 160px; }
   .immersive-player .lyric-line { padding: 10px 0; }
 }

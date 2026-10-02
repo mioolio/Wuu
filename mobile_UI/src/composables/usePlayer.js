@@ -3,7 +3,7 @@
 // 数据同步: 播放次数上报 / 播放进度上报与恢复 / 点赞状态
 // MediaSession: 让安卓锁屏/通知栏/状态栏显示封面+歌名+上一首下一首控制
 import { ref, computed } from 'vue';
-import { fetchRandomSong, streamUrl, streamByPath, coverUrl, coverByPath, fetchLyric, reportPlayCount, reportProgress, fetchProgress, toggleLike, fetchLiked, fetchDisliked, toggleDislike, fetchDesktopState, fetchSyncMode } from '../api.js';
+import { fetchRandomSong, fetchSongsPage, streamUrl, streamByPath, coverUrl, coverByPath, fetchLyric, reportPlayCount, reportProgress, fetchProgress, toggleLike, fetchLiked, fetchDisliked, toggleDislike, fetchDesktopState, fetchSyncMode } from '../api.js';
 
 // ===== 播放状态 =====
 const currentSong = ref(null);       // 当前歌曲对象
@@ -31,6 +31,11 @@ const isDisliked = ref(false);      // 当前歌曲是否已不推荐
 // ===== 内部状态 =====
 let audioEl = null;
 let songRequest = 0; // 只有当前歌曲的异步结果可以更新播放器
+let navigationRequest = 0;
+// 按实际播放顺序保存历史，不能用会随删歌变化的歌库 index 代替。
+const playbackHistory = [];
+let historyCursor = -1;
+let pendingHistory = null;
 let seekRevision = 0;
 let pendingSeek = null;
 let removeAudioListeners = null;
@@ -69,7 +74,6 @@ let _lastSyncedPaused = null;
 // 超时 (房间已解散/host 失联) 则本地兜底切歌
 let _pendingHostAdvance = false;
 let _pendingAdvanceTimer = null;
-let lastIndex = -1;       // 上一首的 index (用于列表循环下一首)
 let totalSongs = 0;       // 歌库总数 (从 /api/random 返回)
 let progressTimer = null; // 进度上报定时器
 let lastReportedTime = 0; // 上次上报的进度时间 (避免重复上报)
@@ -83,6 +87,36 @@ function getAudioEl() {
 function playbackPosition() {
   if (pendingSeek?.request === songRequest) return pendingSeek.position;
   return Number.isFinite(audioEl?.currentTime) ? Math.max(0, audioEl.currentTime) : 0;
+}
+
+function songKey(song) {
+  if (typeof song?.audioPath === 'string' && song.audioPath.trim()) return `path:${song.audioPath}`;
+  return Number.isSafeInteger(song?.id) && song.id >= 0 ? `id:${song.id}` : null;
+}
+
+function recordPlayedSong() {
+  const song = currentSong.value;
+  const key = songKey(song);
+  if (!key || !audioEl || audioEl.paused) return;
+  const target = pendingHistory?.request === songRequest ? pendingHistory.index : null;
+  if (target != null && songKey(playbackHistory[target]) === key) {
+    historyCursor = target;
+    playbackHistory[target] = song;
+  } else if (songKey(playbackHistory[historyCursor]) === key) {
+    playbackHistory[historyCursor] = song;
+  } else {
+    playbackHistory.splice(historyCursor + 1);
+    playbackHistory.push(song);
+    historyCursor = playbackHistory.length - 1;
+  }
+  pendingHistory = null;
+}
+
+function beginNavigation() {
+  const navigation = ++navigationRequest;
+  const request = songRequest;
+  const audio = audioEl;
+  return () => navigation === navigationRequest && request === songRequest && audio === audioEl && !!audio;
 }
 
 // ===== 初始化音频元素 =====
@@ -115,6 +149,8 @@ function init(audio) {
       _notifyOp('play', {});
     }
   });
+  // play 事件可以早于解码失败，playing 才代表音频真正开始播放。
+  on('playing', recordPlayedSong);
   on('pause', () => {
     isPlaying.value = false;
     updateMediaPlaybackState();
@@ -197,6 +233,8 @@ async function startDesktopSync() {
       songName: state.songInfo.songName || '',
       artist: state.songInfo.artist || '',
       album: state.songInfo.album || '',
+      lyricist: state.songInfo.lyricist || '',
+      composer: state.songInfo.composer || '',
       hasCover: state.songInfo.hasCover || false,
       coverPath: state.songInfo.coverPath || '',
       audioPath: state.audioPath || state.songInfo.audioPath || '',
@@ -213,6 +251,8 @@ async function startDesktopSync() {
 
 function stopDesktopSync() {
   songRequest++;
+  navigationRequest++;
+  pendingHistory = null;
   pendingSeek = null;
   stopProgressTimer();
   if (_pendingAdvanceTimer) clearTimeout(_pendingAdvanceTimer);
@@ -443,17 +483,18 @@ function stopProgressTimer() {
 }
 
 // ===== 播放指定歌曲 =====
-async function playSong(song, options = {}) {
-  if (!audioEl || !song) return;
+async function playSong(song, options = {}, historyIndex = null) {
+  if (!audioEl || !songKey(song)) return;
   // 进入时捕获远端应用标志: playSong 是异步的, 广播时窗口可能已关闭,
   // 远端触发的切歌若回声广播会导致房间内 song 操作互相反弹
   const suppressNotify = options.notify === false || _remoteApplying;
   const request = ++songRequest;
+  navigationRequest++;
+  pendingHistory = { request, index: historyIndex };
   const audio = audioEl;
   const stillCurrent = () => request === songRequest && audio === audioEl;
   const autoplay = options.autoplay !== false;
   isLoading.value = true;
-  lastIndex = currentSong.value ? currentSong.value.id : -1;
   currentSong.value = song;
   hasReportedPlay = false;
   stopProgressTimer();
@@ -491,8 +532,12 @@ async function playSong(song, options = {}) {
   loadLyric(song.id, request);
   updateMediaMetadata();
   refreshLikedSet();
+  let started = false;
   try {
-    if (autoplay) await audio.play();
+    if (autoplay) {
+      await audio.play();
+      started = true;
+    }
     else audio.pause();
   } catch (e) {
     if (stillCurrent()) console.warn('播放失败:', e);
@@ -505,6 +550,8 @@ async function playSong(song, options = {}) {
     }
   }
   if (!stillCurrent()) return;
+  // 暂停的桌面/房间同步只选中歌曲；成功播放（含恢复）才进入听歌历史。
+  if (started && !audio.paused) recordPlayedSong();
 
   // 尝试恢复上次播放进度 (一起听远端切歌时跳过, 进度由对端同步)
   if (!suppressNotify && options.restoreProgress !== false && !Number.isFinite(options.position)) {
@@ -536,9 +583,11 @@ async function playSong(song, options = {}) {
 
 // ===== 随机播放一首 (推荐页用) =====
 async function playRandom() {
+  const stillCurrent = beginNavigation();
   try {
     const data = await fetchRandomSong();
-    totalSongs = data.total;
+    if (!stillCurrent()) return;
+    totalSongs = Number.isSafeInteger(data.total) && data.total >= 0 ? data.total : 0;
     await playSong(data.song);
   } catch (e) {
     console.error('随机播放失败:', e);
@@ -588,6 +637,7 @@ async function resume() {
     }
   }
   if (!audio || audio !== audioEl || request !== songRequest || audio.paused) return;
+  recordPlayedSong();
   // 立即更新 MediaSession 状态
   isPlaying.value = !audio.paused;
   updateMediaPlaybackState();
@@ -607,10 +657,60 @@ function togglePlay() {
 async function ensureTotalSongs() {
   if (totalSongs > 0) return;
   try {
-    const { fetchSongsPage } = await import('../api.js');
     const data = await fetchSongsPage(1, 1);
-    totalSongs = data.total || 0;
-  } catch (e) { /* 获取失败保持 0, next/prev 走随机兜底 */ }
+    totalSongs = Number.isSafeInteger(data.total) && data.total >= 0 ? data.total : 0;
+  } catch (e) { /* 后台预热失败，下一次导航重新读取歌库 */ }
+}
+
+// 每次导航读取当前歌库，历史用路径重新定位，跳过已删除和已标记不推荐的歌曲。
+// 同一轮回退/前进复用分页；网络失败由调用者终止导航，不随机替换当前歌曲。
+function libraryForNavigation(stillCurrent) {
+  const pages = new Map();
+  let total = totalSongs;
+  const readPage = async page => {
+    if (!pages.has(page)) {
+      const data = await fetchSongsPage(page, 30);
+      if (!stillCurrent()) return [];
+      if (!Array.isArray(data.songs) || !Number.isSafeInteger(data.total) || data.total < 0) {
+        throw new Error('无效的歌库响应');
+      }
+      total = data.total;
+      totalSongs = total;
+      pages.set(page, data.songs);
+    }
+    return pages.get(page);
+  };
+  const resolve = async (entry, includeDisliked = false) => {
+    const key = songKey(entry);
+    if (!key) return null;
+    const hintedPage = Number.isSafeInteger(entry.id) && entry.id >= 0 && total > 0
+      ? Math.min(Math.floor(entry.id / 30) + 1, Math.ceil(total / 30)) : 1;
+    let rows = await readPage(hintedPage);
+    if (!stillCurrent()) return null;
+    let found = rows.find(row => songKey(row) === key);
+    for (let page = 1; !found && page <= Math.ceil(total / 30); page++) {
+      if (page === hintedPage) continue;
+      rows = await readPage(page);
+      if (!stillCurrent()) return null;
+      found = rows.find(row => songKey(row) === key);
+    }
+    return found && Number.isSafeInteger(found.id) && found.id >= 0 && found.id < total
+      && (includeDisliked || !dislikedSet.value.has(found.id)) ? found : null;
+  };
+  return { readPage, resolve, get total() { return total; } };
+}
+
+async function historySong(direction, library, stillCurrent) {
+  const isRecordedCurrent = songKey(currentSong.value) === songKey(playbackHistory[historyCursor]);
+  // 还未实际播放的选中歌曲，其上一首就是最后听过的歌曲。
+  const start = direction < 0 ? historyCursor - (isRecordedCurrent ? 1 : 0) : historyCursor + 1;
+  if (direction > 0 && !isRecordedCurrent) return null;
+  for (let index = start; index >= 0 && index < playbackHistory.length; index += direction) {
+    const song = await library.resolve(playbackHistory[index]);
+    if (!stillCurrent()) return null;
+    if (song && songKey(song) !== songKey(currentSong.value)) return { song, index };
+  }
+  return null;
 }
 
 // ===== 下一首 (根据循环模式) =====
@@ -619,66 +719,62 @@ async function next() {
     await playRandom();
     return;
   }
-  await ensureTotalSongs();
-  switch (playMode.value) {
-    case 0: // 单曲循环: 重播当前
-      if (audioEl) {
+  const stillCurrent = beginNavigation();
+  const library = libraryForNavigation(stillCurrent);
+  try {
+    const forward = await historySong(1, library, stillCurrent);
+    if (!stillCurrent()) return;
+    if (forward) {
+      await playSong(forward.song, {}, forward.index);
+      return;
+    }
+    switch (playMode.value) {
+      case 0: // 单曲循环: 重播当前
         seekTo(0);
-        resume();
-      }
-      break;
-    case 2: // 随机: 拉一首随机
-      await playRandom();
-      break;
-    case 1: // 列表循环: 下一首 (用 index+1, 超界回 0)
-    default:
-      await playNextSequential();
-      break;
+        await resume();
+        break;
+      case 2:
+        await playRandom();
+        break;
+      case 1:
+      default:
+        await playSequential(1, library, stillCurrent);
+        break;
+    }
+  } catch (e) {
+    if (stillCurrent()) console.warn('下一首读取失败:', e);
   }
 }
 
-// 列表循环: 顺序下一首
-async function playNextSequential() {
-  if (!currentSong.value || totalSongs === 0) {
-    await playRandom();
-    return;
-  }
-  const nextIdx = (currentSong.value.id + 1) % totalSongs;
-  // 复用 playSong, 需要歌曲对象; 这里用 fetchSongsPage 拿单首
-  try {
-    const { fetchSongsPage } = await import('../api.js');
-    const page = Math.floor(nextIdx / 30) + 1;
-    const data = await fetchSongsPage(page, 30);
-    const song = data.songs.find(s => s.id === nextIdx);
-    if (song) await playSong(song);
-    else await playRandom();
-  } catch (e) {
-    await playRandom();
+// 列表循环按当前歌库位置导航；第一次点歌尚无历史时上一首仍可顺序返回。
+async function playSequential(direction, library, stillCurrent) {
+  const resolved = await library.resolve(currentSong.value, true);
+  if (!stillCurrent() || !library.total) return;
+  const id = resolved?.id ?? (Number.isSafeInteger(currentSong.value.id) ? currentSong.value.id : -1);
+  for (let offset = 1; offset <= library.total; offset++) {
+    const nextIdx = ((id + direction * offset) % library.total + library.total) % library.total;
+    const rows = await library.readPage(Math.floor(nextIdx / 30) + 1);
+    if (!stillCurrent()) return;
+    const song = rows.find(row => row.id === nextIdx && songKey(row) && !dislikedSet.value.has(row.id));
+    if (song) {
+      await playSong(song);
+      return;
+    }
   }
 }
 
 // ===== 上一首 =====
 async function prev() {
-  if (!currentSong.value) {
-    await playRandom();
-    return;
-  }
-  await ensureTotalSongs();
-  // 简化: 随机模式下也随机, 列表模式下顺序上一首
-  if (playMode.value === 2 || totalSongs === 0) {
-    await playRandom();
-  } else {
-    const prevIdx = (currentSong.value.id - 1 + totalSongs) % totalSongs;
-    try {
-      const { fetchSongsPage } = await import('../api.js');
-      const page = Math.floor(prevIdx / 30) + 1;
-      const data = await fetchSongsPage(page, 30);
-      const song = data.songs.find(s => s.id === prevIdx);
-      if (song) await playSong(song);
-      else await playRandom();
-    } catch (e) {
-      await playRandom();
-    }
+  if (!currentSong.value) return;
+  const stillCurrent = beginNavigation();
+  try {
+    const library = libraryForNavigation(stillCurrent);
+    const previous = await historySong(-1, library, stillCurrent);
+    if (!stillCurrent()) return;
+    if (previous) await playSong(previous.song, {}, previous.index);
+    else if (playMode.value !== 2) await playSequential(-1, library, stillCurrent);
+  } catch (e) {
+    if (stillCurrent()) console.warn('上一首读取失败:', e);
   }
 }
 

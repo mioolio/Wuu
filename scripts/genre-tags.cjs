@@ -1,4 +1,4 @@
-// Offline integration: real RIFF genre tags -> scanner -> get-songs IPC payload.
+// Offline integration: real RIFF tags -> explicit full-metadata scanner.
 // Isolated fixtures and dependency stubs keep user music/configuration untouched.
 const assert = require('assert/strict');
 const fs = require('fs');
@@ -83,7 +83,7 @@ function addSong(folder, genres, corrupt = false) {
   assert.equal(syncSongs.length, 9, 'encrypted unresolved audio remains excluded');
 
   const started = performance.now();
-  const first = await handlers.get('get-songs')();
+  const first = await scanner.scanMusicFilesWithGenres(library);
   report.firstScanMs = Math.round(performance.now() - started);
   report.firstParseCount = parses;
   assert.deepEqual(first.find(song => song.audioPath === tagged).genre, ['Jazz', 'Ambient']);
@@ -92,7 +92,7 @@ function addSong(folder, genres, corrupt = false) {
   assert.equal(first.find(song => song.audioPath === tagged).realDuration, 180, 'old duration data does not suppress reading genre tags');
   assert.deepEqual(fs.readFileSync(tagged), beforeBytes, 'scanning never rewrites the media');
   assert.ok(report.maxConcurrentParses <= 4 && report.maxConcurrentParses > 1);
-  report.checks.push('get-songs returns real embedded genres for old library entries', 'untagged/corrupt media remains usable with genre []', 'metadata parsing uses at most four concurrent reads and skips covers', 'scan does not alter audio bytes');
+  report.checks.push('the explicit full-metadata scan returns real embedded genres for old library entries', 'untagged/corrupt media remains usable with genre []', 'metadata parsing uses at most four concurrent reads and skips covers', 'scan does not alter audio bytes');
 
   const beforeCache = parses;
   const cached = await scanner.scanMusicFilesWithGenres(library);

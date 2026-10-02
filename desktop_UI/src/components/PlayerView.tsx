@@ -24,8 +24,8 @@ export default function PlayerView() {
   const title = preview?.name || song?.songName || '';
   const artist = preview?.artist || song?.artist || '';
   const credits = lyricCredits(lyricText);
-  const lyricist = song?.lyricist || credits.lyricist;
-  const composer = song?.composer || credits.composer;
+  const lyricist = (typeof song?.lyricist === 'string' ? song.lyricist.trim() : '') || credits.lyricist;
+  const composer = (typeof song?.composer === 'string' ? song.composer.trim() : '') || credits.composer;
   useLayoutEffect(() => {
     const layout = stage.current;
     const group = artwork.current;
@@ -71,7 +71,14 @@ export default function PlayerView() {
   };
   const songActions = song ? <SongActions key={`actions:${song.audioPath}`} song={song} /> : preview?.onSave ? <div className="toolbar player-actions" role="group" aria-label="当前歌曲操作"><button className="button primary" disabled={saving} onClick={() => void savePreview()}><Icon name="import" size={17} />{saving ? '正在保存…' : '保存到歌库'}</button></div> : null;
   const songInfo = <div className="record-info" key={`info:${preview?.url || song?.audioPath}`}>
-    <h1 title={title}>{title}</h1><p title={artist || '未知歌手'}>{artist || '未知歌手'}</p>
+    <h1 title={title}>{title}</h1>
+    {(lyricist || composer) && <div className="record-credits" aria-label="词曲信息">
+      {lyricist && lyricist === composer ? <span title={`作词 / 作曲 ${lyricist}`}>作词 / 作曲 {lyricist}</span> : <>
+        {lyricist && <span title={`作词 ${lyricist}`}>作词 {lyricist}</span>}
+        {composer && <span title={`作曲 ${composer}`}>作曲 {composer}</span>}
+      </>}
+    </div>}
+    <p title={artist || '未知歌手'}>{artist || '未知歌手'}</p>
     <div className="record-details">
       {song?.album && <span className="record-album" title={song.album}>{song.album}</span>}
       {song?.realDuration ? <span className="record-duration" aria-label={`歌曲时长 ${formatTime(song.realDuration)}`}>{formatTime(song.realDuration)}</span> : preview ? <span className="record-duration">{preview.source || '在线'} 试听</span> : null}
@@ -83,7 +90,7 @@ export default function PlayerView() {
     {error && <div className="status-error" role="status">{error}</div>}
     <div className="player-stage" ref={stage}>
       {video ? <div className="video-stage"><div className="video-mount" ref={mount} /><button className="button video-fullscreen" onClick={() => { void mount.current?.requestFullscreen().catch(error => notify(errorMessage(error), 'error')); }}><Icon name="maximize" size={16} />全屏</button></div> : <div className="player-artwork" ref={artwork}><RecordArtwork path={preview?.cover || song?.coverPath} disc={discCover} playing={playing} />{songInfo}{songActions}</div>}
-      {!video && <div className="player-lyrics-column"><LyricsView />{(lyricist || composer) && <footer className="player-credits muted" aria-label="词曲信息">{lyricist && <span>作词 {lyricist}</span>}{composer && <span>作曲 {composer}</span>}</footer>}</div>}
+      {!video && <div className="player-lyrics-column"><LyricsView /></div>}
     </div>
     {video && <div className="video-record-info">{songInfo}{songActions}</div>}
   </section>;

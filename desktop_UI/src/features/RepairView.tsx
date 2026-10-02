@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from 'react';
 import { errorMessage, getBridge, mediaUrl } from '../api';
-import { scheduleSave, useAppStore } from '../store';
+import { applyUserDataChange, scheduleSave, useAppStore } from '../store';
 import { playerService } from '../services/player';
 import { confirmAction, notify, promptText } from '../ui';
 import { canonicalRepairPath, remapRepairData, repairedAudioPath, sameRepairPath } from './repair-data';
@@ -66,7 +66,7 @@ export default function RepairView() {
         await useAppStore.getState().reloadSongs();
         const newPath = repairedAudioPath(useAppStore.getState().songs, result.data);
         if (newPath && newPath !== oldPath) {
-          useAppStore.setState(state => remapRepairData(state, oldPath, newPath));
+          applyUserDataChange(state => remapRepairData(state, oldPath, newPath));
           playerService.remapSongPath(oldPath, newPath);
           scheduleSave();
         } else if (!newPath) message = '文件已修复，未能确认新歌曲路径；请重新扫描曲库。';

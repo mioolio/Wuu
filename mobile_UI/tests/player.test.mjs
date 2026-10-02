@@ -65,6 +65,14 @@ async function fixture(t, route = () => undefined) {
   return { player, audio, requests };
 }
 const song = id => ({ id, songName: `歌曲 ${id}`, audioPath: `/fixture/${id}.wav` });
+const libraryResponse = (url, songs) => {
+  if (!url.startsWith('/api/songs?')) return undefined;
+  const params = new URL(url, 'http://fixture').searchParams;
+  const page = Number(params.get('page'));
+  const size = Number(params.get('pageSize'));
+  assert.ok(Number.isInteger(page) && page > 0, '分页必须在有效范围内');
+  return response({ ok: true, total: songs.length, songs: songs.slice((page - 1) * size, page * size) });
+};
 
 test('首次同步在元数据前提供桌面进度，元数据到达后真正seek且不自动播放', async t => {
   const { player, audio, requests } = await fixture(t, url => url === '/api/state'
@@ -86,6 +94,23 @@ test('首次同步在元数据前提供桌面进度，元数据到达后真正se
   await player.resume();
   assert.equal(player.isPlaying.value, true);
   assert.equal(requests.filter(([url]) => url === '/api/play-count').length, 1, '首次真正播放才计数');
+});
+
+test('桌面同步保留歌曲词曲署名，再同步无署名歌曲时不会沿用旧作者', async t => {
+  let songInfo = { ...song(0), lyricist: '真实作词', composer: '真实作曲' };
+  const { player, audio } = await fixture(t, url => url === '/api/state'
+    ? response({ ok: true, state: { index: songInfo.id, songInfo, currentTime: 35, duration: 90 } }) : undefined);
+  await player.syncFromDesktop();
+  assert.equal(player.currentSong.value.lyricist, '真实作词');
+  assert.equal(player.currentSong.value.composer, '真实作曲');
+  songInfo = song(1);
+  player.stopDesktopSync();
+  player.init(audio);
+  await player.syncFromDesktop();
+  assert.equal(player.currentSong.value.id, 1);
+  assert.equal(player.currentSong.value.lyricist, '');
+  assert.equal(player.currentSong.value.composer, '');
+  assert.equal(audio.playCalls.length, 0, 'reading credits during desktop sync must not start playback');
 });
 
 test('连续切歌丢弃旧歌词和旧进度响应', async t => {
@@ -243,4 +268,242 @@ test('暂停和seek调用系统媒体进度API而不是写无效属性', async t
   player.pause();
   assert.deepEqual(positions.at(-1), { duration: 90, playbackRate: 1, position: 36 });
   assert.equal(player.currentTime.value, 36);
+});
+
+test('随机上一首返回真实听过的歌，回退后下一首沿历史前进而不重新抽歌', async t => {
+  const songs = Array.from({ length: 3 }, (_, id) => song(id));
+  const random = [songs[2], songs[1]];
+  const { player, audio, requests } = await fixture(t, url => url === '/api/random'
+    ? response({ ok: true, total: songs.length, song: random.shift() }) : libraryResponse(url, songs));
+  player.setPlayMode(2);
+  await player.playSong(songs[0]);
+  await player.next();
+  await player.next();
+  assert.equal(player.currentSong.value.id, 1);
+  await player.prev();
+  assert.equal(player.currentSong.value.id, 2);
+  await player.prev();
+  assert.equal(player.currentSong.value.id, 0);
+  audio.metadata();
+  player.seekTo(17);
+  await player.prev();
+  assert.equal(player.currentSong.value.id, 0, '历史开头不凭空抽取另一首');
+  assert.equal(audio.currentTime, 17);
+  await player.next();
+  assert.equal(player.currentSong.value.id, 2);
+  await player.next();
+  assert.equal(player.currentSong.value.id, 1);
+  assert.equal(requests.filter(([url]) => url === '/api/random').length, 2);
+});
+
+test('切换模式和点歌保留实际历史，回退后的新选择切断旧前进分支', async t => {
+  const songs = Array.from({ length: 5 }, (_, id) => song(id));
+  const { player } = await fixture(t, url => libraryResponse(url, songs));
+  await player.playSong(songs[0]);
+  await player.playSong(songs[2]);
+  await player.playSong(songs[1]);
+  player.setPlayMode(2);
+  await player.prev();
+  assert.equal(player.currentSong.value.id, 2);
+  await player.playSong(songs[3]);
+  player.setPlayMode(0);
+  await player.prev();
+  assert.equal(player.currentSong.value.id, 2);
+  await player.next();
+  assert.equal(player.currentSong.value.id, 3, '单曲模式也能返回刚才的前进历史');
+  player.setPlayMode(1);
+  await player.next();
+  assert.equal(player.currentSong.value.id, 4, '旧分支中的歌曲1不能再次冒出来');
+});
+
+test('首次列表点歌仍可顺序上一首，随后优先回到真实历史', async t => {
+  const songs = Array.from({ length: 4 }, (_, id) => song(id));
+  const { player } = await fixture(t, url => libraryResponse(url, songs));
+  await player.playSong(songs[2]);
+  await player.prev();
+  assert.equal(player.currentSong.value.id, 1);
+  // 回退后直接点选第一首，切断前进分支，但仍保留过去实际听过的歌曲。
+  await player.playSong(songs[0]);
+  await player.prev();
+  assert.equal(player.currentSong.value.id, 1, '有真实历史时优先回到听过的歌曲');
+  await player.prev();
+  assert.equal(player.currentSong.value.id, 2);
+});
+
+test('列表首次播放第一首时，上一首循环到歌库末首', async t => {
+  const songs = Array.from({ length: 4 }, (_, id) => song(id));
+  const { player } = await fixture(t, url => libraryResponse(url, songs));
+  await player.playSong(songs[0]);
+  await player.prev();
+  assert.equal(player.currentSong.value.id, 3);
+  await player.next();
+  assert.equal(player.currentSong.value.id, 0);
+});
+
+test('首次暂停或单曲模式的上一首仍顺序导航，首项向前循环并跳过不推荐', async t => {
+  const songs = Array.from({ length: 4 }, (_, id) => song(id));
+  const { player } = await fixture(t, url => url === '/api/disliked'
+    ? response({ ok: true, dislikedIndices: [3] }) : libraryResponse(url, songs));
+  player.setPlayMode(0);
+  await player.playSong(songs[0], { autoplay: false, notify: false });
+  await player.prev();
+  assert.equal(player.currentSong.value.id, 2, '首项向前循环，跳过不推荐的末项3');
+  assert.equal(player.isPlaying.value, true);
+});
+
+test('历史按路径重新定位，跳过已删除与不推荐项，前进也使用新的歌库index', async t => {
+  let songs = Array.from({ length: 4 }, (_, id) => song(id));
+  let disliked = [];
+  const { player } = await fixture(t, url => url === '/api/disliked'
+    ? response({ ok: true, dislikedIndices: disliked }) : libraryResponse(url, songs));
+  for (const item of songs) await player.playSong(item);
+  songs = [songs[0], { ...songs[2], id: 1 }, { ...songs[3], id: 2 }];
+  disliked = [1];
+  await player.refreshDislikedSet();
+  await player.prev();
+  assert.equal(player.currentSong.value.audioPath, '/fixture/0.wav');
+  await player.next();
+  assert.equal(player.currentSong.value.audioPath, '/fixture/3.wav');
+  assert.equal(player.currentSong.value.id, 2);
+});
+
+test('删除导致历史歌曲跨分页移动时，不能把同index的另一首误当作上一首', async t => {
+  let songs = Array.from({ length: 61 }, (_, id) => song(id));
+  const { player, requests } = await fixture(t, url => libraryResponse(url, songs));
+  await player.playSong(songs[30]);
+  await player.playSong(songs[60]);
+  songs = songs.slice(1).map((item, id) => ({ ...item, id }));
+  const before = requests.length;
+  await player.prev();
+  assert.equal(player.currentSong.value.audioPath, '/fixture/30.wav');
+  assert.equal(player.currentSong.value.id, 29);
+  const pages = requests.slice(before).filter(([url]) => url.includes('pageSize=30')).map(([url]) => new URL(url, 'http://fixture').searchParams.get('page'));
+  assert.deepEqual(pages, ['2', '1']);
+});
+
+test('无有效历史或空歌库不改变当前音频，也不会改成随机播放', async t => {
+  let songs = [song(0), song(1)];
+  const { player, audio, requests } = await fixture(t, url => libraryResponse(url, songs));
+  await player.playSong(songs[0]);
+  await player.playSong(songs[1]);
+  audio.metadata();
+  player.seekTo(23);
+  const source = audio.source;
+  songs = [];
+  await player.prev();
+  await player.next();
+  await player.playSong({ id: -1 });
+  await player.playSong({ id: NaN });
+  assert.equal(player.currentSong.value.id, 1);
+  assert.equal(audio.source, source);
+  assert.equal(audio.currentTime, 23);
+  assert.equal(player.isPlaying.value, true);
+  assert.equal(requests.filter(([url]) => url === '/api/random').length, 0);
+});
+
+test('上一首读取失败保留当前歌与进度，重试仍返回同一真实历史项', async t => {
+  const songs = [song(0), song(1), song(2)];
+  let fail = false;
+  const { player, audio, requests } = await fixture(t, url => {
+    if (fail && url.includes('pageSize=30')) return Promise.reject(new Error('offline'));
+    return libraryResponse(url, songs);
+  });
+  for (const item of songs) await player.playSong(item);
+  audio.metadata();
+  player.seekTo(28);
+  const source = audio.source;
+  fail = true;
+  await player.prev();
+  assert.equal(player.currentSong.value.id, 2);
+  assert.equal(audio.source, source);
+  assert.equal(audio.currentTime, 28);
+  assert.equal(player.isPlaying.value, true);
+  fail = false;
+  await player.prev();
+  assert.equal(player.currentSong.value.id, 1);
+  assert.equal(requests.filter(([url]) => url === '/api/random').length, 0);
+});
+
+test('旧上一首请求晚到不能覆盖新的手动点歌或改写新历史', async t => {
+  const songs = Array.from({ length: 4 }, (_, id) => song(id));
+  const pending = deferred();
+  let delay = false;
+  const { player } = await fixture(t, url => delay && url.includes('pageSize=30') ? pending.promise : libraryResponse(url, songs));
+  for (const item of songs.slice(0, 3)) await player.playSong(item);
+  delay = true;
+  const previous = player.prev();
+  await flush();
+  await player.playSong(songs[3]);
+  delay = false;
+  pending.resolve(response({ ok: true, total: songs.length, songs }));
+  await previous;
+  assert.equal(player.currentSong.value.id, 3);
+  await player.prev();
+  assert.equal(player.currentSong.value.id, 2);
+  await player.next();
+  assert.equal(player.currentSong.value.id, 3);
+});
+
+test('旧随机请求晚到不能覆盖手动选择或插入其历史', async t => {
+  const songs = [song(0), song(1), song(2)];
+  const pending = deferred();
+  const { player } = await fixture(t, url => url === '/api/random' ? pending.promise : libraryResponse(url, songs));
+  await player.playSong(songs[0]);
+  const random = player.playRandom();
+  await player.playSong(songs[2]);
+  pending.resolve(response({ ok: true, total: songs.length, song: songs[1] }));
+  await random;
+  assert.equal(player.currentSong.value.id, 2);
+  await player.prev();
+  assert.equal(player.currentSong.value.id, 0);
+  await player.next();
+  assert.equal(player.currentSong.value.id, 2);
+});
+
+test('暂停同步不入听歌历史，恢复成功和远端实际播放才记录且暂停恢复不重复', async t => {
+  const songs = [song(0), song(1), song(2)];
+  const { player } = await fixture(t, url => libraryResponse(url, songs));
+  player.setPlayMode(2);
+  await player.playSong(songs[0], { autoplay: false, notify: false });
+  await player.playSong(songs[1]);
+  await player.prev();
+  assert.equal(player.currentSong.value.id, 1, '未听过的同步歌曲0不是上一首');
+  await player.playSong(songs[2], { autoplay: false, notify: false });
+  await player.prev();
+  assert.equal(player.currentSong.value.id, 1, '未播放的新选中歌曲可以返回最近真正听过的歌');
+  await player.playSong(songs[2], { autoplay: false, notify: false });
+  await player.resume();
+  player.pause();
+  await player.resume();
+  await player.prev();
+  assert.equal(player.currentSong.value.id, 1);
+  await player.next();
+  assert.equal(player.currentSong.value.id, 2);
+  player.setRemoteApplying(true);
+  await player.playSong(songs[0], { notify: false, restoreProgress: false });
+  player.setRemoteApplying(false);
+  await player.prev();
+  assert.equal(player.currentSong.value.id, 2, '远端实际播放也遵循本机的真实听歌顺序');
+});
+
+test('play事件后解码失败的promise也不会被写入成功听歌历史', async t => {
+  const songs = [song(0), song(1), song(2)];
+  const { player, audio } = await fixture(t, url => libraryResponse(url, songs));
+  await player.playSong(songs[0]);
+  const originalPlay = audio.play;
+  audio.play = async function () {
+    // 原生 play 只表示 paused 已解除，音源不可用时仍可能随后拒绝 Promise。
+    this.paused = false;
+    this.dispatchEvent(new Event('play'));
+    this.paused = true;
+    throw new Error('no playable source');
+  };
+  await player.playSong(songs[1]);
+  assert.equal(player.isPlaying.value, false);
+  audio.play = originalPlay;
+  await player.playSong(songs[2]);
+  await player.prev();
+  assert.equal(player.currentSong.value.id, 0);
+  await player.next();
+  assert.equal(player.currentSong.value.id, 2);
 });

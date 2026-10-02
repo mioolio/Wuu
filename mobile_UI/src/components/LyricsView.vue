@@ -3,7 +3,7 @@
 <script setup>
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue';
 import { usePlayer } from '../composables/usePlayer.js';
-import { parseLyrics, lyricCredits, readLyricTime, activeLyricIndex, isCurrentLyric, lyricCharProgress, lyricLineProgress } from '../services/lyrics.js';
+import { parseLyrics, readLyricTime, activeLyricIndex, isCurrentLyric, lyricCharProgress, lyricLineProgress } from '../services/lyrics.js';
 import { useLyricPreferences } from '../composables/useLyricPreferences.js';
 
 const { lyricText, currentTime, duration, isPlaying, seek, seekTo, getAudioEl } = usePlayer();
@@ -15,7 +15,6 @@ const frameTime = ref(0);
 const { lyricSize, currentLyricSize } = useLyricPreferences();
 const emit = defineEmits(['swipe-left']);
 const showEmpty = computed(() => !lines.value.length);
-const credits = computed(() => lyricCredits(lyricText.value));
 let mounted = false;
 let disposed = false;
 let viewVisible = true;
@@ -243,10 +242,6 @@ function onTouchCancel() { touchActive = false; touchMoved = false; }
       </div>
     </div>
   </div>
-  <footer v-if="credits.lyricist || credits.composer" class="lyric-credits" aria-label="词曲信息">
-    <span v-if="credits.lyricist">作词 {{ credits.lyricist }}</span>
-    <span v-if="credits.composer">作曲 {{ credits.composer }}</span>
-  </footer>
   </section>
 </template>
 
@@ -271,8 +266,6 @@ function onTouchCancel() { touchActive = false; touchMoved = false; }
   position: relative;
 }
 .lyrics-view:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.lyric-credits { flex: 0 0 auto; display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 16px; padding: 6px 22px 10px; color: var(--text-secondary); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
-.lyric-credits span { min-width: 0; }
 
 .empty {
   display: flex;

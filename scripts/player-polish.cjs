@@ -235,6 +235,9 @@ async function reviewCoverLifecycle() {
       const measured = await page.evaluate(() => {
         const rect = selector => document.querySelector(selector).getBoundingClientRect();
         const sleeve = rect('.record-sleeve'), title = rect('.record-info'), panel = rect('.lyrics-panel'), actions = rect('.player-actions'), bar = rect('.player-bar');
+        const credit=document.querySelector('.record-info .record-credits'),creditBox=credit.getBoundingClientRect(),heading=credit.previousElementSibling,artist=credit.nextElementSibling;
+        const credits={text:credit.textContent,entries:credit.children.length,immediatelyBelowTitle:heading.matches('h1')&&creditBox.top>=heading.getBoundingClientRect().bottom-1,
+          artistAfter:artist.matches('p')&&artist.getBoundingClientRect().top>=creditBox.bottom-1,position:getComputedStyle(credit).position,bottom:creditBox.bottom};
         const lines = [...document.querySelectorAll('.lyric-line')].filter(line => line.textContent.length < 15).map(line => {
           const text = line.querySelector('.lyric-track').getBoundingClientRect();
           const row = line.getBoundingClientRect();
@@ -243,12 +246,16 @@ async function reviewCoverLifecycle() {
         const overflow = ['html', '.app-shell', '.player-page', '.player-stage'].filter(selector => {
           const node = document.querySelector(selector); return node && node.scrollWidth > node.clientWidth + 2;
         });
-        return {width:innerWidth, height:innerHeight, titleBelow:title.top >= sleeve.bottom - 2, titleCenter:Math.abs(title.x + title.width / 2 - sleeve.x - sleeve.width / 2), titleBottom:title.bottom, actionsBottom:actions.bottom, barTop:bar.top, panelWidth:panel.width, lines, overflow};
+        return {width:innerWidth, height:innerHeight, titleBelow:title.top >= sleeve.bottom - 2, titleCenter:Math.abs(title.x + title.width / 2 - sleeve.x - sleeve.width / 2), titleBottom:title.bottom, actionsTop:actions.top, actionsBottom:actions.bottom, barTop:bar.top, panelWidth:panel.width, lines, overflow,credits,
+          lyricCreditCount:document.querySelectorAll('.player-lyrics-column [aria-label="词曲信息"],.player-lyrics-column footer,.lyrics-panel .record-credits,.lyrics-panel .player-credits').length};
       });
       report.measurements.push({label, ...measured});
       assert.equal(measured.titleBelow, true, 'Track metadata belongs beneath the record');
       assert.ok(measured.titleCenter <= 3, 'Track metadata is centered under the record');
       assert.ok(measured.titleBottom <= measured.barTop - 4 && measured.actionsBottom <= measured.barTop - 4, 'Track metadata and actions keep clearance above the playback bar');
+      assert.ok(measured.credits.immediatelyBelowTitle&&measured.credits.artistAfter&&measured.credits.bottom<=measured.actionsTop,'Song credits belong directly below the title and preserve playback actions');
+      assert.equal(measured.credits.text,'作词 / 作曲 Wuu 测试');assert.equal(measured.credits.entries,1,'The real shared fixture author is displayed once');
+      assert.ok(!['fixed','absolute'].includes(measured.credits.position));assert.equal(measured.lyricCreditCount,0,'The lyric column contains no credit footer');
       assert.ok(measured.lines.length >= 3, 'The fixture includes multiple different short lyric lengths');
       assert.deepEqual(measured.lines.filter(line => line.align !== 'center' || line.offset > 3), [], 'Every short lyric text shares the row center');
       assert.deepEqual(measured.overflow, [], 'The listening page must not overflow horizontally');
@@ -296,7 +303,7 @@ async function reviewCoverLifecycle() {
     }
     await resize(1100,720);
     await screenshot('desktop-rose', desktop);
-    report.checks.push('short and medium lyric lines centered', 'track metadata beneath artwork', '800x500 and 1100x720 without horizontal overflow');
+    report.checks.push('short and medium lyric lines centered', 'track metadata beneath artwork with genuine credits directly below the song title', 'pure lyric column without a credit footer', '800x500 and 1100x720 without horizontal overflow');
 
     // A click while paused must seek to the requested line and immediately use that line's center.
     await page.locator('.lyric-line').filter({hasText:'这一刻让时间停留'}).click();

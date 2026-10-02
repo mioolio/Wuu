@@ -12,6 +12,7 @@ import HomeView from './features/HomeView';
 import { usePageMotion } from './components/usePageMotion';
 import PageScrollRail from './components/PageScrollRail';
 import Sidebar from './components/Sidebar';
+import { playerService } from './services/player';
 
 const ImportView = lazy(() => import('./features/ImportView'));
 const FreeMusicView = lazy(() => import('./features/FreeMusicView'));
@@ -31,10 +32,20 @@ export default function App() {
   const themeFollow = useAppStore(state => state.settings.themeFollowCover);
   const [visited,setVisited] = useState(new Set<View>([view]));
   const [maximized,setMaximized] = useState(false);
+  const [showStartup,setShowStartup] = useState(false);
   const mainContent = useRef<HTMLElement>(null);
   usePageMotion(view, loading);
   useEffect(() => { setVisited(previous => previous.has(view) ? previous : new Set([...previous,view])); }, [view]);
   useEffect(() => subscribe('windowAPI','onWindowState',setMaximized), []);
+  useEffect(() => {
+    if (!loading) { setShowStartup(false); return; }
+    // Only delay the notice: pages and playback remain available immediately.
+    const timer = setTimeout(() => setShowStartup(true), 500);
+    return () => clearTimeout(timer);
+  }, [loading]);
+  const retryStartup = () => {
+    void useAppStore.getState().initialize().then(() => playerService.initialize()).catch(error => notify(errorMessage(error), 'error'));
+  };
   const control = (method: string) => { void Promise.resolve(getBridge('windowAPI')[method]()).then(value => { if (method === 'toggleMaximize') setMaximized(value === true); }).catch(error => notify(errorMessage(error),'error')); };
   return <div className={`app-shell interface-modern ${view === 'player' ? 'listening-view' : ''} ${themeFollow ? 'cover-theme' : ''}`} style={{ '--glass-opacity':opacity,'--color-intensity':intensity } as React.CSSProperties}>
     <a className="skip-link" href="#main-content">跳到主要内容</a>
@@ -44,12 +55,16 @@ export default function App() {
       <div className="titlebar-spacer" />
       <div className="window-controls"><button aria-label="最小化" onClick={() => control('minimize')}><Icon name="minimize" size={16} /></button><button aria-label={maximized ? '还原窗口' : '最大化'} onClick={() => control('toggleMaximize')}><Icon name="maximize" size={15} /></button><button className="window-close" aria-label="关闭窗口" onClick={() => control('close')}><Icon name="close" size={16} /></button></div>
     </header>
+    {(error || (showStartup && loading)) && <div className="library-startup-status" role={error ? 'alert' : 'status'}>
+      <span>{error ? `读取未完成：${error}` : '正在读取歌库，已载入的歌曲可以先播放。'}</span>
+      {error && <button type="button" onClick={retryStartup}>重试</button>}
+    </div>}
     <div className="workspace"><Sidebar />
-      <main ref={mainContent} className="main-content" id="main-content" tabIndex={-1}>{loading ? <div className="empty loading-state"><span className="loading-disc" /><h2>正在整理你的音乐</h2><p>片刻之后，开始聆听。</p></div> : error ? <div className="empty"><h2>加载失败</h2><p>{error}</p><button onClick={() => location.reload()}>重试</button></div> : <>
+      <main ref={mainContent} className="main-content" id="main-content" tabIndex={-1}>
         <div className="page-host" data-page="library" hidden={!['list','liked'].includes(view)}><LibraryView /></div>
         {Object.entries(pages).filter(([key]) => key === 'home' || key === 'player' || visited.has(key as View) || key === view).map(([key,Page]) => <div className="page-host" data-page={key} hidden={key !== view} key={key}><Suspense fallback={<div className="empty">正在加载…</div>}><Page /></Suspense></div>)}
-      </>}</main>
-      <PageScrollRail content={mainContent} view={view} loading={loading || !!error} />
+      </main>
+      <PageScrollRail content={mainContent} view={view} loading={false} />
     </div>
     <PlayerBar /><GlobalUI />
   </div>;

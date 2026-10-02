@@ -237,11 +237,13 @@ async function setInput(locator,value) {
       const words=[...line.querySelectorAll('.lyric-word')].map(word=>{const rect=word.getBoundingClientRect();return {text:word.textContent,left:rect.left,right:rect.right,top:rect.top,bottom:rect.bottom};});
       const row=line.getBoundingClientRect();
       return {width:innerWidth,height:innerHeight,pageOverflow:document.documentElement.scrollWidth>innerWidth+1,panel:{left:box.left,right:box.right,top:box.top,bottom:box.bottom},
+        lyricCreditCount:panel.closest('.player-lyrics-column').querySelectorAll('[aria-label="词曲信息"],.record-credits,.player-credits,footer').length,
         viewport:{left:viewport.left,right:viewport.right,top:viewport.top,bottom:viewport.bottom},scrollHeight:scroll.clientHeight,contentHeight:scroll.scrollHeight,
         line:{text:line.textContent,width:row.width,height:row.height,clientWidth:line.clientWidth,scrollWidth:line.scrollWidth,marquee:line.dataset.marquee},
         track:{whiteSpace:css.whiteSpace,transform:css.transform,textOverflow:css.textOverflow},words};
     });report.layouts.push(layout);
     assert.equal(layout.pageOverflow,false);assert.ok(layout.scrollHeight>=70,'The max-font small window keeps a usable lyric viewport');
+    assert.equal(layout.lyricCreditCount,0,'Even the maximum-font lyric column contains only lyrics, with no credit footer');
     assert.equal(layout.line.text,await app.evaluate(()=>global.__wuuSmoke.polish.lines.find(([time])=>time===22)[1]),'The full long fixture text remains in the rendered line');
     assert.ok(layout.words.length>60&&new Set(layout.words.map(word=>Math.round(word.top))).size>=3,'The long current lyric genuinely wraps across multiple lines');
     assert.ok(layout.track.whiteSpace!=='nowrap'&&layout.track.transform==='none'&&layout.track.textOverflow!=='ellipsis'&&!layout.line.marquee,'Full lyrics use wrapping without horizontal marquee or truncation');
@@ -458,8 +460,21 @@ async function setInput(locator,value) {
     report.songActions.push({label:'dislike-continuity',timeBefore,timeAfter,songPath:currentSong.audioPath});await capture('song-actions-final-800x500');
     report.checks.push('dislike and undo persist the actual marker; the local home song list/queue skip the song while ongoing playback keeps its track and advances');
 
-    const footer=await page.locator('.player-credits').evaluate(element=>({inLyricsColumn:!!element.closest('.player-lyrics-column'),inArtwork:!!element.closest('.player-artwork'),text:element.textContent}));
-    report.songActions.push({label:'credits-footer',...footer});assert.ok(footer.inLyricsColumn&&!footer.inArtwork&&footer.text.includes('作词')&&footer.text.includes('作曲'),'Only real lyricist/composer credits sit below the lyrics column');
+    const credit=await page.locator('.record-info .record-credits').evaluate(element=>{
+      const title=element.previousElementSibling,artist=element.nextElementSibling,box=element.getBoundingClientRect(),titleBox=title.getBoundingClientRect(),artistBox=artist.getBoundingClientRect();
+      const actions=document.querySelector('.player-actions').getBoundingClientRect(),bar=document.querySelector('.player-bar').getBoundingClientRect();
+      return {inInfo:!!element.closest('.record-info'),inLyrics:!!element.closest('.player-lyrics-column'),text:element.textContent,entries:[...element.children].map(entry=>entry.textContent),
+        titleImmediatelyBefore:title.matches('h1'),artistImmediatelyAfter:artist.matches('p'),belowTitle:box.top>=titleBox.bottom-1,beforeArtist:box.bottom<=artistBox.top+1,
+        position:getComputedStyle(element).position,creditBottom:box.bottom,actionsTop:actions.top,actionsBottom:actions.bottom,barTop:bar.top};
+    });
+    report.songActions.push({label:'credits-below-song-title',...credit});
+    assert.ok(credit.inInfo&&!credit.inLyrics&&credit.titleImmediatelyBefore&&credit.artistImmediatelyAfter&&credit.belowTitle&&credit.beforeArtist,'Genuine credits sit immediately below the song title before the artist');
+    assert.equal(credit.text,'作词 / 作曲 Wuu 测试','Only the real fixture author appears, with equal lyricist/composer values combined once');
+    assert.equal(credit.entries.length,1);assert.ok(!['fixed','absolute'].includes(credit.position));
+    assert.ok(credit.creditBottom<=credit.actionsTop&&credit.actionsBottom<=credit.barTop-4,'Song credits keep controls clear at 800×500');
+    assert.equal(await page.locator('.record-credits').count(),1);
+    assert.equal(await page.locator('.player-lyrics-column [aria-label="词曲信息"],.player-lyrics-column footer,.lyrics-panel .record-credits,.lyrics-panel .player-credits').count(),0,'No credits remain inside or below the lyric column');
+    report.checks.push('genuine lyricist/composer credits appear once directly below the song title, retain control clearance, and never occupy the lyric column');
     assert.deepEqual(report.errors,[]);assert.deepEqual(report.duplicateKeys,[]);assert.deepEqual(report.focusFailures,[],'Every popover transition and dismissal preserves or restores focus');report.ok=true;
   } catch(error) {
     report.error=error.stack||String(error);process.exitCode=1;

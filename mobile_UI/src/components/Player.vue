@@ -4,12 +4,14 @@
 import { ref, computed, watch } from 'vue';
 import { usePlayer } from '../composables/usePlayer.js';
 import { coverUrl, coverByPath } from '../api.js';
+import { lyricCredits } from '../services/lyrics.js';
 import CollectionPicker from './CollectionPicker.vue';
 
 const emit = defineEmits(['swipe-right']);
 
 const {
   currentSong,
+  lyricText,
   isPlaying,
   currentTime,
   duration,
@@ -27,6 +29,19 @@ const {
   refreshLikedSet,
   handleToggleDislike,
 } = usePlayer();
+
+const creditRows = computed(() => {
+  if (!currentSong.value) return [];
+  const fallback = lyricCredits(lyricText.value);
+  const namedCredit = value => typeof value === 'string' ? value.trim() : '';
+  const lyricist = namedCredit(currentSong.value.lyricist) || fallback.lyricist;
+  const composer = namedCredit(currentSong.value.composer) || fallback.composer;
+  if (lyricist && lyricist === composer) return [{ label: '作词 / 作曲', name: lyricist }];
+  return [
+    ...(lyricist ? [{ label: '作词', name: lyricist }] : []),
+    ...(composer ? [{ label: '作曲', name: composer }] : []),
+  ];
+});
 
 // 播放模式选项 (与 usePlayer 中 playMode 0/1/2 对应)
 const MODE_NAMES = ['单曲循环', '列表循环', '随机播放'];
@@ -162,7 +177,10 @@ function onProgressUp() {
 
     <!-- 歌曲信息 -->
     <div class="song-info">
-      <div class="song-name">{{ currentSong?.songName || '未在播放' }}</div>
+      <h2 class="song-name">{{ currentSong?.songName || '未在播放' }}</h2>
+      <div v-if="creditRows.length" class="player-credits" aria-label="词曲信息">
+        <span v-for="credit in creditRows" :key="credit.label">{{ credit.label }} {{ credit.name }}</span>
+      </div>
       <div class="song-artist">{{ currentSong?.artist || '' }}</div>
     </div>
 
@@ -343,6 +361,8 @@ function onProgressUp() {
 
 /* 歌曲信息 */
 .song-info {
+  width: 100%;
+  min-width: 0;
   text-align: center;
   margin-top: 20px;
   flex-shrink: 0;
@@ -351,7 +371,22 @@ function onProgressUp() {
   font-size: 20px;
   font-weight: 600;
   color: var(--text);
+  margin: 0 0 6px;
+  overflow-wrap: anywhere;
+}
+.player-credits {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px 16px;
   margin-bottom: 6px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+.player-credits span {
+  min-width: 0;
 }
 .song-artist {
   font-size: 14px;

@@ -67,6 +67,8 @@ async function touchGesture(locator, direction) {
       const fixture = global.__wuuMobileFixture;
       fixture.requests.length = 0;
       fixture.lyrics[0] = '[作词:真实署名作者][作曲:真实署名作曲]\n[00:02.00]编曲:制作署名\n[00:03.00]混音:混音署名\n' + fixture.lyrics[0];
+      fixture.state.songInfo.lyricist = '  歌曲署名作者  ';
+      fixture.state.songInfo.composer = '歌曲署名作曲';
     });
     await page.reload({ waitUntil: 'domcontentloaded' });
     const cover = () => page.locator('.player-view');
@@ -155,18 +157,25 @@ async function touchGesture(locator, direction) {
     report.pendingMetadata = { samples: pending.length, first: pending[0], last: pending.at(-1) };
     report.media.push({ step: 'initial-paused', ...initial });
     report.checks.push('paused startup restores 35 seconds before and after delayed native metadata');
+    const credits = cover().locator('.player-credits[aria-label="词曲信息"]');
+    await credits.waitFor({ state: 'visible' });
+    assert.deepEqual((await credits.locator('span').allTextContents()).map(text => text.trim()), ['作词 歌曲署名作者', '作曲 歌曲署名作曲']);
+    assert.ok(await credits.evaluate(element => {
+      const title = element.parentElement.querySelector('h2.song-name');
+      const artist = element.parentElement.querySelector('.song-artist');
+      return title.nextElementSibling === element && title.getBoundingClientRect().bottom <= element.getBoundingClientRect().top + 1 &&
+        element.getBoundingClientRect().bottom <= artist.getBoundingClientRect().top + 1;
+    }), 'Actual song author credits sit directly under the title and before artist information');
     await capture('01-paused-cover');
 
     await openLyrics();
     await requireLine('海岸·30秒歌词', 'Opening paused lyrics immediately selects the 30 second line');
     assert.equal((await audio()).paused, true);
     await requireColors('initial paused lyric colors');
-    const footer = page.locator('footer[aria-label="词曲信息"]');
-    await footer.waitFor({ state: 'visible' });
-    assert.deepEqual((await footer.locator('span').allTextContents()).map(text => text.trim()), ['作词 真实署名作者', '作曲 真实署名作曲']);
+    assert.equal(await page.locator('.lyrics-shell footer, .lyrics-shell [aria-label="词曲信息"]').count(), 0, 'The lyric view has no author footer');
     assert.equal(await lyricView().locator('.lyric-line').count(), 8, 'Credit rows do not occupy the sing-along lyrics');
     assert.ok(!(await lyricView().textContent()).includes('制作署名') && !(await lyricView().textContent()).includes('混音署名'));
-    report.checks.push('only genuine lyricist and composer credits appear below the lyrics, with production credits excluded from sung rows');
+    report.checks.push('genuine song authors take priority directly under the title, and the lyric view has no credit footer or production rows');
     assert.equal(await fontRange().count(), 0, 'The playback view exposes no font control');
     const beforeFont = (await styles()).current.fontSize;
     const beforeOrdinary = (await styles()).future.fontSize;
@@ -294,6 +303,8 @@ async function touchGesture(locator, direction) {
     await setFont(60);
     await app.evaluate((_electron, text) => {
       global.__wuuMobileFixture.lyrics[0] = `[00:00.00]开场\n[00:30.00]${text}\n[01:10.00]下一段歌词`;
+      delete global.__wuuMobileFixture.state.songInfo.lyricist;
+      delete global.__wuuMobileFixture.state.songInfo.composer;
     }, longPhrase);
     await page.setViewportSize({ width: 375, height: 812 });
     await page.reload({ waitUntil: 'domcontentloaded' });
@@ -303,7 +314,7 @@ async function touchGesture(locator, direction) {
     await waitUntil(async () => { const media = await audio(); return !media.paused && media.readyState >= 2; }, 'The long lyric reading scene begins genuine buffered playback');
     await openLyrics();
     await waitUntil(async () => (await currentLine().textContent()).trim() === longPhrase, 'The current long phrase is not shortened');
-    assert.equal(await page.locator('.lyric-credits').count(), 0, 'A song without author credits has no invented footer');
+    assert.equal(await page.locator('.player-credits').count(), 0, 'A song without author credits has no invented title credits');
     const longGeometry = () => lyricView().evaluate(element => {
       const text = [...element.querySelectorAll('.lyric-text')].find(node => node.textContent.startsWith('超长歌词起点'));
       const node = text.firstChild, box = element.getBoundingClientRect();

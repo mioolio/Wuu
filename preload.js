@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('musicAPI', {
   // (async invoke 在窗口关闭/进程被杀时可能来不及到达主进程)
   saveUserDataSync: (data) => ipcRenderer.sendSync('save-userdata-sync', data),
   onDurationUpdate: (cb) => listen('duration-update', cb),
+  onSongMetadataUpdate: (cb) => listen('song-metadata-update', cb),
   extractCoverColor: (filePath) => ipcRenderer.invoke('extract-cover-color', filePath),
   extractCoverColorFromURL: (url) => ipcRenderer.invoke('extract-cover-color-url', url),
   // 从磁盘彻底删除歌曲文件夹 (管理界面使用)

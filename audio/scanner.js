@@ -6,8 +6,9 @@ const path = require('path');
 const { ipcMain } = require('electron');
 const { dbgLog } = require('../core/logger');
 const { getCachedDuration } = require('../core/storage');
+const { sendToMain } = require('../core/state');
 const { parseDurationsInBackground } = require('./duration');
-const { getCachedGenres, enrichSongGenres } = require('./genres');
+const { getCachedGenres, enrichSongGenres, parseGenreUpdatesInBackground } = require('./genres');
 
 function scanMusicFiles(outputDir = path.join(__dirname, '..', 'output')) {
   const songs = [];
@@ -140,11 +141,24 @@ async function scanMusicFilesWithGenres(outputDir) {
   return enrichSongGenres(scanMusicFiles(outputDir));
 }
 
-// IPC: 获取歌曲列表 (复用时长缓存, 补充本地曲风标签后返回)
-ipcMain.handle('get-songs', async () => {
-  const songs = await scanMusicFilesWithGenres();
+let genreStart = null;
+let durationStart = null;
+let latestSongPaths = new Set();
+
+// IPC: 基础可播放列表立即返回, 不等待全库音频标签解析。
+ipcMain.handle('get-songs', () => {
+  const songs = scanMusicFiles();
+  latestSongPaths = new Set(songs.map(song => song.audioPath));
+  if (genreStart !== null) clearImmediate(genreStart);
+  genreStart = setImmediate(() => {
+    genreStart = null;
+    void parseGenreUpdatesInBackground(songs, payload => {
+      if (latestSongPaths.has(payload.audioPath)) sendToMain('song-metadata-update', payload);
+    }).catch(() => {});
+  });
   // 延迟 300ms 启动后台解析, 确保渲染进程已注册 duration-update 监听器
-  setTimeout(() => parseDurationsInBackground(songs), 300);
+  if (durationStart !== null) clearTimeout(durationStart);
+  durationStart = setTimeout(() => { durationStart = null; parseDurationsInBackground(songs); }, 300);
   return songs;
 });
 

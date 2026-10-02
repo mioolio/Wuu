@@ -5,7 +5,7 @@ import './design-system.css';
 import App from './App';
 import DesktopLyrics from './components/DesktopLyrics';
 import { errorMessage } from './api';
-import { persistNow, useAppStore } from './store';
+import { disposeSongMetadata, persistNow } from './store';
 import { playerService } from './services/player';
 import { notify } from './ui';
 
@@ -21,9 +21,7 @@ if (lyricsWindow) document.documentElement.classList.add('lyrics-window');
 createRoot(document.getElementById('root')!).render(<ErrorBoundary>{lyricsWindow ? <DesktopLyrics /> : <App />}</ErrorBoundary>);
 
 if (!lyricsWindow) {
-  void useAppStore.getState().initialize().then(async () => {
-    if (useAppStore.getState().hydrated) await playerService.initialize();
-  }).catch(error => notify(errorMessage(error),'error'));
+  void playerService.initialize().catch(error => notify(errorMessage(error),'error'));
   const keyboard = (event:KeyboardEvent) => {
     if (event.target instanceof HTMLElement && (event.target.closest('input,textarea,select,button,a,summary,[contenteditable="true"],[role="separator"],[role="dialog"],[role="menu"]') || document.querySelector('[role="dialog"]'))) return;
     if (event.code === 'Space') { event.preventDefault(); playerService.toggle(); }
@@ -31,7 +29,7 @@ if (!lyricsWindow) {
     if (event.ctrlKey && event.key === 'ArrowLeft') { event.preventDefault(); playerService.next(-1); }
   };
   document.addEventListener('keydown',keyboard);
-  const unload = () => { playerService.dispose(); persistNow(true); };
+  const unload = () => { playerService.dispose(); disposeSongMetadata(); persistNow(true); };
   window.addEventListener('beforeunload',unload);
-  import.meta.hot?.dispose(() => { document.removeEventListener('keydown',keyboard); window.removeEventListener('beforeunload',unload); playerService.dispose(); });
+  import.meta.hot?.dispose(() => { document.removeEventListener('keydown',keyboard); window.removeEventListener('beforeunload',unload); playerService.dispose(); disposeSongMetadata(); });
 }

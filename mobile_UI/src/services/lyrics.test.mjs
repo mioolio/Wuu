@@ -68,7 +68,7 @@ test('standalone and timed credits leave only real lyrics, with original named c
   assert.deepEqual(lyrics.parseLyrics('作词：\n录音: 录音师'), []);
 });
 
-test('word-timed credits are reconstructed before filtering and combined authors fill only the footer fields', () => {
+test('word-timed credits are reconstructed before filtering and combined authors fill only author fields', () => {
   const raw = '[1000,2000]<0,500,0>作词：<500,500,0>词作者\n[3000,2000]<0,500,0>Mixing:<500,500,0>混音师\n[10000,2000]<0,500,0>唯一';
   assert.deepEqual(lyrics.parseLyrics(raw).map(line => line.text), ['唯一']);
   assert.deepEqual(lyrics.lyricCredits(raw), { lyricist: '词作者', composer: '' });
@@ -114,8 +114,8 @@ test('timestamp groups keep focus through RAW gaps and the final line while word
 });
 
 const source = readFileSync(new URL('../components/LyricsView.vue', import.meta.url), 'utf8');
-test('the actual Vue lyric and settings scripts and templates compile with shared preferences', () => {
-  for (const filename of ['LyricsView.vue', 'SettingsView.vue']) {
+test('the actual Vue player, lyric and settings scripts and templates compile with shared preferences', () => {
+  for (const filename of ['Player.vue', 'LyricsView.vue', 'SettingsView.vue']) {
     const input = readFileSync(new URL('../components/' + filename, import.meta.url), 'utf8');
     const { descriptor, errors } = parse(input);
     assert.deepEqual(errors, []);
@@ -181,6 +181,37 @@ function mountFixture({ time = 25, paused = true, readyState = 2, storedSize, st
 }
 const flush = async () => { await vue.nextTick(); await vue.nextTick(); };
 
+function playerCreditFixture(song, lyricText) {
+  const source = readFileSync(new URL('../components/Player.vue', import.meta.url), 'utf8');
+  const player = { currentSong: vue.ref(song), lyricText: vue.ref(lyricText) };
+  const context = vm.createContext({ ...vue, ...lyrics, usePlayer: () => player, defineEmits: () => () => {},
+    coverUrl: () => '', coverByPath: () => '' });
+  const scope = vue.effectScope();
+  scope.run(() => vm.runInContext(source.match(/<script setup>([\s\S]*?)<\/script>/)[1].replace(/^import .+;\s*$/gm, ''), context));
+  return { player, rows: () => JSON.parse(vm.runInContext('JSON.stringify(creditRows.value)', context)), unmount: () => scope.stop() };
+}
+
+test('title credits prefer trimmed song authors and fall back independently to genuine lyric credits', () => {
+  const fixture = playerCreditFixture({ id: 1, lyricist: '  歌曲作者  ', composer: '   ' }, '[作词:歌词作者][作曲:歌词作曲]\n[00:20]唯一');
+  assert.deepEqual(fixture.rows(), [{ label: '作词', name: '歌曲作者' }, { label: '作曲', name: '歌词作曲' }]);
+  fixture.player.currentSong.value = { id: 2, composer: '歌曲作曲' };
+  assert.deepEqual(fixture.rows(), [{ label: '作词', name: '歌词作者' }, { label: '作曲', name: '歌曲作曲' }]);
+  fixture.unmount();
+});
+
+test('title credits combine the same author and clear for a new song without credits', () => {
+  const fixture = playerCreditFixture({ id: 1 }, '[00:00]词曲：共同作者\n[00:20]唯一');
+  assert.deepEqual(fixture.rows(), [{ label: '作词 / 作曲', name: '共同作者' }]);
+  fixture.player.currentSong.value = { id: 2 };
+  fixture.player.lyricText.value = '[00:20]没有署名的歌词';
+  assert.deepEqual(fixture.rows(), [], 'a new song must not inherit the previous authors');
+  fixture.player.lyricText.value = '[作词:仅歌词作者]';
+  assert.deepEqual(fixture.rows(), [{ label: '作词', name: '仅歌词作者' }]);
+  fixture.player.currentSong.value = null;
+  assert.deepEqual(fixture.rows(), [], 'idle playback must not show orphaned lyric credits');
+  fixture.unmount();
+});
+
 test('opening lyrics while paused immediately highlights and centers restored position', async () => {
   const fixture = mountFixture({ readyState: 0 });
   await flush();
@@ -197,15 +228,15 @@ test('opening lyrics while paused immediately highlights and centers restored po
   fixture.unmount(); assert.equal(fixture.audioListeners.size, 0);
 });
 
-test('the lyric footer contains only real author credits and clears on a song without credits', async () => {
+test('the lyric view contains only sung text and no author footer', async () => {
   const fixture = mountFixture();
   fixture.player.lyricText.value = '[00:00]作词: 作者甲\n[00:01]作曲：作者乙\n[00:02]制作人: 制作人甲\n[00:20]唯一';
   await flush();
   assert.equal(fixture.run('lines.value.length'), 1);
   assert.equal(fixture.run('lines.value[0].text'), '唯一');
-  assert.deepEqual(JSON.parse(fixture.run('JSON.stringify(credits.value)')), { lyricist: '作者甲', composer: '作者乙' });
+  assert.doesNotMatch(source, /<footer[\s>]|class="lyric-credits"|aria-label="词曲信息"/, 'author credits belong under the song title rather than the lyrics');
   fixture.player.lyricText.value = '[00:20]没有制作元信息的歌词'; await flush();
-  assert.deepEqual(JSON.parse(fixture.run('JSON.stringify(credits.value)')), { lyricist: '', composer: '' });
+  assert.equal(fixture.run('lines.value[0].text'), '没有制作元信息的歌词');
   fixture.unmount();
 });
 
