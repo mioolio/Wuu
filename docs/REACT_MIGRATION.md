@@ -1,6 +1,8 @@
 # React 桌面端重构
 
-桌面主界面和桌面歌词窗口使用 React 19、TypeScript、Vite 7 和 Zustand 5。Electron 主进程继续处理文件、解密、下载、账号和本地服务，移动端继续使用 Vue。生产入口是 `desktop_UI/dist/index.html`，旧 `renderer/` 仅保留供历史对照，不再加载。
+桌面新版主界面和桌面歌词窗口使用 React 19、TypeScript、Vite 7 和 Zustand 5。Electron 主进程继续处理文件、解密、下载、账号和本地服务，移动端继续使用 Vue。默认生产入口是 `desktop_UI/dist/index.html`；`settings.interfaceMode='classic'` 时实际加载旧 `renderer/index.html` 和 `renderer/desktop-lyric.html`，两套资源均随包保留。
+
+完整功能总览见 [README](../README.md)，各技术模块、算法和协议字段见 [技术实现说明](TECHNICAL_ARCHITECTURE.md)。本文侧重迁移后的边界、兼容方式和恢复入口。
 
 ## 开发与运行
 
@@ -38,6 +40,21 @@ npm run build         # 两端构建及 Windows 安装包
 - `window/renderer-entry.js`：选择开发服务器或打包后的 React 入口。
 
 上述 `src/` 路径均相对于 `desktop_UI/`。界面通过 preload 访问现有 IPC，未直接开放 Node.js 给 React。
+
+## 实现边界与并发控制
+
+| 场景 | 实现方式 | 避免的问题 |
+| --- | --- | --- |
+| 切页面继续听歌 | `playerService` 单例持有 `<video>`、AudioContext 与效果链，UI 订阅 Zustand 快照 | 页面卸载重新创建媒体、丢失进度 |
+| 启动和迟到用户数据 | 歌曲与 userdata 并发；`hydrated` 前禁写；`pendingChanges` 顺序重放早期用户操作 | 空默认值覆盖原收藏、迟到恢复覆盖手动选歌 |
+| 快速切歌和试听 | 初始化生命周期、播放版本、封面请求编号分别检查异步结果 | 旧歌词、旧音源、旧颜色覆盖当前歌曲 |
+| 歌曲标签后台补齐 | `song-metadata-update` 按路径入 Map，50ms 批量合并现有对象 | 逐首重建全库、已删歌曲回流、音频重新打开 |
+| 导入页面切换 | lazy/Suspense + visited 集合保留页面实例 | 长任务因页面隐藏中断 |
+| IPC 事件订阅 | preload 返回具体 listener 的 unsubscribe，组件/服务清理监听 | 重开页面重复处理事件 |
+| 收藏迁移和退出 | JSON 兼容字段、500ms 合并保存、beforeunload 同步 IPC；旧 localStorage 成功落盘后清除 | 迁移或退出过程中丢数据 |
+| 新旧界面切换 | 先保存共享 JSON 与本地会话，再通过 renderer-entry 重载对应文件 | 两套界面数据分叉、暂停状态丢失 |
+
+`contextIsolation:true` 与 `nodeIntegration:false` 隔离 React 对 Node 的直接访问；主窗口当前仍配置 `webSecurity:false`，媒体协议允许解码本地路径。迁移没有同时完成通用 IPC 参数校验或文件目录沙箱，不能把框架重构等同于这些边界已加固。
 
 原有 `config/userdata.json` 的收藏、歌单、进度、统计、设置和自定义音效字段保持兼容。旧字符串收藏可迁移为歌单；旧浏览器收藏只有成功保存后才移除。修复歌曲重命名时同步迁移相关路径引用。
 

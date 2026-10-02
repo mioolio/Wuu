@@ -2,7 +2,7 @@
 
 界面围绕聆听、浏览音乐库和管理歌单展开。导航可收起与调宽；透明度与封面配色统一在设置的外观分类调整。中性模式与沉浸模式共用同一套布局。
 
-已将 [UI/UX Pro Max](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill) 克隆到本地，并安装到个人 Codex 技能目录。设计通过本地技能检索音乐产品、深色界面、动效与 React 实现规范，未给应用添加运行依赖。正在播放的布局、封面配色与细节交互遵循 [播放器体验约定](player-experience.md)。
+正在播放的布局、封面配色与细节交互遵循 [播放器体验约定](player-experience.md)。全部功能见 [README](../README.md)；进程、音频、存储、网络与平台协议见 [技术实现说明](TECHNICAL_ARCHITECTURE.md)。本文记录界面参数与对应实现。
 
 ## 视觉规范
 
@@ -31,7 +31,7 @@
 - 可选的封面主题同时改变外壳、标题栏、导航和底栏，换歌时平滑过渡；关闭后回到中性表面，播放页仍保留当前音乐的氛围。
 - 设置按外观、播放、歌词、音效、网络服务分类，类别内再分功能组，高级参数默认折叠。支持方向键、Home、End 切换类别。
 - 外观提供「切换到旧版界面」，直接加载 `renderer/index.html`，桌面歌词也加载 `renderer/desktop-lyric.html`；旧版设置提供返回新版入口。启动遵循保存的 `settings.interfaceMode`。两版共享歌曲、歌单、进度、设置及统计；切换会重载界面，恢复本地歌曲与暂停状态。
-- 当前歌词采用约 1.2 倍字号与较高字重，已播放与待播放周边行使用同一弱化层级。相同时间戳的双语行成组高亮与居中；手动浏览和拖动期间停止跟随。
+- 当前歌词使用独立字号（新用户默认 28px，普通行 20px，当前行可调至 60px）与较高字重，已播放与待播放周边行使用同一弱化层级。相同时间戳的双语行成组高亮与居中；手动浏览和拖动期间停止跟随。
 - 音乐统计用一条数据带展示四项累计指标，较窄内容区域才折行。统计页隐藏时停止数据订阅；显示时按秒更新累计排行与曲风，手工标签即时更新。
 - 曲风来源为本地音频标签与手工补充，手工标签保存在 `genreOverrides`，不改写媒体。近期分布按最近 7／30 天实际聆听时长计算，多标签平分时长，并展示未标注占比与覆盖率。新日期记录保存在 `stats[path].recentDays`，保留 90 天明细；旧累计保留，不伪造日期。
 
@@ -43,6 +43,22 @@
 - 右侧滚动条与导航标记保留实例，切换页面时连续变换位置与长度；底栏保持实时反馈。音效、歌单与队列退出后保留内容，快速反向操作接续当前视觉状态；弹窗具有键盘焦点约束和返回。
 - 页面通过 React 懒加载，已访问的页面保留实例，播放服务独立于路由。歌曲列表继续使用 64px 虚拟行步长。
 - 提供清晰键盘焦点和跳过导航入口；焦点在按钮或菜单上时，空格按键操作当前控件。减少动画的系统偏好会关闭动效。
+
+## 组件和浏览器技术
+
+| 能力 | 具体实现 | 源码 |
+| --- | --- | --- |
+| 功能页加载及状态保留 | React lazy/Suspense 按功能拆包；访问集合保留实例，hidden 切换；播放器独立单例 | [App.tsx](../desktop_UI/src/App.tsx)、[player.ts](../desktop_UI/src/services/player.ts) |
+| 大歌库列表 | 固定 64px 行步长，按 scrollTop/容器高度计算可见范围，前后各 5 行缓冲，绝对定位行 | [LibraryView.tsx](../desktop_UI/src/features/LibraryView.tsx) |
+| 连续页面和封面过渡 | View Transition API；generation 防旧回调，skipTransition 中断；只捕获 page-host；页面 320ms、共享封面 620ms，备用 WAAPI 内容 280ms | [usePageMotion.ts](../desktop_UI/src/components/usePageMotion.ts)、[page-motion.css](../desktop_UI/src/components/page-motion.css) |
+| 封面加载与恢复 | RecordArtwork 等待 Cover 的 onLoad 后交接封面层；请求隔离；失败 1200ms 后自动重试一次，focus/online/可见性触发后续重试 | [RecordArtwork.tsx](../desktop_UI/src/components/RecordArtwork.tsx)、[Cover.tsx](../desktop_UI/src/components/Cover.tsx) |
+| 配色与可读性 | 主进程 48×48 像素采样、12 色相桶加灰度桶；渲染层 sRGB 相对亮度及 4.5 对比目标二分调整 | [color.js](../cover/color.js)、[coverPalette.ts](../desktop_UI/src/services/coverPalette.ts) |
+| 歌词焦点与逐字填充 | rAF 读取音频时钟；时间戳二分定位、同时间戳组共享焦点；六秒手工浏览暂停跟随 | [LyricsView.tsx](../desktop_UI/src/components/LyricsView.tsx)、[lyricPresentation.ts](../desktop_UI/src/services/lyricPresentation.ts) |
+| 侧栏参数与拖动替代 | 宽度限幅与持久化；pointer 拖动、方向键/Home/End、设置滑杆 | [Sidebar.tsx](../desktop_UI/src/components/Sidebar.tsx)、[sidebarPreferences.ts](../desktop_UI/src/services/sidebarPreferences.ts) |
+| 导航标记与滚动轨 | 保留组件实例，追踪当前目标矩形/滚动容器，动画从当前位置接续 | [NavigationMarker.tsx](../desktop_UI/src/components/NavigationMarker.tsx)、[PageScrollRail.tsx](../desktop_UI/src/components/PageScrollRail.tsx) |
+| 浮层与键盘操作 | 可访问按钮名称、Escape/Tab/方向键、焦点约束与关闭后返回触发按钮 | [GlobalUI.tsx](../desktop_UI/src/components/GlobalUI.tsx)、[SongPopover.tsx](../desktop_UI/src/components/SongPopover.tsx) |
+
+`prefers-reduced-motion` 和隐藏窗口分支直接落实最终页面，继续更新歌词时间与填充。动画只承担视觉反馈，必要数据与播放状态不等待 animationend。ResizeObserver/IntersectionObserver 用于尺寸、可见性与加载生命周期，卸载清理监听、定时器和帧。
 
 ## 验证
 

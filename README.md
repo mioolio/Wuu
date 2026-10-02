@@ -22,7 +22,9 @@
 
 Wuu Music（以下简称"Wuu"）是一款面向 Windows 平台的桌面端音乐管理工具。项目以"本地音乐库管理为核心、多平台扩展为补充"为设计理念，为用户提供统一的音乐收藏、播放、导入与分享体验。
 
-桌面界面现已重构为 React 19 + TypeScript + Vite + Zustand，手机端继续使用 Vue 3。主进程、IPC 接口与本地歌曲目录保持兼容；迁移范围、Git 备份及恢复方式见 [React 桌面迁移说明](docs/REACT_MIGRATION.md)。
+桌面默认界面使用 React 19 + TypeScript + Vite + Zustand，设置中的 `interfaceMode` 可切换到 `renderer/` 经典界面；两套桌面资源均随安装包分发。手机端使用 Vue 3。主进程、IPC 接口与本地歌曲目录保持兼容；迁移范围、Git 备份及恢复方式见 [React 桌面迁移说明](docs/REACT_MIGRATION.md)。
+
+具体模块、调用链、文件格式、音频算法、HTTP / WebSocket 协议和实现边界见 [技术架构与实现详解](docs/TECHNICAL_ARCHITECTURE.md)。该文档以仓库源码为依据，适合开发、排障和审查技术实现。
 
 桌面 UI 采用炭黑、暖白与浅绿色的统一视觉体系，重新编排推荐首页、分组导航、音乐列表和沉浸式播放器。视觉规范和窗口验证方式见 [桌面设计说明](docs/UI_DESIGN.md)。
 
@@ -49,8 +51,8 @@ Wuu Music（以下简称"Wuu"）是一款面向 Windows 平台的桌面端音乐
 
 - 基于文件系统的音乐库组织，按"歌曲名 - 艺人"格式的目录结构存储
 - 支持 AAC、MP3、WAV、FLAC、M4A、OGG 等主流音频格式
-- Worker 线程文件扫描，通过 Node.js `worker_threads` 实现，避免阻塞 Electron 主进程
-- AAC ADTS 帧解析获取真实音频时长，不依赖可能不可靠的元数据标签
+- 桌面 `get-songs` IPC 使用同步基础目录扫描，先返回可播放列表，再逐首补齐时长和流派；HTTP 歌库扫描由 `worker_threads` 执行并缓存 10 分钟
+- AAC ADTS 小文件完整遍历，大文件按前 / 中 / 后采样估算；FLAC 从 STREAMINFO 读取总采样数，MP3 按 MPEG 帧累加样本数
 - 播放进度每 2 秒持久化至本地，重启后恢复播放位置
 
 ### 2.2 Web Audio 音效系统
@@ -60,29 +62,31 @@ Wuu Music（以下简称"Wuu"）是一款面向 Windows 平台的桌面端音乐
 **效果链路**：
 
 ```
-mediaSource → highpass → 10段peaking EQ → lowshelf → highshelf
-            → M/S立体声加宽 → StereoPanner(环绕声像) → Convolver(混响)
-            → dry/wet混合 → gainNode → destination
+mediaSource → stereoInput(单声道上混) → highpass → 10段peaking EQ
+            → lowshelf(90Hz) → highshelf(12kHz) → M/S立体声加宽
+            → StereoPanner ┬→ gainNode → destination
+                          └→ Convolver(混响) → wetGain → gainNode
 ```
 
 **9 个内置预设**：
 
 | 预设 | 实现原理 |
 |------|----------|
-| 关闭 | 全链路透明（HP 20Hz / 增益 0dB / 宽度 1 / 湿度 0），无染色直通 |
+| 关闭 | HP 20Hz / EQ 与 shelf 增益 0dB / 宽度 1 / 湿度 0；滤波与空间节点仍保持连接 |
 | 超重低音 | lowshelf +7dB @ 90Hz + 31/62Hz peaking 增益 |
-| 清澈人声 | highpass 110Hz 去闷 + 中高频 2-4kHz 增益 + 立体声宽度 1.1 |
-| 360度环绕 | M/S 加宽至 2.2 + LFO 0.08Hz 声像摆动 + 微量混响 |
-| 3D音效 | 高频 shelf +2dB + 宽度 1.7 + 0.12 摆动深度 + 板式混响 |
-| HIFI现场 | 程序生成 1.9s 指数衰减 IR 的板式混响（湿度 0.18）+ 宽度 1.3 |
+| 清澈人声 | highpass 120Hz + 2/4kHz EQ 各 +3dB + 立体声宽度 1.1 |
+| 360度环绕 | M/S 宽度 2 + LFO 0.08Hz、深度 0.28 + 混响湿度 0.08 |
+| 3D音效 | 高频 shelf +2dB + 宽度 1.7 + LFO 0.05Hz、深度 0.12 + 混响湿度 0.12 |
+| HIFI现场 | 程序生成 1.9s 噪声 IR，振幅按 `(1-i/length)^2.6` 衰减；湿度 0.18、宽度 1.3 |
 | 动感电音 | lowshelf +5dB + 高频 8-16kHz 大幅增益 |
 | 摇滚音效 | 中频下凹 + 高低频提升 + 宽度 1.15 |
-| 复古唱片 | highpass 120Hz + 高频急剧衰减（16kHz -9dB）+ 低频共鸣 |
+| 复古唱片 | highpass 120Hz + 高频 shelf -3dB + 16kHz EQ -8dB + 低架 +2dB |
 
 **自定义 EQ**：
 
 - 10 段 peaking 滤波器，中心频率：31 / 62 / 125 / 250 / 500 / 1k / 2k / 4k / 8k / 16k Hz
-- 每段 -12 ~ +12 dB 可调，实时 `setTargetAtTime` 平滑过渡防爆音
+- 每段增益 -12 ~ +12 dB、中心频率 20 ~ 20000Hz、Q 值 0.1 ~ 6 可调；实时 `setTargetAtTime` 平滑过渡
+- 可调高通、低 / 高架增益、立体声宽度、LFO 深度 / 速率与混响湿度；具体预设参数见 `desktop_UI/src/services/audioFx.ts`
 - 支持命名保存多个自定义方案，持久化到 `userdata.json` 的 `settings.audioFx` 字段
 
 ### 2.3 多平台歌单导入
@@ -121,7 +125,7 @@ mediaSource → highpass → 10段peaking EQ → lowshelf → highshelf
 ### 2.6 歌词系统
 
 - 支持 LRC（行级时间戳）与 KRC（逐字时间戳）两种歌词格式
-- KRC 逐字歌词通过 `requestAnimationFrame` 以 60fps 更新每个字的填充状态（已唱完/正在唱/未开始）
+- KRC 逐字歌词通过 `requestAnimationFrame` 按浏览器显示帧更新每个字的填充状态（帧率取决于设备与窗口状态）
 - 桌面歌词窗口：独立 BrowserWindow，支持锁定穿透（click-through）、拖拽定位、位置持久化
 - 锁定状态下悬停控制按钮区临时恢复交互，离开后恢复穿透
 - 歌词颜色自适应封面主色调，支持用户自定义已唱/未唱颜色
@@ -160,8 +164,8 @@ mediaSource → highpass → 10段peaking EQ → lowshelf → highshelf
 - IP 白名单访问控制（支持通配符匹配，如 `192.168.*.*`）
 - 频率限制（每 IP 每分钟最大请求数，0 = 不限制，本机始终放行）
 - 访问日志记录（最多保留 500 条，含下载/访问歌单/获取封面/获取歌词/拒绝/超限分类）
-- AES-256-GCM 加密地址与端口，密钥与链接分离传输
-- 密钥可导出为本地 `.crt` 文件，支持物理隔离传输
+- AES-256-GCM 加密 `{id, k, h}`（歌单 ID、访问令牌、主机），端口字段独立字母混淆；密钥与链接分离传输
+- 密钥可导出为本地 `.crt` 文件；其内容是自定义 `WUU KEY` 文本封装，不是 X.509 证书
 
 **HTTP 路由**：
 
@@ -176,7 +180,7 @@ mediaSource → highpass → 10段peaking EQ → lowshelf → highshelf
 
 ### 2.9 免费听音乐专区
 
-集成 `music-dl` 本地 Web 服务（监听 127.0.0.1:17324），提供多平台音乐搜索、试听、下载、歌词获取与换源能力。该功能设有免责声明，用户需明确接受后方可使用。
+集成 `music-dl` 本地 Web 服务（IPC 通过 `127.0.0.1:17324` 访问，实际监听地址由二进制实现决定），提供多平台音乐搜索、试听、下载、歌词获取与换源能力。该功能设有免责声明，用户需明确接受后方可使用。
 
 服务管理特性：
 
@@ -187,13 +191,42 @@ mediaSource → highpass → 10段peaking EQ → lowshelf → highshelf
 
 ### 2.10 移动端同步与 MediaSession
 
-移动端 Web UI 基于 Vue 3 + Vite 5 实现，通过浏览器访问桌面端 HTTP 服务同步播放状态：
+移动端 Web UI 基于 Vue 3 + Vite 5 实现，通过浏览器访问桌面端 HTTP 服务读取歌库、收藏、歌词及播放状态：
 
-- 播放状态同步：歌曲、进度、播放状态实时同步（节流 3 秒）
+- 首次进入读取桌面歌曲、进度和播放状态，音频元数据就绪后定位，播放由用户手势触发；不是持续轮询镜像
+- 手机进度每 3 秒检查一次，位置变化至少 5 秒时上报，播放结束补报最终位置
 - MediaSession API：安卓锁屏/通知栏/状态栏显示封面 + 歌名 + 上一首/下一首控制
 - 声明支持的操作：play、pause、previoustrack、nexttrack、seekto、stop
 - `updateMediaPositionState()` 支持系统进度条拖动同步
 - 播放/暂停/停止时立即更新 MediaSession 状态，timeupdate 期间持续更新位置
+
+手机端还提供独立 Web Audio 音效链（`mobile_UI/src/composables/useAudioFx.js`）：10 段 EQ、9 个预设、M/S 节点、可选 StereoPanner / LFO 与 1.2 秒噪声混响 IR。自定义 EQ 的增益 / 频率 / Q 及空间参数保存到浏览器 `localStorage` 的 `audio-fx-custom`，预设选择保存为 `audio-fx-preset`；通过 `/api/audio-fx-presets` 读取桌面命名方案供选择，两端当前预设各自独立。AudioContext 在播放事件中恢复，以适应移动浏览器的用户手势限制。
+
+### 2.11 移动端一起听
+
+`server/index.js` 使用 `ws` 将 `/ws/together` 升级为 WebSocket，与 HTTP 服务共享端口并校验 IP 白名单；当前为单个全局房间。移动端各自通过 HTTP 拉取音频，WebSocket 传输歌曲上下文与 `play / pause / seek / song / state` 操作。
+
+服务端分配单调递增 `seq`，移动端丢弃已处理的序号；最早加入且仍在线的客户端为 host，由它负责自然结束切歌和每 5 秒校准。`server/together-state.js` 维护新成员加入时的歌曲 / 进度 / 播放态快照；当前歌曲的双方控制可更新快照，只有 host 的 `state` 心跳可校准快照。进度偏差大于 0.4 秒时 seek，0.12 ~ 0.4 秒时使用 0.98 / 1.02 倍速追赶，断线按 1 ~ 15 秒指数退避重连。具体消息格式及访问边界见 [技术架构与实现详解](docs/TECHNICAL_ARCHITECTURE.md)。
+
+### 2.12 新曲发现与试听保存
+
+首页 `HomeDiscovery.tsx` 每批展示 4 首来自网易云公开歌单的候选歌曲，由 `netease-discover` IPC 获取。`services/discovery.ts` 对曲名和艺人执行 Unicode NFKC、大小写与标点归一化，并按平台曲目 ID 或“曲名 + 艺人交集”排除本地已有歌曲；未知艺人的本地歌曲按曲名排除。会话保存最多 2000 首候选历史，候选池有效期 5 分钟，每次请求最多尝试 4 个候选批次，默认超时预算 16 秒。
+
+试听通过网易云标准音质 preview 接口懒加载当前批次队列。保存前重新检查音频可用性与歌库去重；仅试听片段或需重新登录的结果不进入完整歌曲导入，成功后刷新本地歌库。该候选来源和去重算法不推断全网曲库覆盖或个性化推荐模型。
+
+### 2.13 聆听记录、曲风标签与统计
+
+- `services/listeningHistory.ts` 将累计播放次数 / 聆听秒数和按本地日历日期索引的 `recentDays` 写入用户数据；近期记录保留 90 天，跨午夜的实际聆听区间拆分到相应日期，旧累计值继续兼容
+- `audio/genres.js` 使用 `music-metadata.parseFile({skipCovers:true,duration:false})` 读取内嵌曲风；内存缓存以文件路径、修改时间和大小校验，经 `song-metadata-update` 后台补齐桌面列表
+- `genreOverrides` 按音频路径保存用户手动曲风标签，优先于内嵌标签；可清空手动标签或恢复音频标签
+- 统计页显示累计时长、播放次数、收藏数和歌库数量；歌曲排行可按次数 / 时长排序，每次展示 50 首并继续加载
+- 近 7 / 30 天曲风分布按已记录的聆听时长计算，多标签歌曲平均分配时长，“未标注”计入分母，显示标签覆盖率。`statsSnapshot.ts` 与 `useStatsSnapshot.ts` 将统计页面更新限定到可见期间及相关状态变化
+
+### 2.14 歌库组织与播放控制
+
+桌面歌库支持歌名 / 艺人 / 专辑文本搜索、按艺人折叠分组和组合艺人拆分，多收藏歌单创建 / 重命名 / 删除、喜欢与不推荐记录，以及单首 / 批量分享。`LibraryView.tsx` 使用 `useDeferredValue` 延后筛选，结合固定行高虚拟列表控制大歌库 DOM 数量。
+
+持久播放器支持顺序、单曲循环与随机队列、按播放历史前进 / 后退、在线试听队列、进度恢复、音量和 500ms 渐出暂停。设置还包括现代 / 经典界面切换、歌词字号与色彩、窗口 / 托盘行为、网络服务绑定 IP / 端口 / 白名单 / 频率限制等；具体字段与跨界面加载路径见 [技术架构与实现详解](docs/TECHNICAL_ARCHITECTURE.md)。
 
 ---
 
@@ -205,13 +238,15 @@ mediaSource → highpass → 10段peaking EQ → lowshelf → highshelf
 |------|----------|------|
 | 运行时 | Electron 33 | 桌面应用运行时；开发与构建使用 Node.js 20.19+ 或 22.12+ |
 | 主进程 | JavaScript (CommonJS) | 业务逻辑、IPC 处理、文件系统操作 |
-| 桌面界面 | React 19 + TypeScript 5.9 + Vite 7 | 组件化界面，TypeScript 严格模式，生产入口为 desktop_UI/dist |
+| 桌面界面 | React 19 + TypeScript 5.9 + Vite 7；经典 HTML / JS 界面 | 默认 `desktop_UI/dist`，`interfaceMode=classic` 加载 `renderer/`；两者打包 |
 | 桌面状态管理 | Zustand 5 | 歌曲、收藏、设置、播放状态与本地数据持久化 |
 | 移动端 | Vue 3 + Vite 5 | 移动端 Web UI，非原生移动应用 |
 | 音频处理 | Web Audio API | 原生 BiquadFilter / Convolver / StereoPanner / GainNode |
 | 构建与验证 | Vite + electron-builder 25 + Vitest + Playwright | 两端静态资源、Windows NSIS 安装包、单元测试与 Electron smoke 测试 |
 | 加密 | AES-CTR / AES-256-GCM | 音频解密与歌单分享加密 |
-| 数据持久化 | JSON 文件（原子写） | userdata.json / play_failed.json / duration_cache.json |
+| 数据持久化 | JSON 文件与内存缓存 | userdata.json 采用临时文件替换；时长 / 失败记录独立 JSON，流派缓存为内存 Map |
+| 实时通信 | Node.js `ws` + 浏览器 WebSocket | 手机端一起听操作广播、房间快照、host 校准 |
+| 外部 Cookie 数据库读取 | sql.js（SQLite WASM） | 读取汽水客户端 Cookies；不用于用户设置持久化 |
 
 ### 3.2 主进程模块装配
 
@@ -239,11 +274,12 @@ main.js
 
 #### music:// 协议
 
-自定义文件流协议，通过 Node.js `fs` 模块读取本地文件并返回流式响应。设计目的：
+`main.js` 在 `app.whenReady()` 前注册 `music` 的 `stream / supportFetchAPI / bypassCSP / corsEnabled` 特权，再通过 `protocol.handle('music', handler)` 返回 `Response(Buffer)`。文件读取走 Node.js `fs.promises`。实现目的和行为：
 
 - 绕过 Chromium `file:///` 协议在 Windows 平台的 MAX_PATH 260 字符路径长度限制
-- 支持 HTTP Range 请求，实现音频缓冲与任意位置跳转
+- 无 Range 时异步读取整个文件；单段 `bytes=start-end` 请求只读取所需区间，返回 206、`Content-Range` 与 `Accept-Ranges`，越界返回 416
 - MIME 类型根据文件扩展名自动映射
+- 当前 Range 正则处理单段区间；后缀范围 `bytes=-N` 未按末尾 N 字节实现，多段范围未实现 multipart，因此不能视为完整 RFC Range 实现。全文件响应占用与文件大小相关的内存
 
 #### wuu:// 协议
 
@@ -262,10 +298,10 @@ wuu://<base64url(JSON{v, f, b, j, jc, r, dt, d, p})>
 | jc | 兼容版本列表 |
 | r | 保留数据 |
 | dt | 地址类型（dIP / ddomain） |
-| d | 加密地址数据（AES-256-GCM + XOR 偏移） |
-| p | 加密端口（格式头 + 字母混淆，端口号不以明文数字呈现） |
+| d | `{id,k,h}` 的 AES-256-GCM 密文封装 `{iv,ct,tag}`，密文额外与 IV 循环 XOR |
+| p | 端口混淆（格式头 + 十六进制字母映射），未加密且不受 GCM tag 认证 |
 
-安全设计：密钥与链接分离传输。接收方通过 `wuu://` 链接获取加密后的地址与端口信息，需配合独立获取的访问密钥（accessKey）才能通过 `http://<host>:<port>/playlist/<id>?k=<accessKey>` 拉取歌单数据。
+实现边界：AES 密钥由 `SHA-256(用户密钥)` 派生，使用 12 字节随机 IV；仅 `d` 内的 `{id,k,h}` 受 GCM 认证，外层版本、地址类型与端口没有作为 AAD 绑定。接收方用独立获取的 Wuu 密钥解出 `accessKey`，再通过 `http://<host>:<port>/playlist/<id>?k=<accessKey>` 拉取明文歌单。链接加密不等于 HTTP 传输加密。`.crt` v2 使用 `BEGIN WUU KEY` / `END WUU KEY` 标记，`Key / Link / Name` 为 Base64 文本，读取兼容旧版二进制封装。
 
 ### 3.4 渲染层架构
 
@@ -286,14 +322,19 @@ desktop_UI/
   │   ├── services/
   │   │   ├── player.ts       持久播放器、队列、进度与桌面状态同步
   │   │   ├── audioFx.ts      9 个预设、10 段 EQ 与自定义方案
-  │   │   └── lyrics.ts       行级 / 逐字歌词解析
+  │   │   ├── lyrics.ts       行级 / 逐字歌词解析
+  │   │   ├── discovery.ts    新曲候选去重、试听队列与保存
+  │   │   ├── listeningHistory.ts  累计 / 近期聆听记录
+  │   │   └── listeningStyles.ts   曲风标签与时长分布统计
   │   └── styles.css          全局样式
   ├── vite.config.ts          桌面开发端口 5173，构建输出 dist/
   ├── tsconfig.json           TypeScript 严格检查
   └── package.json
 ```
 
-主窗口与桌面歌词窗口通过 `window/renderer-entry.js` 加载同一套 React 构建产物；开发模式使用 Vite，生产模式只加载 `desktop_UI/dist/`。`renderer/` 保留为迁移前历史源码，不再作为生产入口，也不再通过注入 HTML 片段或全局脚本构建界面。
+主窗口与桌面歌词窗口通过 `window/renderer-entry.js` 选择入口。默认 `modern` 模式加载同一套 React 构建产物；未打包且设置 `WUU_RENDERER_URL` 时使用 Vite。`classic` 模式加载 `renderer/index.html` 或 `renderer/desktop-lyric.html`，开发时也直接加载这些文件。`package.json` 同时包含两套资源。
+
+`LibraryView.tsx` 已实现 64px 固定行高的虚拟列表，按视口上下各扩展 5 行，只渲染当前切片。`store.ts` 并行请求歌曲与用户数据，用户数据等待期间也可先发布基础歌曲；播放器在初始化时绑定事件，后台流派更新批量合并，时长通过 IPC 后补。这些是现有实现，并非待开发的路线目标。
 
 桌面端通过 Electron IPC 访问本地业务，手机端通过 HTTP API 访问服务。两端使用不同组件框架，可共享与界面无关的类型、协议和纯逻辑；React 与 Vue 组件分别维护。
 
@@ -313,7 +354,9 @@ mobile_UI/
   │   │   ├── Player.vue     播放器组件
   │   │   └── SongList.vue   歌曲列表
   │   ├── composables/
-  │   │   └── usePlayer.js   播放器组合式函数（含 MediaSession 集成）
+  │   │   ├── usePlayer.js   播放器组合式函数（含 MediaSession 集成）
+  │   │   ├── useAudioFx.js  手机独立 EQ / 空间音效与桌面命名方案读取
+  │   │   └── useListenTogether.js  WebSocket 一起听、序号校验与进度校准
   │   └── styles/
   │       └── main.css       全局样式
   ├── vite.config.js         Vite 配置
@@ -330,10 +373,10 @@ mobile_UI/
 
 **关键技术点**：
 
-- **M/S 立体声加宽**：使用 `ChannelSplitter` + `ChannelMerger` 将立体声拆分为 Mid（L+R）与 Side（L−R）通道，通过控制 Side 通道增益实现声场宽度调节。宽度 = 1 时输出与输入完全一致，无染色。
+- **M/S 立体声加宽**：先将单声道上混为两个通道，再计算 `M=(L+R)/2`、`S=(L−R)/2`，输出 `L'=M+wS`、`R'=M−wS`；宽度 1 时 M/S 部分恢复原左右声道。其他滤波节点仍在链中。
 - **环绕声像摆动**：`StereoPanner` 节点配合低频 LFO（`OscillatorNode`，0.05-0.08Hz）实现声像缓慢左右摆动，模拟 360 度环绕效果。
-- **程序生成混响 IR**：`AudioEffects` 构造函数生成 1.9 秒衰减的立体声噪声 Impulse Response，无需外部音频文件，Convolver 节点加载后实现板式混响效果。
-- **平滑参数过渡**：所有参数切换使用 `setTargetAtTime(value, currentTime, 0.03)` 实现 30ms 指数过渡，避免预设切换时的爆音。
+- **程序生成混响 IR**：`AudioEffects` 构造函数生成双通道 1.9 秒均匀随机噪声，振幅按 `(1-i/length)^2.6` 衰减；干声直达输出、湿声经 Convolver 与 wetGain 叠加。它是程序生成 IR，并非特定场所的实测声学响应。
+- **平滑参数过渡**：增益、频率、Q、宽度、LFO 与湿声参数使用 `setTargetAtTime(value, currentTime, 0.03)`，0.03 秒为指数趋近的时间常数，并非 30ms 内完成切换。
 - **构建失败回退**：效果链构建异常时自动回退为 `mediaSource` 直连 `gainNode`，不影响基础播放。
 
 ### 4.2 播放失败修复链
@@ -389,21 +432,22 @@ mobile_UI/
 
 `cover/color.js` 实现的封面主色调提取：
 
-1. 读取封面图片像素数据（JPG 使用 jpeg-js 解码避免色彩空间问题）
-2. 将 RGBA 像素按 HSL 色相分为 13 个桶（每个桶覆盖约 27.7 度色相范围）
-3. 计算每个桶的相对权重（像素数量 × 亮度因子）
-4. 降序排列，取权重最高的桶作为主色调
-5. 排除低占比颜色干扰（如封面角落 0.52% 覆盖率的红色签名）
+1. JPG 优先由 `jpeg-js` 解码并采样到 48×48 RGBA；其他格式由 `nativeImage` 缩放，随后将 BGRA 转为 RGBA
+2. 忽略 alpha <128 和亮度 `(max+min)/2` <8 或 >248 的像素
+3. 饱和度 <0.1 进入灰度桶；其余进入 12 个各 30° 的色相桶，总计 13 桶
+4. 每桶累加 RGB 并求平均，灰度桶将三个通道统一为平均灰值，消除偏色
+5. `weight=count/有效像素总数`，按占比降序返回所有非空桶的 `{r,g,b,weight}`，供界面选择主色与生成渐变；没有亮度权重或低占比桶删除步骤
 
-### 4.6 AAC ADTS 帧时长解析
+### 4.6 音频时长解析与后台补齐
 
-`audio/duration.js` 实现的真实时长解析：
+`audio/duration.js` 的 `getAACDuration()` 是多格式解析入口，并非仅处理 AAC：
 
-1. 识别 AAC 帧头同步字（0xFFF），统计帧数
-2. 从帧头推导采样率索引
-3. 时长 = `frameCount × 1024 / sampleRate`
-4. 小文件（<10MB）完整遍历，大文件分段采样（每 1MB 读取一段）
-5. 当 `audio.duration` 与帧解析时长偏差 >30 秒时信任帧解析值（Chromium 估算可能严重虚高）
+1. 优先按 `fLaC` 魔数识别 FLAC，从 STREAMINFO 提取 20 位采样率与 36 位总采样数，时长 = `totalSamples/sampleRate`；不只依赖文件扩展名
+2. MP3 跳过 ID3v2 标签，按 MPEG 版本、Layer、比特率、采样率及 padding 计算帧长，累加各帧样本数
+3. AAC ADTS 从同步字、采样率索引、13 位帧长识别帧；≤10MiB 文件完整遍历，按当前实现每帧 1024 样本计算
+4. >10MiB AAC 读取前 / 中 / 后各 64KiB，用采样帧平均字节数估算整文件帧数；可变码率、非音频头尾数据或损坏帧会影响估算
+5. 桌面基础扫描先使用 `info.json.duration`（毫秒转秒）和缓存；300ms 后启动后台解析，每首通过 `setImmediate` 让出事件循环，每 10 首及完成时写缓存，通过 `duration-update` 补齐界面。单首解析内部仍有同步读取，不是 Worker
+6. React 播放器对本地歌曲优先使用有效 `realDuration`，再回退到浏览器解码时长；seek 还按解码时长限制边界，不采用“偏差 >30 秒才信任解析值”的规则
 
 ### 4.7 试听缓存复用
 
@@ -427,13 +471,15 @@ mobile_UI/
 
 ## 五、IPC API 参考
 
-渲染层通过 `preload.js` 的 `contextBridge` 与主进程通信，无法直接访问 Node.js API。
+桌面通过 `preload.js` 的 `contextBridge` 与主进程通信，React 业务服务经 `api.ts` 封装 IPC 与事件取消订阅。主窗口与桌面歌词窗口配置 `contextIsolation: true`、`nodeIntegration: false`；主窗口还配置 `webSecurity: false`，相关访问边界见 [技术架构与实现详解](docs/TECHNICAL_ARCHITECTURE.md)。
 
 ### 5.1 musicAPI — 本地音乐管理
 
 | 方法 | 说明 |
 |------|------|
-| `getSongs()` | 获取本地歌曲列表（扫描 output/ 目录） |
+| `getSongs()` | 同步扫描 output/ 返回基础列表；时长 / 流派随后通过事件补齐 |
+| `onDurationUpdate(cb)` | 订阅后台时长更新；返回取消订阅函数 |
+| `onSongMetadataUpdate(cb)` | 订阅按 audioPath 标识的流派补齐；返回取消订阅函数 |
 | `getLyrics(lrcPath)` | 读取歌词文件 |
 | `getUserData()` | 读取 userdata.json |
 | `saveUserData(data)` | 异步保存用户数据 |
@@ -497,7 +543,7 @@ mobile_UI/
 
 | 平台 | 命名空间 | 特色方法 |
 |------|----------|----------|
-| 网易云音乐 | `neteaseAPI` | `qrKey/qrCreate/qrCheck`、`cookieLogin` |
+| 网易云音乐 | `neteaseAPI` | `qrKey/qrCreate/qrCheck`、`cookieLogin`、`discover`（公开歌单候选） |
 | 酷狗音乐 | `kugouAPI` | `captchaSent/loginCellphone`（手机号验证码） |
 | 汽水音乐 | `qishuiAPI` | `oneclickLogin`、`fileLogin`（凭证文件） |
 
@@ -534,7 +580,7 @@ mobile_UI/
 | 网易云音乐 | 内嵌 NeteaseCloudMusicApi | 开源 API 服务，本地运行 |
 | 酷狗音乐 | 内嵌 kugoumusicapi | 开源 API 库，本地运行 |
 | 多平台分享链接 | parsers/ 注册中心 | 支持汽水/网易云/QQ/酷我/咪咕/B站/5sing等 |
-| 免费听音乐 | music-dl 本地服务 | 第三方引擎，仅监听 127.0.0.1 |
+| 免费听音乐 | music-dl 本地服务 | 第三方引擎，IPC 通过 127.0.0.1:17324 访问 |
 
 ### 6.2 歌词数据来源
 
@@ -601,7 +647,7 @@ npm run build
 npm run build:dir
 ```
 
-两个命令均先构建 `desktop_UI/dist/` 与 `mobile_UI/dist/`，再使用 electron-builder 生成 Windows NSIS 安装包或免安装目录版，输出目录为根目录 `dist/`。打包桌面入口只包含 React 构建产物，迁移前的 `renderer/` 不纳入生产入口。构建配置详见 `package.json` 中的 `build` 字段。
+两个命令均先构建 `desktop_UI/dist/` 与 `mobile_UI/dist/`，再使用 electron-builder 生成 Windows NSIS 安装包或免安装目录版，输出目录为根目录 `dist/`。安装包同时纳入 React 构建产物和 `renderer/` 经典界面源码，运行时根据 `interfaceMode` 选择入口。构建配置详见 `package.json` 中的 `build` 字段。
 
 **asarUnpack 配置**：`parsers/qishui-decrypt/native/**` 需要解包到 `app.asar.unpacked`，因为 Node.js 无法从 asar 内加载原生 `.node` 模块。
 
@@ -627,8 +673,14 @@ npm run build:mobile
 | `npm run build` | 构建两端资源并生成 Windows NSIS 安装包 |
 | `npm run build:dir` | 构建两端资源并生成免安装目录版 |
 | `npm run typecheck` | 检查桌面 TypeScript 类型 |
-| `npm test` | 运行桌面 Vitest 测试 |
+| `npm test` | 依次运行桌面 Vitest、移动端测试、基础扫描 / 启动测试、一起听状态测试 |
+| `npm run test:mobile` | 移动端单元测试 |
+| `npm run test:scanner` | Node.js test runner 验证基础扫描与后台补齐 |
+| `npm run test:together` | 离线回归生产房间消息处理、欢迎快照及客户端状态应用，使用模拟 socket |
 | `npm run test:desktop` | 使用 fixture 运行 Playwright Electron smoke 测试 |
+| `npm run test:startup` | 使用隔离 fixture 验证分阶段启动与早期播放 |
+| `npm run test:mobile-ui` | 浏览器验证移动端歌词交互 |
+| `npm run test:visual` | 桌面视觉验证与截图 |
 
 ### 7.7 验证桌面重构
 
@@ -657,8 +709,9 @@ Wuu-main/
 │   ├── storage.js                配置目录持久化（userdata / play_failed / duration_cache）
 │   └── network.js                网络工具（sanitizeFileName 等）
 ├── audio/                        音频层
-│   ├── scanner.js                文件扫描（worker_threads）
-│   ├── duration.js               AAC ADTS 帧时长解析 + FLAC VORBIS_COMMENT 读取
+│   ├── scanner.js                桌面同步基础扫描 + 后台补齐调度
+│   ├── duration.js               AAC / FLAC / MP3 时长解析 + FLAC VORBIS_COMMENT 读取
+│   ├── genres.js                 music-metadata 标签流派读取、缓存与后台补齐
 │   └── verify.js                 文件完整性校验
 ├── soda/                         Soda 音频解密
 │   └── decrypt.js                AES-CTR + MP4 box 原语
@@ -667,7 +720,7 @@ Wuu-main/
 ├── window/                       窗口管理
 │   ├── main-window.js            主窗口
 │   ├── desktop-lyric.js          桌面歌词窗口（skipTaskbar + 锁定态交互）
-│   └── renderer-entry.js         React 开发 / 生产窗口入口
+│   └── renderer-entry.js         modern React / classic HTML 窗口入口选择
 ├── download/
 │   └── index.js                  在线解析下载
 ├── repair/
@@ -688,7 +741,8 @@ Wuu-main/
 │   └── ipc.js                    IPC 处理
 ├── server/
 │   ├── index.js                  本地 HTTP 服务器（歌单分享 + accessKey 校验）
-│   └── scanner-worker.js         文件扫描 Worker 线程
+│   ├── scanner-worker.js         HTTP 歌库扫描 Worker 线程
+│   └── together-state.js         一起听房间欢迎快照状态合并
 ├── playlist/
 │   └── share.js                  wuu:// 协议编码/解码与分享管理
 ├── parsers/                      多平台解析器
@@ -708,7 +762,7 @@ Wuu-main/
 │   ├── dist/                     生产桌面与歌词窗口构建产物
 │   ├── package.json
 │   └── vite.config.ts
-├── renderer/                     迁移前历史源码，保留参考，不作为生产入口
+├── renderer/                     可切换的经典桌面 / 歌词界面，同样纳入打包
 ├── mobile_UI/                    移动端 Web UI（Vue 3 + Vite）
 │   ├── src/
 │   ├── package.json
@@ -721,7 +775,9 @@ Wuu-main/
 │   ├── smoke-main.cjs            隔离 fixture 数据与 IPC
 │   └── patch-kugoumusicapi.js     依赖补丁脚本
 ├── docs/
-│   └── REACT_MIGRATION.md         迁移范围、Git 备份与恢复说明
+│   ├── TECHNICAL_ARCHITECTURE.md  技术模块、算法、协议与实现边界
+│   ├── REACT_MIGRATION.md         迁移范围、Git 备份与恢复说明
+│   └── UI_DESIGN.md               桌面视觉规范与验证方式
 └── tools/
     └── netease-api/              内嵌 NeteaseCloudMusicApi
 ```
@@ -736,7 +792,7 @@ Wuu-main/
 |------|------|------|
 | 本地音乐管理 | 稳定 | 核心功能已完成，支持多格式扫描与播放 |
 | Web Audio 音效 | 稳定 | 9 预设 + 10 段自定义 EQ + 方案保存 |
-| 桌面端渲染层 | React 重构完成 | React 19 + TypeScript 5.9 + Vite 7 + Zustand 5；主界面与桌面歌词均使用 React |
+| 桌面端渲染层 | React 默认入口 | React 19 + TypeScript 5.9 + Vite 7 + Zustand 5；经典 renderer 可切换并随包分发 |
 | 音频解密 | 稳定 | Soda 格式（AES-CTR）解密已实现 |
 | 播放失败处理 | 稳定 | 自动跳转 + 上报修复中心 + 删除/修复闭环 |
 | 桌面歌词 | 稳定 | 锁定态交互 + skipTaskbar + 跑马灯 |
@@ -744,21 +800,25 @@ Wuu-main/
 | 在线解析下载 | 维护中 | 依赖第三方平台接口，需持续跟进接口变更 |
 | 歌词系统 | 稳定 | 逐字歌词解析，多级回退获取策略 |
 | 歌单分享 | 稳定 | wuu:// 加密协议 + HTTP 服务器 + 访问控制 |
+| 首页新曲发现 | 已实现 | 网易云公开歌单候选、归一化去重、懒加载试听队列与完整音频保存检查 |
+| 聆听 / 曲风统计 | 已实现 | 累计 / 90 天日历记录、近 7 / 30 天时长分布、手动 / 内嵌曲风标签 |
 | 移动端 Web UI | 开发中 | Vue 3 + Vite 实现，为网页应用移植，未发布原生应用 |
-| 整体性能 | 待优化 | 大规模歌单渲染、启动速度等模块存在优化空间 |
+| 移动端音效 | 已实现 | 独立 Web Audio 链、localStorage 自定义参数、读取桌面命名方案 |
+| 移动端一起听 | 已实现 | WebSocket 单房间、seq 去重、host 切歌 / 心跳、欢迎快照与进度校准 |
+| 歌库渲染与启动 | 已有优化 | 64px 虚拟列表、并行加载基础歌曲 / 用户数据、后台时长 / 流派补齐；继续测量大歌库瓶颈 |
 
 ### 9.2 路线规划
 
 **短期目标：**
 
 - React 桌面完善：持续覆盖导入、解析、修复与分享的真实场景，补充关键回归验证，完善交互与可访问性
-- 性能优化：大规模歌单渲染采用虚拟滚动与分页加载；歌曲扫描引入增量扫描机制；音频缓冲与预加载策略优化
+- 性能优化：在现有虚拟列表与分阶段启动基础上测量同步目录扫描、单首时长解析和元数据缓存开销，再评估增量扫描、音频缓冲与预加载策略
 - 移动端完善：补充功能模块，优化移动端交互体验
 
 **中长期目标：**
 
 - 类型与逻辑共享：桌面 TypeScript 已落地，逐步完善 IPC、HTTP 协议的类型定义，并提取桌面与手机端可共享的纯逻辑
-- 数据存储优化：当歌库规模增长到 JSON 性能瓶颈时，考虑迁移到 SQLite（sql.js 已集成）
+- 数据存储优化：当歌库规模增长到 JSON 性能瓶颈时评估数据库迁移；当前 sql.js 仅用于读取汽水客户端 Cookies，不是现有用户设置数据库
 - 原生移动应用：基于 Tauri 或 React Native 构建真正的跨平台原生移动应用
 - 云同步能力：支持歌单与收藏的端到端加密云端同步
 - 插件系统：支持第三方解析器以插件形式动态加载，无需修改核心代码
@@ -774,9 +834,9 @@ Wuu-main/
 
 - 当前移动端为网页应用移植，并非原生移动应用
 - 未发布至 App Store、Google Play 等应用商店
-- 可作为 PWA（渐进式 Web 应用）安装至移动设备主屏
+- 当前没有 PWA manifest 或 service worker 配置，浏览器可提供主屏快捷方式，但仓库未实现 PWA 安装与离线缓存
 - 集成 MediaSession API，安卓锁屏/通知栏可显示媒体控制
-- 播放状态与桌面端实时同步（歌曲、进度、播放状态）
+- 首次进入可读取桌面歌曲与进度；手机一起听另用 WebSocket 同步控制与位置
 - 未来计划基于 Tauri 或 React Native 构建真正的原生移动应用
 
 ---
@@ -789,12 +849,13 @@ Wuu-main/
 |------|----------|
 | Web Audio 音效链 | 基于 BiquadFilter（highpass/peaking/lowshelf/highshelf）+ ChannelSplitter/Merger（M/S 加宽）+ StereoPanner + OscillatorNode（LFO）+ Convolver（程序生成 IR）构建的完整效果链 |
 | Soda 音频解密 | 基于 AES-CTR 加密模式与 MP4 ISO Base Media File Format box 结构原语自主实现的解密算法，支持从加密的 M4A 容器中还原原始音频流 |
-| music:// 协议 | 基于 Electron protocol.registerStreamProtocol 实现的自定义文件流协议，绕过 Chromium file:/// 协议的 MAX_PATH 260 限制，支持 HTTP Range 请求 |
-| wuu:// 协议 | 歌单分享加密协议，采用 AES-256-GCM 对地址与端口进行加密，辅以 XOR 偏移与字母混淆，密钥与链接分离传输 |
-| 封面色彩提取 | 从封面图片像素数据中按 HSL 色相分 13 桶提取主色调，排除低占比颜色干扰，用于播放器界面自适应配色 |
+| music:// 协议 | Electron `protocol.handle` + Node.js 异步文件读取 + Buffer Response；单段 Range 分段读取与 206 / 416 响应 |
+| wuu:// 协议 | AES-256-GCM 保护 `{id,k,h}`，密文额外 XOR；端口独立混淆，外层字段未认证；自定义 WUU KEY 文件传递密钥 |
+| 封面色彩提取 | 48×48 RGBA 采样，12 个 30° 色相桶 + 1 灰度桶，按有效像素占比输出平均 RGB 与权重；nativeImage 分支将 BGRA 转为 RGBA |
 | 桌面歌词窗口 | 基于 BrowserWindow 的独立透明窗口，通过 setIgnoreMouseEvents 实现锁定状态下的鼠标穿透，悬停按钮区临时恢复交互，窗口位置持久化至配置文件 |
 | 播放失败修复链 | 播放器解码失败自动跳转 + IPC 上报 + play_failed.json 持久化 + 修复中心扫描合并 + 修复/删除自动清除记录的完整闭环 |
-| Worker 扫描线程 | 基于 Node.js worker_threads 的文件扫描线程，避免大规模文件系统操作阻塞 Electron 主进程 |
+| 歌库扫描与补齐 | 桌面 IPC 同步基础扫描 + setImmediate 后台补齐，HTTP 歌库使用 worker_threads + 10 分钟缓存，两条路径分工不同 |
+| 移动端一起听 | HTTP 音频流 + WebSocket 操作广播，单调 seq、host 仲裁、欢迎快照、指数退避重连及阈值进度校准 |
 | 签名请求机制 | 通过加载客户端原生签名模块生成 X-Helios/X-Medusa 签名头，恢复会员音质获取能力 |
 
 ### 11.2 集成开源项目
@@ -810,7 +871,9 @@ Wuu-main/
 | [NeteaseCloudMusicApi](https://github.com/Binaryify/NeteaseCloudMusicApi) | 网易云音乐 API 服务 | MIT |
 | [kugoumusicapi](https://github.com/MacroJson/kugoumusicapi) | 酷狗音乐 API 库 | MIT |
 | [jpeg-js](https://github.com/eugeneware/jpeg-js) | JPEG 图像解码（封面处理） | BSD-3-Clause |
-| [sql.js](https://github.com/sql-js/sql.js) | SQLite WASM 编译版（设置持久化） | MIT |
+| [sql.js](https://github.com/sql-js/sql.js) | SQLite WASM 编译版，读取汽水客户端 Cookies 数据库 | MIT |
+| [music-metadata](https://github.com/Borewit/music-metadata) | 音频内嵌标签与流派解析 | MIT |
+| [ws](https://github.com/websockets/ws) | 本地一起听 WebSocket 服务 | MIT |
 | [music-dl](https://github.com/guaguaguaxia/music-dl) | 多平台音乐搜索与下载引擎 | MIT |
 
 ---
@@ -908,13 +971,13 @@ Wuu-main/
 
 | 路径 | 说明 |
 |------|------|
-| `config/userdata.json` | 用户数据（喜欢列表、不推荐列表、歌单、播放统计、播放进度、应用设置含音效配置） |
+| `config/userdata.json` | 用户数据（喜欢 / 不推荐、收藏歌单、累计 / 近期播放统计、genreOverrides、播放进度、界面 / 音效 / 网络设置） |
 | `config/play_failed.json` | 播放失败记录（修复中心扫描合并用） |
-| `config/duration_cache.json` | 音频时长缓存（避免重复解析 AAC ADTS 帧） |
+| `config/duration_cache.json` | 音频时长缓存（AAC / FLAC / MP3，含文件修改时间） |
 | `config/free_music.json` | 免费听音乐专区数据（含免责声明接受状态） |
 | `config/kugou_config.json` | 酷狗音乐多账号配置 |
 | `config/qishui_config.json` | 汽水音乐多账号配置 |
+| `config/netease_config.json` | 网易云音乐多账号配置 |
 | `config/qishui_device.json` | 汽水音乐签名设备 ID 持久化 |
 | `config/shared/` | 已分享的歌单数据（含 accessKey） |
 | `output/` | 下载的歌曲目录（按"歌曲名 - 艺人"结构组织） |
-| `data/settings.db` | 设置数据库（SQLite） |
