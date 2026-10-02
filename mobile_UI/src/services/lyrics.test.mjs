@@ -66,16 +66,33 @@ test('word-timed credits are reconstructed before filtering and combined authors
   assert.deepEqual(lyrics.parseLyrics('[00:00]词 / 曲：共同作者\n[00:10]唯一'), [{ time: 10, text: '唯一' }]);
 });
 
-const source = readFileSync(new URL('../components/LyricsView.vue', import.meta.url), 'utf8');
-test('the actual Vue script and template compile with the new timing helpers', () => {
-  const { descriptor, errors } = parse(source);
-  assert.deepEqual(errors, []);
-  const script = compileScript(descriptor, { id: 'mobile-lyric-regression' });
-  const template = compileTemplate({ source: descriptor.template.content, filename: 'LyricsView.vue', id: 'mobile-lyric-regression', compilerOptions: { bindingMetadata: script.bindings } });
-  assert.deepEqual(template.errors, []);
+test('RAW groups finish at the latest declared phrase end, enhanced groups at the next timestamp and final LRC at the track end', () => {
+  const raw = lyrics.parseLyrics('[10000,3000]<0,200,0>长音\n[10000,5000]<0,200,0>Translation\n[20000,2000]<0,200,0>Next');
+  assert.equal(lyrics.lyricGroupFinished(raw, 0, 12, 90), false, 'the short word fill cannot end a sustained whole phrase');
+  assert.equal(lyrics.lyricGroupFinished(raw, 0, 14, 90), false, 'a translated phrase with a later real end keeps its timestamp group current');
+  assert.equal(lyrics.lyricGroupFinished(raw, 0, 15, 90), true, 'the group finishes before a later next lyric starts');
+  const enhanced = lyrics.parseLyrics('[00:10]你[00:10.50]好\n[00:20]Next');
+  assert.equal(lyrics.lyricGroupFinished(enhanced, 0, 19, 90), false, 'enhanced word fill does not imply a reliable phrase end');
+  assert.equal(lyrics.lyricGroupFinished(enhanced, 0, 20, 90), true);
+  const standard = lyrics.parseLyrics('[00:10]Last');
+  assert.equal(lyrics.lyricGroupFinished(standard, 0, 89, 90), false);
+  assert.equal(lyrics.lyricGroupFinished(standard, 0, 90, 90), true);
+  assert.equal(lyrics.lyricGroupFinished(standard, 0, 90, 0), false, 'unknown duration cannot invent a last-line end');
 });
 
-function mountFixture({ time = 25, paused = true, readyState = 2, storedSize, rowHeights = [] } = {}) {
+const source = readFileSync(new URL('../components/LyricsView.vue', import.meta.url), 'utf8');
+test('the actual Vue lyric and settings scripts and templates compile with shared preferences', () => {
+  for (const filename of ['LyricsView.vue', 'SettingsView.vue']) {
+    const input = readFileSync(new URL('../components/' + filename, import.meta.url), 'utf8');
+    const { descriptor, errors } = parse(input);
+    assert.deepEqual(errors, []);
+    const script = compileScript(descriptor, { id: 'mobile-lyric-regression' });
+    const template = compileTemplate({ source: descriptor.template.content, filename, id: 'mobile-lyric-regression', compilerOptions: { bindingMetadata: script.bindings } });
+    assert.deepEqual(template.errors, []);
+  }
+});
+
+function mountFixture({ time = 25, paused = true, readyState = 2, storedSize, storedCurrentSize, rowHeights = [] } = {}) {
   const frames = new Map(), mounted = [], unmounted = [], scrolls = [], seeks = [];
   let frameId = 0, wall = 0, observe;
   const audio = new EventTarget();
@@ -99,9 +116,16 @@ function mountFixture({ time = 25, paused = true, readyState = 2, storedSize, ro
   const document = Object.assign(new EventTarget(), { hidden: false });
   const window = Object.assign(new EventTarget(), { matchMedia: () => ({ matches: false }) });
   const values = new Map(storedSize === undefined ? [] : [[preferences.LYRIC_SIZE_KEY, storedSize]]);
+  if (storedCurrentSize !== undefined) values.set(preferences.CURRENT_LYRIC_SIZE_KEY, storedCurrentSize);
   const storage = { getItem: key => values.get(key) ?? null, setItem: (key, value) => values.set(key, value) };
   const size = vue.ref(preferences.readLyricSize(storage));
-  const settingPreferences = { lyricSize: vue.readonly(size), setLyricSize(value) { size.value = preferences.normalizeLyricSize(value); preferences.saveLyricSize(size.value, storage); } };
+  const activeSize = vue.ref(preferences.readCurrentLyricSize(storage));
+  const setCurrentLyricSize = value => { activeSize.value = preferences.normalizeCurrentLyricSize(value, size.value); preferences.saveCurrentLyricSize(activeSize.value, size.value, storage); };
+  const settingPreferences = { lyricSize: vue.readonly(size), currentLyricSize: vue.readonly(activeSize), setCurrentLyricSize,
+    setLyricSize(value) {
+      size.value = preferences.normalizeLyricSize(value); preferences.saveLyricSize(size.value, storage);
+      if (activeSize.value < size.value) setCurrentLyricSize(size.value);
+    } };
   const context = vm.createContext({ ...vue, ...lyrics, ...preferences, console, document, window,
     useLyricPreferences: () => settingPreferences,
     usePlayer: () => player, defineEmits: () => () => {},
@@ -210,6 +234,45 @@ test('settings font updates persist immediately, reach the active lyric view and
   reopened.preferences.setLyricSize(100); await flush(); assert.equal(reopened.run('lyricSize.value'), 36);
   reopened.preferences.setLyricSize(-100); await flush(); assert.equal(reopened.run('lyricSize.value'), 16);
   reopened.unmount();
+});
+
+test('current font updates do not enlarge ordinary lyrics and remain independent across playback and reopening', async () => {
+  const fixture = mountFixture({ storedSize: '28', storedCurrentSize: '42', paused: false }); await flush();
+  assert.equal(fixture.run('lyricSize.value'), 28);
+  assert.equal(fixture.run('currentLyricSize.value'), 42);
+  fixture.preferences.setCurrentLyricSize(48); await flush();
+  assert.equal(fixture.run('lyricSize.value'), 28);
+  assert.equal(fixture.storage.getItem(preferences.LYRIC_SIZE_KEY), '28');
+  assert.equal(fixture.storage.getItem(preferences.CURRENT_LYRIC_SIZE_KEY), '48');
+  fixture.audio.currentTime = 31; fixture.step(); await flush();
+  assert.equal(fixture.run('lineClass(2)'), 'sung', 'the completed line leaves the class carrying the current font');
+  assert.equal(fixture.run('lineClass(3)'), 'cur');
+  fixture.run('onWheel()'); const count = fixture.scrolls.length;
+  fixture.preferences.setCurrentLyricSize(52); await flush();
+  assert.equal(fixture.scrolls.length, count, 'the independent current font respects manual browsing');
+  const storedSize = fixture.storage.getItem(preferences.LYRIC_SIZE_KEY), storedCurrentSize = fixture.storage.getItem(preferences.CURRENT_LYRIC_SIZE_KEY);
+  fixture.unmount();
+  const reopened = mountFixture({ storedSize, storedCurrentSize }); await flush();
+  assert.equal(reopened.run('lyricSize.value'), 28); assert.equal(reopened.run('currentLyricSize.value'), 52);
+  reopened.unmount();
+});
+
+test('RAW gap and final track end restore ordinary lyrics while backward seeking restores the current group', async () => {
+  const fixture = mountFixture({ time: 12, paused: false });
+  fixture.player.lyricText.value = '[10000,3000]<0,200,0>原文\n[10000,5000]<0,200,0>Translation\n[20000,2000]<0,200,0>Next';
+  await flush();
+  assert.equal(fixture.run('lineClass(0)'), 'cur'); assert.equal(fixture.run('lineClass(1)'), 'cur');
+  fixture.audio.currentTime = 15; fixture.step(); await flush();
+  assert.equal(fixture.run('lineClass(0)'), 'sung'); assert.equal(fixture.run('lineClass(1)'), 'sung');
+  assert.equal(fixture.run('lineClass(2)'), 'unsung');
+  fixture.audio.currentTime = 12; fixture.audio.dispatchEvent(new Event('seeked')); await flush();
+  assert.equal(fixture.run('lineClass(0)'), 'cur'); assert.equal(fixture.run('lineClass(1)'), 'cur');
+  fixture.player.lyricText.value = '[00:20]Last'; fixture.audio.currentTime = 120;
+  fixture.audio.ended = true; fixture.audio.paused = true; fixture.audio.dispatchEvent(new Event('ended')); await flush();
+  assert.equal(fixture.run('lineClass(0)'), 'sung'); assert.equal(fixture.frames.size, 0);
+  fixture.audio.ended = false; fixture.audio.currentTime = 25; fixture.audio.dispatchEvent(new Event('seeked')); await flush();
+  assert.equal(fixture.run('lineClass(0)'), 'cur');
+  fixture.unmount();
 });
 
 test('very tall lyrics start at their opening words and remain browsable during settings changes', async () => {

@@ -9,7 +9,7 @@ export const defaultSettings: Settings = {
   interfaceMode: 'modern',
   sidebarCollapsed: true, sidebarWidth: SIDEBAR_DEFAULT_WIDTH,
   playMode: 1, volume: 1, fadePause: true, glassOpacity: 0.72, discCover: false, colorIntensity: 0.85,
-  lyricDone: 0.9, lyricWait: 0.55, lyricSize: 20, themeFollowCover: false,
+  lyricDone: 0.9, lyricWait: 0.55, lyricSize: 20, currentLyricSize: 28, themeFollowCover: false,
   progressColorEnabled: false, progressColor: '#fb7299', progressColor2: '#ff5e8a',
   simulateLrcProgress: false, showFloatListBtn: true, artistGroupMode: 'bucket',
   desktopLyricPersist: false, desktopLyricBounds: null, desktopLyricLocked: false,
@@ -99,6 +99,8 @@ export const useAppStore = create<AppState>((set, get) => ({
         let collections: Collection[] = Array.isArray(userData?.collections) ? userData.collections.filter((c: any) => c?.id && c?.name).map((c: any) => ({ ...c, songs: Array.isArray(c.songs) ? c.songs : [] })) : [];
         if (!collections.length && Object.keys(likes).length) collections = [{ id: 'migrated-liked', name: '我喜欢的音乐', songs: Object.keys(likes), createdAt: Date.now() }];
         pendingLocalLikesMigration = migratedLocalLikes;
+        const lyricSize = finiteSetting(userData?.settings?.lyricSize, defaultSettings.lyricSize, 12, 36);
+        const legacyCurrentSize = userData?.settings ? Math.round(lyricSize * 1.24) : defaultSettings.currentLyricSize;
         set({ songs: Array.isArray(songs) ? songs : [], collections, likeTimes: likes,
           dislikes: pathTimes(userData?.dislikes), stats: Object.fromEntries(Object.entries(userData?.stats || {}).map(([path,entry]) => [path,normalizeSongStats(entry)])), progress: userData?.progress || {},
           actualDuration: userData?.actualDuration || {}, lastSession: userData?.lastSession || null,
@@ -109,6 +111,8 @@ export const useAppStore = create<AppState>((set, get) => ({
             sidebarWidth: normalizeSidebarWidth(userData?.settings?.sidebarWidth),
             glassOpacity: finiteSetting(userData?.settings?.glassOpacity, defaultSettings.glassOpacity, .12, 1),
             colorIntensity: finiteSetting(userData?.settings?.colorIntensity, defaultSettings.colorIntensity, 0, 1),
+            lyricSize,
+            currentLyricSize: finiteSetting(userData?.settings?.currentLyricSize, legacyCurrentSize, lyricSize, 60),
           }, hydrated: true, loading: false, error: '',
         });
         if (migratedLocalLikes) await persistNow();
@@ -133,7 +137,19 @@ export const useAppStore = create<AppState>((set, get) => ({
       return { genreOverrides };
     }); scheduleSave();
   },
-  setSettings: patch => { set(state => ({ settings: { ...state.settings, ...patch } })); scheduleSave(); },
+  setSettings: patch => {
+    set(state => {
+      const settings = { ...state.settings, ...patch };
+      if ('lyricSize' in patch || 'currentLyricSize' in patch) {
+        const previousSize = finiteSetting(state.settings.lyricSize, defaultSettings.lyricSize, 12, 36);
+        settings.lyricSize = finiteSetting(settings.lyricSize, previousSize, 12, 36);
+        const previousCurrent = finiteSetting(state.settings.currentLyricSize, defaultSettings.currentLyricSize, settings.lyricSize, 60);
+        settings.currentLyricSize = finiteSetting(settings.currentLyricSize, previousCurrent, settings.lyricSize, 60);
+      }
+      return { settings };
+    });
+    scheduleSave();
+  },
   createCollection: name => {
     const id = crypto.randomUUID();
     set(state => ({ collections: [...state.collections, { id, name, songs: [], createdAt: Date.now() }] }));

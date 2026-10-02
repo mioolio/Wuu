@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { useAppStore } from '../store';
 import { activeLyricIndex, hasLyricContent, lineText, lineTime, parseLyrics, type LyricLine } from '../services/lyrics';
 import { playerService, isVideo } from '../services/player';
+import { lyricGroupFinished } from '../services/lyricPresentation';
 import Icon from './Icon';
 import './lyrics-view.css';
 
@@ -32,6 +33,7 @@ export default function LyricsView() {
   const duration = useAppStore(state => state.player.duration);
   const settings = useAppStore(state => state.settings);
   const lyricSize = Number.isFinite(settings.lyricSize) ? Math.max(12, Math.min(36, settings.lyricSize)) : 20;
+  const currentLyricSize = Number.isFinite(settings.currentLyricSize) ? Math.max(lyricSize, Math.min(60, settings.currentLyricSize)) : Math.round(lyricSize * 1.24);
   const video = isVideo(song, preview);
   const songKey = preview?.url || song?.audioPath || '';
   const data = useMemo(() => parseLyrics(text, video), [text, video]);
@@ -45,12 +47,14 @@ export default function LyricsView() {
   const synced = data.raw || /\[\d{1,3}[.:]\d{1,2}(?:[.:]\d{1,3})?\]/.test(text);
   const hasLyrics = hasLyricContent(text);
   const [active, setActive] = useState(-1);
+  const [finished, setFinished] = useState(false);
   const [following, setFollowing] = useState(true);
   const [reducedMotion, setReducedMotion] = useState(() => window.matchMedia('(prefers-reduced-motion: reduce)').matches);
   const container = useRef<HTMLDivElement>(null);
   const lines = useRef<(HTMLButtonElement | null)[]>([]);
   const wordRefs = useRef<(HTMLSpanElement | null)[][]>([]);
   const activeRef = useRef(-1);
+  const finishedRef = useRef(false);
   const followingRef = useRef(true);
   const keyboardBrowsing = useRef(false);
   const pointerBrowsing = useRef(false);
@@ -124,10 +128,12 @@ export default function LyricsView() {
   useLayoutEffect(() => {
     clearResume();
     activeRef.current = -1;
+    finishedRef.current = false;
     followingRef.current = true;
     keyboardBrowsing.current = false;
     pointerBrowsing.current = false;
     setActive(-1);
+    setFinished(false);
     setFollowing(true);
     lines.current = lines.current.slice(0, words.length);
     wordRefs.current = wordRefs.current.slice(0, words.length);
@@ -146,6 +152,7 @@ export default function LyricsView() {
       frame = 0;
       const time = media.currentTime || 0;
       const index = activeLyricIndex(data.lines, time);
+      const groupFinished = lyricGroupFinished(data, index, time, duration);
       if (index !== activeRef.current) {
         const oldIndex = activeRef.current;
         for (let row = groupStart(data.lines, oldIndex); row <= oldIndex; row++) {
@@ -155,6 +162,10 @@ export default function LyricsView() {
         }
         activeRef.current = index;
         setActive(index);
+      }
+      if (groupFinished !== finishedRef.current) {
+        finishedRef.current = groupFinished;
+        setFinished(groupFinished);
       }
       const first = groupStart(data.lines, index);
       for (let row = first; row <= index; row++) words[row]?.forEach((word, wordIndex) => {
@@ -194,7 +205,7 @@ export default function LyricsView() {
       media.removeEventListener('seeked', seek);
       media.removeEventListener('timeupdate', update);
     };
-  }, [data, words, songKey, visible, synced, hasLyrics, centerLine]);
+  }, [data, words, songKey, visible, synced, hasLyrics, duration, centerLine]);
 
   useLayoutEffect(() => {
     const box = container.current;
@@ -216,7 +227,7 @@ export default function LyricsView() {
     });
     observer.observe(box);
     return () => observer.disconnect();
-  }, [active, words, songKey, visible, reducedMotion, settings.lyricSize, settings.interfaceMode, centerLine]);
+  }, [active, finished, words, songKey, visible, reducedMotion, settings.lyricSize, settings.currentLyricSize, settings.interfaceMode, centerLine]);
 
   useEffect(() => {
     if (!visible) clearResume();
@@ -236,6 +247,7 @@ export default function LyricsView() {
     '--lyric-active': settings.progressColorEnabled ? settings.progressColor : 'var(--cover-accent, var(--accent))',
     '--lyric-active-end': settings.progressColorEnabled ? settings.progressColor2 || settings.progressColor : 'var(--cover-accent-secondary, var(--cover-accent, var(--accent)))',
     '--lyric-size': `${lyricSize}px`,
+    '--lyric-current-size': `${currentLyricSize}px`,
     '--lyric-wait-color': '#fff',
   } as CSSProperties;
   const firstActive = groupStart(data.lines, active);
@@ -248,8 +260,8 @@ export default function LyricsView() {
         onFocusCapture={event => { if (event.target.matches(':focus-visible')) { keyboardBrowsing.current = true; pauseFollowing(true); } }}
         onBlurCapture={event => { if (!event.currentTarget.contains(event.relatedTarget)) { keyboardBrowsing.current = false; pauseFollowing(); } }}>
         <div className="lyrics-lines" key={songKey}>{data.lines.map((line, index) => {
-          const current = synced && active >= 0 && index >= firstActive && index <= active;
-          const passed = synced && firstActive >= 0 && index < firstActive;
+          const current = synced && !finished && active >= 0 && index >= firstActive && index <= active;
+          const passed = synced && firstActive >= 0 && (index < firstActive || (finished && index <= active));
           const stamp = `${Math.floor(lineTime(line) / 60)}:${String(Math.floor(lineTime(line) % 60)).padStart(2, '0')}`;
           return <button key={`${index}:${lineTime(line)}:${lineText(line)}`} type="button" ref={node => { lines.current[index] = node; }}
             className={`lyric-line ${current ? 'current' : ''} ${current && index > firstActive ? 'lyric-companion' : ''} ${passed && !current ? 'passed' : ''}`} aria-current={current ? 'true' : undefined}

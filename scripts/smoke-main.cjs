@@ -129,8 +129,32 @@ if (polishFixture) {
 }
 let serverRunning = false, accepted = false;
 const calls = [];
-global.__wuuSmoke = { songs,calls,polish,get data() { return userData; } };
+const discovery = { requests:[], previewRequests:[], saveRequests:[], failNext:false, previewFailure:false, previewDelayMs:0, delayMs:Number(process.env.WUU_DISCOVERY_DELAY) || 0 };
+global.__wuuSmoke = { songs,calls,polish,discovery,get data() { return userData; } };
 const handle = (channel, callback) => ipcMain.handle(channel, (event,...args) => { calls.push(channel); return callback(event,...args); });
+handle('netease-discover', async (_event, {page=0}={}) => {
+  discovery.requests.push(page);
+  if (discovery.delayMs) await new Promise(resolve=>setTimeout(resolve,discovery.delayMs));
+  if (discovery.failNext) { discovery.failNext=false; return {ok:false,message:'测试网络暂时不可用'}; }
+  const external = Array.from({length:4},(_,index)=>({id:`remote-${page}-${index}`,source:'netease',name:`新曲 ${page}-${index}`,artist:'发现艺人',cover:songs[index%songs.length]?.coverPath || artwork,duration:90000}));
+  // Matching local metadata deliberately appears in the provider response.
+  const existing=songs[0] ? [{id:'existing-remote',source:'netease',name:songs[0].songName,artist:songs[0].artist,cover:songs[0].coverPath}] : [];
+  return {ok:true,data:[...existing,...external],provider:'netease',catalogLabel:'网易云公开歌单'};
+});
+handle('netease-preview', async (_event,{songId:id,quality}) => {
+  discovery.previewRequests.push({id,quality});
+  if(discovery.previewDelayMs)await new Promise(resolve=>setTimeout(resolve,discovery.previewDelayMs));
+  if(discovery.previewFailure)return {ok:false,message:'测试曲目暂时无法试听'};
+  return {ok:true,data:{url:'music:///'+audioPath.replace(/\\/g,'/'),meta:{title:`新曲 ${String(id).replace('remote-','')}`,artist:'发现艺人',cover:artwork},lrcText:'[00:00.00]发现新的声音\n[00:05.00]喜欢再保存'}};
+});
+handle('netease-import-song', (_event,{songId:id,quality,songMeta:meta}) => {
+  discovery.saveRequests.push({id,quality});
+  if(!songs.some(song=>song.source==='netease'&&song.trackId===id)){
+    const importedPath=path.join(fixture,`${id}.wav`);fs.copyFileSync(audioPath,importedPath);
+    songs.push({id:songs.length,audioPath:importedPath,songName:meta?.name||id,artist:meta?.artist||'发现艺人',coverPath:meta?.cover||artwork,lrcPath:lyricPath,realDuration:seconds,source:'netease',trackId:id});
+  }
+  return {ok:true};
+});
 handle('get-songs', () => songs);
 handle('get-userdata', () => userData);
 handle('save-userdata', (_event,data) => { userData=data; });

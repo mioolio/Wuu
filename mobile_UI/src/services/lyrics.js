@@ -72,7 +72,7 @@ export function parseLyrics(text) {
     if (krc) {
       const chars = parseRawChars(krc[3]);
       const words = chars.map(char => char.text).join('');
-      if (chars.length && !readCredit(words)) result.push({ time: Number(krc[1]) / 1000 + offset, duration: Number(krc[2]) / 1000, text: words, chars });
+      if (chars.length && !readCredit(words)) result.push({ time: Number(krc[1]) / 1000 + offset, duration: Number(krc[2]) / 1000, text: words, chars, timing: 'raw' });
       continue;
     }
     const stamps = [...body.matchAll(stampPattern)];
@@ -88,7 +88,7 @@ export function parseLyrics(text) {
           chars.push({ offset: stampTime(stamp) + offset - start, dur: interval > 0 ? interval : 0.1, text: word });
         });
         const words = chars.map(char => char.text).join('');
-        if (chars.length && !readCredit(words)) result.push({ time: start, text: words, chars });
+        if (chars.length && !readCredit(words)) result.push({ time: start, text: words, chars, timing: 'enhanced' });
       } else {
         const last = stamps.at(-1);
         const words = body.slice(last.index + last[0].length).trim();
@@ -121,6 +121,25 @@ export function activeLyricIndex(lines, time) {
 
 export function isCurrentLyric(lines, index, active) {
   return active >= 0 && sameTime(lines[index]?.time, lines[active]?.time);
+}
+
+// RAW declares a whole-phrase duration; enhanced word offsets do not. A
+// timestamp group returns to ordinary size only after its latest real end.
+export function lyricGroupFinished(lines, active, time, duration) {
+  if (active < 0 || active >= lines.length || !Number.isFinite(time)) return false;
+  const start = lines[active].time;
+  if (!Number.isFinite(start)) return false;
+  let first = active, last = active;
+  while (first > 0 && sameTime(lines[first - 1].time, start)) first--;
+  while (last + 1 < lines.length && sameTime(lines[last + 1].time, start)) last++;
+  const fallbackEnd = lines[last + 1]?.time ?? (Number.isFinite(duration) && duration > start ? duration : Infinity);
+  let declaredEnd = -Infinity;
+  for (let index = first; index <= last; index++) {
+    const line = lines[index];
+    if (line.timing === 'raw' && Number.isFinite(line.duration) && line.duration > 0) declaredEnd = Math.max(declaredEnd, line.time + line.duration);
+  }
+  const end = Number.isFinite(declaredEnd) ? declaredEnd : fallbackEnd;
+  return Number.isFinite(end) && time >= end;
 }
 
 export function lyricCharProgress(char, lineTime, now) {

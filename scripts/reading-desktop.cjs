@@ -9,8 +9,9 @@ const root = path.join(__dirname,'..');
 const artifacts = path.join(root,'.test-artifacts','reading');
 fs.mkdirSync(artifacts,{recursive:true});
 const actionsOnly=process.argv.includes('--actions-only');
-const reportFile=path.join(artifacts,actionsOnly?'actions-report.json':'report.json');
-const report = {ok:false,actionsOnly,checks:[],screenshots:[],interactions:[],transitions:[],fonts:[],lyrics:[],layouts:[],songActions:[],trackChanges:[],focusFailures:[],consoleErrors:[],duplicateKeys:[],errors:[]};
+const playerStartup=process.argv.includes('--player-startup');
+const reportFile=path.join(artifacts,playerStartup?'player-startup-report.json':actionsOnly?'actions-report.json':'report.json');
+const report = {ok:false,actionsOnly,playerStartup,checks:[],screenshots:[],interactions:[],transitions:[],fonts:[],lyrics:[],layouts:[],songActions:[],trackChanges:[],focusFailures:[],consoleErrors:[],duplicateKeys:[],errors:[]};
 // Interior samples compare the actual decoded PNG with native transition snapshots.
 const sampleFractions = [[.12,.3],[.65,.16],[.85,.6],[.18,.7],[.65,.82]];
 
@@ -26,9 +27,10 @@ async function setInput(locator,value) {
   let app,page;
   try {
     app = await electron.launch({executablePath:require('electron'),args:[path.join(__dirname,'smoke-main.cjs')],cwd:root,
-      env:{...process.env,WUU_RENDERER_URL:'',WUU_SMOKE_PACKAGED:'0',WUU_VISUAL_FIXTURE:'',WUU_PLAYER_POLISH_FIXTURE:'1',WUU_COVER_STARTUP:'',WUU_REVIEW_PROFILE:'reading-regression'},timeout:30000});
+      env:{...process.env,WUU_RENDERER_URL:process.env.WUU_READING_RENDERER||'',WUU_SMOKE_PACKAGED:'0',WUU_VISUAL_FIXTURE:'',WUU_PLAYER_POLISH_FIXTURE:'1',WUU_COVER_STARTUP:'',WUU_REVIEW_PROFILE:process.env.WUU_READING_PROFILE||'reading-regression'},timeout:30000});
     report.electronStderr=[];
     app.process().stderr?.on('data',data=>{if(report.electronStderr.join('').length<20000)report.electronStderr.push(data.toString());});
+    await app.firstWindow();
     // Exercise the renderer's real bridge/IPC serialization while keeping share
     // generation inside this test process; no network listener or user files.
     await app.evaluate(({ipcMain,BrowserWindow})=>{
@@ -56,6 +58,14 @@ async function setInput(locator,value) {
     await page.emulateMedia({reducedMotion:'no-preference',colorScheme:'dark'});
     const nav=page.getByRole('navigation',{name:'主导航'});
     await nav.waitFor(); await page.getByRole('button',{name:'暂停',exact:true}).waitFor();
+    // Also support the same player-first route used by the playback suite.
+    // The default retains the immediate pause/navigation regression probe.
+    if(playerStartup){
+      await nav.getByRole('button',{name:'正在播放',exact:true}).click();
+      await page.locator('.player-page .record-info h1').waitFor();
+      await page.waitForFunction(()=>!document.documentElement.dataset.pageTransition);
+    }
+    report.startup=await page.evaluate(()=>({page:document.querySelector('.page-host:not([hidden])')?.dataset.page,ready:document.readyState,settingsHost:!!document.querySelector('[data-page="settings"]'),animations:document.getAnimations().map(animation=>({state:animation.playState,time:animation.currentTime,target:animation.effect?.target?.className})),images:[...document.images].map(image=>({src:image.src,complete:image.complete,naturalWidth:image.naturalWidth}))}));
     await page.getByRole('button',{name:'暂停',exact:true}).click();
     const settled=()=>page.waitForFunction(()=>!document.documentElement.dataset.pageTransition);
     const go=async name=>{await nav.getByRole('button',{name,exact:true}).click();await settled();await page.waitForTimeout(340);};
@@ -198,24 +208,28 @@ async function setInput(locator,value) {
     report.checks.push('14 next/previous/real-queue song changes keep exactly one current information/actions block and report no duplicate React keys');
 
     const seek=async time=>{await setInput(page.getByRole('slider',{name:'播放进度',exact:true}),time);await page.waitForFunction(time=>Math.abs(Number(document.querySelector('[aria-label="播放进度"]').value)-time)<.4,time);await page.waitForTimeout(250);};
-    const fontSlider=page.locator('.settings-page').getByRole('slider',{name:'歌词字号',exact:true});
+    const fontSlider=page.locator('.settings-page').getByRole('slider',{name:'当前歌词字号',exact:true});
+    const ordinaryFontSlider=page.locator('.settings-page input[aria-label="普通歌词字号"]');
     const fontSetting=async size=>{
       await go('设置');await page.getByRole('tab',{name:'歌词',exact:true}).click();await fontSlider.waitFor();
-      assert.equal(await fontSlider.getAttribute('min'),'12');assert.equal(await fontSlider.getAttribute('max'),'36');
+      assert.equal(await fontSlider.getAttribute('min'),'20');assert.equal(await fontSlider.getAttribute('max'),'60');
+      assert.equal(Number(await ordinaryFontSlider.inputValue()),20,'Changing the current-line font leaves the ordinary font unchanged');
       await setInput(fontSlider,size);assert.equal(Number(await fontSlider.inputValue()),size);
       await go('正在播放');
-      assert.equal(await page.locator('.player-page [aria-label="歌词字号"],.lyrics-panel .lyric-size-toolbar,.lyrics-panel input[type="range"]').count(),0,'Font controls exist only in Settings');
+      assert.equal(await page.locator('.player-page [aria-label="歌词字号"],.player-page [aria-label="当前歌词字号"],.player-page [aria-label="普通歌词字号"],.lyrics-panel .lyric-size-toolbar,.lyrics-panel input[type="range"]').count(),0,'Font controls exist only in Settings');
     };
     const lyricState=()=>page.locator('.lyrics-panel').evaluate(panel=>{
       const probe=document.createElement('span');panel.append(probe);probe.style.color='var(--lyric-active)';const activeColor=getComputedStyle(probe).color;probe.remove();
-      return {base:parseFloat(getComputedStyle(panel).getPropertyValue('--lyric-size')),activeColor,rows:[...panel.querySelectorAll('.lyric-line')].map(line=>{
+      return {base:parseFloat(getComputedStyle(panel).getPropertyValue('--lyric-size')),currentSize:parseFloat(getComputedStyle(panel).getPropertyValue('--lyric-current-size')),activeColor,rows:[...panel.querySelectorAll('.lyric-line')].map(line=>{
         const css=getComputedStyle(line),word=line.querySelector('.lyric-word'),wordStyle=getComputedStyle(word),mark=getComputedStyle(line,'::before');
         return {text:line.textContent,state:line.dataset.lyricState,font:parseFloat(css.fontSize),weight:Number(css.fontWeight),color:css.color,opacity:Number(css.opacity),
           wordColor:wordStyle.color,wordBackground:wordStyle.backgroundImage,progress:word.style.getPropertyValue('--word-progress'),markerContent:mark.content,markerWidth:parseFloat(mark.width)};})};
     });
-    for(const size of [12,26,36]) {
+    for(const size of [20,36,60]) {
       await fontSetting(size);await seek(21);const state=await lyricState();report.fonts.push({size,...state});
-      assert.equal(state.base,size);assert.ok(Math.abs(state.rows.find(row=>row.state==='current').font-size*1.24)<.1);
+      assert.equal(state.base,20);assert.equal(state.currentSize,size);
+      assert.equal(state.rows.find(row=>row.state==='current').font,size,'The current line uses the chosen absolute font size');
+      assert.ok(state.rows.filter(row=>row.state!=='current').every(row=>row.font===20),'Past and future lines keep their ordinary size');
     }
     await resize(800,500);await seek(31);await capture('lyrics-max-800x500');
     const layout=await page.locator('.lyrics-panel').evaluate(panel=>{
@@ -247,25 +261,78 @@ async function setInput(locator,value) {
     };
     await browseEndpoint('first');await browseEndpoint('last');
     await fontSetting(26);
-    for(let attempt=0;attempt<100;attempt++){if(await app.evaluate(()=>global.__wuuSmoke.data.settings.lyricSize===26))break;await page.waitForTimeout(50);}
-    assert.equal(await app.evaluate(()=>global.__wuuSmoke.data.settings.lyricSize),26,'The real save-userdata IPC persists the font preference');
+    for(let attempt=0;attempt<100;attempt++){if(await app.evaluate(()=>global.__wuuSmoke.data.settings.currentLyricSize===26))break;await page.waitForTimeout(50);}
+    assert.deepEqual(await app.evaluate(()=>({ordinary:global.__wuuSmoke.data.settings.lyricSize,current:global.__wuuSmoke.data.settings.currentLyricSize})),{ordinary:20,current:26},'The real save-userdata IPC persists the independent current font without overwriting the ordinary preference');
     await page.reload();await nav.waitFor();await go('设置');await page.getByRole('tab',{name:'歌词',exact:true}).click();await fontSlider.waitFor();assert.equal(Number(await fontSlider.inputValue()),26,'Reload restores the persisted lyric font in Settings');
-    await go('正在播放');assert.equal((await lyricState()).base,26,'The restored preference applies to the playback lyrics');
+    assert.equal(Number(await ordinaryFontSlider.inputValue()),20,'Reload retains the ordinary font in its advanced setting');
+    await go('正在播放');const restoredFont=await lyricState();assert.equal(restoredFont.base,20);assert.equal(restoredFont.currentSize,26,'The restored current-line preference applies to the playback lyrics');
     assert.equal(await page.locator('.lyrics-panel .lyric-size-toolbar,.lyrics-panel input[type="range"]').count(),0);
     if(await page.getByRole('button',{name:'暂停',exact:true}).count())await page.getByRole('button',{name:'暂停',exact:true}).click();
-    report.checks.push('Settings alone adjusts the lyric font from 12 to 36px, saves through IPC, and restores the same playback size after reload');
-    report.checks.push('at 800×500 and 36px, the entire long lyric wraps horizontally and its first and final words remain readable through vertical scrolling');
+    report.checks.push('Settings alone adjusts the absolute current-line font from 20 to 60px, leaves ordinary lines at 20px, and persists/restores currentLyricSize=26 independently through real IPC');
+    report.checks.push('at 800×500 and current size 60px, the entire long lyric wraps horizontally and its first and final words remain readable through vertical scrolling');
 
     for(const time of [21,6,21,1]) {
       await seek(time);const state=await lyricState();report.lyrics.push({time,...state});
       const current=state.rows.filter(row=>row.state==='current'),past=state.rows.filter(row=>row.state==='past'),future=state.rows.filter(row=>row.state==='future');
-      assert.equal(current.length,1);assert.equal(current[0].weight,750);assert.ok(current[0].font>state.base*1.2&&current[0].markerContent!=='none'&&current[0].markerWidth>0,'The current lyric has stronger type and a visible marker');
+      assert.equal(current.length,1);assert.equal(current[0].weight,750);assert.equal(current[0].font,26,'The current lyric uses the independently selected absolute size');
+      assert.ok(current[0].markerContent==='none'||current[0].markerContent==='normal','The current lyric has no side marker pseudo-element');
+      assert.ok([...past,...future].every(row=>row.font===20),'Completed and upcoming rows use the ordinary font size');
       assert.ok(past.every(row=>row.color===state.activeColor&&row.wordColor===state.activeColor&&row.wordBackground==='none'),'Already sung rows retain the cover color');
       assert.ok(future.length&&future.every(row=>row.color==='rgb(255, 255, 255)'&&row.wordColor==='rgb(255, 255, 255)'&&row.wordBackground==='none'&&!row.progress),'Future rows are plain white and clear stale word progress after seeking backwards');
       assert.equal(past.length,time>=20?3:time>=5?1:0,'Seeking backward recomputes the actual past/current/future boundary');
       await capture(`lyric-state-${time}s-${report.lyrics.length}`);
     }
-    report.checks.push('past lyrics retain cover color, future lyrics stay white, current lyrics use stronger type and a marker, and backward seeks clear obsolete progress');
+    report.checks.push('past lyrics retain cover color and return to ordinary size, future lyrics stay white, current lyrics use the selected absolute size/stronger weight without a marker, and backward seeks clear obsolete progress');
+
+    // Keep the real audio and provider word timings, but give the first RAW
+    // line a genuine 3–5s silence interval through this isolated fixture IPC.
+    // Read fixture files in this Node process: serialized main-process callbacks
+    // do not have CommonJS require. No media or lyric files are rewritten.
+    const lyricFiles=await app.evaluate(()=>({rawPath:global.__wuuSmoke.songs[0].rawPath,
+      paths:[...new Set(global.__wuuSmoke.songs.flatMap(song=>[song.rawPath,song.lrcPath].filter(Boolean)))]}));
+    const lyricContents=lyricFiles.paths.map(file=>[file,fs.readFileSync(file,'utf8')]);
+    const rawGap=await app.evaluate(({ipcMain},{file,lyrics})=>{
+      const originals=new Map(lyrics),original=originals.get(file);
+      if(!original.includes('[0,5000]'))throw new Error('The RAW first-line fixture no longer has its expected declared duration');
+      const content=original.replace('[0,5000]','[0,3000]');
+      global.__readingRawGapEnabled=true;
+      ipcMain.removeHandler('get-lyrics');
+      ipcMain.handle('get-lyrics',(_event,requested)=>{
+        if(!originals.has(requested))throw new Error(`Unknown isolated lyric fixture: ${requested}`);
+        return global.__readingRawGapEnabled&&requested===file?content:originals.get(requested);
+      });
+      return {declaredEnd:3,nextLineStart:5,lastWordEnd:1.4};
+    },{file:lyricFiles.rawPath,lyrics:lyricContents});
+    await page.reload();await nav.waitFor();await go('正在播放');
+    if(await page.getByRole('button',{name:'暂停',exact:true}).count())await page.getByRole('button',{name:'暂停',exact:true}).click();
+    const gapState=async(time,label)=>{
+      await seek(time);const state=await lyricState();report.lyrics.push({time,label,rawGap,...state});return state;
+    };
+    const tail=await gapState(2.5,'RAW declared duration preserves the tail');
+    assert.equal(tail.rows[0].state,'current');assert.equal(tail.rows[0].font,26,'A capped last-word fill must not shrink the line before its declared RAW end');
+    const gap=await gapState(3.5,'RAW completed line before next timestamp');
+    assert.equal(gap.rows.filter(row=>row.state==='current').length,0,'A RAW silence interval has no artificially prolonged current line');
+    assert.equal(gap.rows[0].state,'past');assert.equal(gap.rows[0].font,20);assert.equal(gap.rows[0].wordColor,gap.activeColor);assert.equal(gap.rows[0].wordBackground,'none');
+    assert.ok(gap.rows.slice(1).every(row=>row.state==='future'&&row.font===20&&row.wordColor==='rgb(255, 255, 255)'),'The next RAW group remains white and ordinary-sized during the gap');
+    await capture('raw-gap-completed-ordinary');
+    const rewind=await gapState(1,'RAW rewind restores current size');
+    assert.equal(rewind.rows[0].state,'current');assert.equal(rewind.rows[0].font,26);assert.equal(rewind.rows.filter(row=>row.state==='past').length,0);
+    assert.ok(rewind.rows[0].wordBackground!=='none'&&rewind.rows.slice(1).every(row=>row.state==='future'&&row.font===20&&row.wordColor==='rgb(255, 255, 255)'&&!row.progress),'Rewinding restores current word fill and clears obsolete historical colors/progress');
+    await seek(2.8);await page.getByRole('button',{name:'播放',exact:true}).click();
+    await page.waitForFunction(()=>{
+      const time=Number(document.querySelector('[aria-label="播放进度"]').value);
+      return time>=3&&time<5&&document.querySelectorAll('.lyrics-panel .lyric-line.current').length===0;
+    },null,{timeout:2500});
+    await page.getByRole('button',{name:'暂停',exact:true}).click();
+    const crossed=await lyricState();report.lyrics.push({time:Number(await page.getByRole('slider',{name:'播放进度',exact:true}).inputValue()),label:'Native audio crosses RAW completion during playback',rawGap,...crossed});
+    assert.equal(crossed.rows[0].state,'past');assert.equal(crossed.rows[0].font,20,'Native playback immediately returns the completed line to the ordinary font');
+    assert.equal(crossed.rows.filter(row=>row.state==='current').length,0);
+    assert.deepEqual(await app.evaluate(()=>({ordinary:global.__wuuSmoke.data.settings.lyricSize,current:global.__wuuSmoke.data.settings.currentLyricSize})),{ordinary:20,current:26},'Completion and rewind never modify either saved font preference');
+    report.checks.push('RAW provider duration keeps the tail enlarged after last-word fill, completion at 3s restores 20px during the 3–5s gap, native playback crosses the boundary, and rewind to 1s restores the saved 26px/current fill');
+    await app.evaluate(()=>{global.__readingRawGapEnabled=false;});
+    await page.reload();await nav.waitFor();await go('正在播放');
+    if(await page.getByRole('button',{name:'暂停',exact:true}).count())await page.getByRole('button',{name:'暂停',exact:true}).click();
+    await seek(1);
     }else{
       // The focused phase also exercises immediate navigation on a persisted
       // active page while its genuine startup entrances may still be running.
@@ -361,7 +428,8 @@ async function setInput(locator,value) {
     const timeBefore=Number(await page.getByRole('slider',{name:'播放进度',exact:true}).inputValue());
     await actions.getByRole('button',{name:'不喜欢',exact:true}).click();const undoDislike=actions.getByRole('button',{name:'取消不喜欢',exact:true});await undoDislike.waitFor();assert.equal(await undoDislike.getAttribute('aria-pressed'),'true');
     await waitSaved(()=>app.evaluate((_electron,songPath)=>global.__wuuSmoke.data.dislikes.some(entry=>entry.path===songPath)&&global.__wuuSmoke.data.collections.every(collection=>!collection.songs.includes(songPath)),currentSong.audioPath),'The actual dislike marker and existing collection behavior persist');
-    await go('推荐');assert.equal(await page.locator('.home-page').getByRole('button',{name:`播放推荐歌曲 ${currentSong.songName}`,exact:true}).count(),0,'Recommendations omit the disliked song');
+    await go('推荐');await page.locator('.home-page .home-song-row').first().waitFor();
+    assert.equal(await page.locator('.home-page .home-song-row').filter({has:page.getByText(currentSong.songName,{exact:true})}).count(),0,'The local home song list omits the disliked song');
     await page.getByRole('button',{name:'打开播放队列',exact:true}).click();await page.locator('.player-queue').waitFor();
     assert.equal(await page.locator('.player-queue .queue-song strong').filter({hasText:currentSong.songName}).count(),0,'The actual playback queue omits the disliked song');
     await page.getByRole('button',{name:'关闭播放队列',exact:true}).click();await go('正在播放');
@@ -370,7 +438,7 @@ async function setInput(locator,value) {
     await undoDislike.click();await actions.getByRole('button',{name:'不喜欢',exact:true}).waitFor();await page.getByRole('button',{name:'暂停',exact:true}).click();
     await waitSaved(()=>app.evaluate((_electron,songPath)=>!global.__wuuSmoke.data.dislikes.some(entry=>entry.path===songPath),currentSong.audioPath),'Undo removes the persisted dislike marker');
     report.songActions.push({label:'dislike-continuity',timeBefore,timeAfter,songPath:currentSong.audioPath});await capture('song-actions-final-800x500');
-    report.checks.push('dislike and undo persist the actual marker; recommendation/queue skip the song while ongoing playback keeps its track and advances');
+    report.checks.push('dislike and undo persist the actual marker; the local home song list/queue skip the song while ongoing playback keeps its track and advances');
 
     const footer=await page.locator('.player-credits').evaluate(element=>({inLyricsColumn:!!element.closest('.player-lyrics-column'),inArtwork:!!element.closest('.player-artwork'),text:element.textContent}));
     report.songActions.push({label:'credits-footer',...footer});assert.ok(footer.inLyricsColumn&&!footer.inArtwork&&footer.text.includes('作词')&&footer.text.includes('作曲'),'Only real lyricist/composer credits sit below the lyrics column');

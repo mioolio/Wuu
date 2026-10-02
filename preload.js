@@ -168,6 +168,8 @@ contextBridge.exposeInMainWorld('qishuiAPI', {
 
 // ===== 网易云音乐导入 API (内嵌 NeteaseCloudMusicApi, 二维码/Cookie 登录) =====
 contextBridge.exposeInMainWorld('neteaseAPI', {
+  // Discover ordinary tracks from anonymous public playlists.
+  discover: (options) => ipcRenderer.invoke('netease-discover', options),
   // 登录态
   loginStatus: () => ipcRenderer.invoke('netease-login-status'),
   // 二维码扫码登录

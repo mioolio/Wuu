@@ -4,6 +4,7 @@
 // 复用酷狗的下载与歌词构建模式: downloadParsedSong + buildInfoFromTexts
 const { ipcMain } = require('electron');
 const neteaseApi = require('../tools/netease-api/main');
+const { fetchDiscoveryCandidates } = require('./discovery');
 const { buildInfoFromTexts } = require('../parsers/platforms/kugou-proxy');
 const parsers = require('../parsers');
 const { downloadParsedSong } = require('../download');
@@ -25,6 +26,16 @@ function pickCookie(resp) {
   if (Array.isArray(resp.cookie)) return resp.cookie.map(c => c.split(';')[0]).join('; ');
   return '';
 }
+
+// Anonymous public playlists, separate from login-only daily recommendations.
+ipcMain.handle('netease-discover', async (_event, options) => {
+  try {
+    const data = await fetchDiscoveryCandidates(neteaseApi, options || {});
+    return { ok: true, data, provider: 'netease', catalogLabel: '网易云公开歌单随机候选' };
+  } catch (error) {
+    return { ok: false, message: error?.message || '新曲发现请求失败，请检查网络后重试' };
+  }
+});
 
 // IPC: 检查登录状态
 ipcMain.handle('netease-login-status', async () => {
@@ -602,6 +613,8 @@ ipcMain.handle('netease-import-song', async (event, { songId, quality, songMeta,
       lrcText,
     });
     // 附带下载诊断信息
+    info.source = 'netease';
+    info.trackId = String(songId);
     info._neteaseMeta = {
       fee: songFee,
       usedLevel,
@@ -628,4 +641,4 @@ ipcMain.handle('netease-import-song', async (event, { songId, quality, songMeta,
   }
 });
 
-dbgLog('[NETEASE] 13 个 netease-* IPC handlers 已注册');
+dbgLog('[NETEASE] netease-* IPC handlers 已注册');

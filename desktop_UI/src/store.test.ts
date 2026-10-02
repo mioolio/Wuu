@@ -20,6 +20,46 @@ beforeEach(() => {
 afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe('现有用户数据迁移',() => {
+  it.each([{lyricSize:20,current:25},{lyricSize:24,current:30},{lyricSize:36,current:45}])('旧普通字号 $lyricSize 迁移原当前行比例，不修改普通字号',async ({lyricSize,current}) => {
+    window.musicAPI.getUserData=vi.fn().mockResolvedValue({...source,settings:{...source.settings,lyricSize}});
+    const {useAppStore,serializeUserData}=await import('./store');
+    await useAppStore.getState().initialize();
+    expect(useAppStore.getState().settings).toMatchObject({lyricSize,currentLyricSize:current});
+    expect(serializeUserData().collections).toEqual(source.collections);
+    expect(serializeUserData().settings.audioFx).toEqual(source.settings.audioFx);
+  });
+  it('新用户当前字号默认28，已保存的独立当前字号不再按普通字号重算',async () => {
+    window.musicAPI.getUserData=vi.fn().mockResolvedValue({});
+    const {useAppStore,defaultSettings}=await import('./store');
+    await useAppStore.getState().initialize();
+    expect(useAppStore.getState().settings).toMatchObject({lyricSize:20,currentLyricSize:28});
+    expect(defaultSettings.currentLyricSize).toBe(28);
+  });
+  it.each([{currentLyricSize:42,expected:42},{currentLyricSize:5,expected:24},{currentLyricSize:100,expected:60},{currentLyricSize:NaN,expected:30}])('加载独立当前字号时修复越界或损坏值 %#',async ({currentLyricSize,expected}) => {
+    window.musicAPI.getUserData=vi.fn().mockResolvedValue({...source,settings:{...source.settings,lyricSize:24,currentLyricSize}});
+    const {useAppStore}=await import('./store');
+    await useAppStore.getState().initialize();
+    expect(useAppStore.getState().settings).toMatchObject({lyricSize:24,currentLyricSize:expected});
+  });
+  it('当前字号即时独立保存；普通字号只在超出当前字号时抬高下限，降低后不重算',async () => {
+    const {useAppStore,persistNow}=await import('./store');
+    await useAppStore.getState().initialize();
+    useAppStore.getState().setPlayer({song:songs[0],playing:true,time:42});
+    const player=useAppStore.getState().player;
+    useAppStore.getState().setSettings({currentLyricSize:42});
+    expect(useAppStore.getState().settings).toMatchObject({lyricSize:20,currentLyricSize:42});
+    useAppStore.getState().setSettings({lyricSize:30});
+    expect(useAppStore.getState().settings.currentLyricSize).toBe(42);
+    useAppStore.getState().setSettings({currentLyricSize:32});
+    useAppStore.getState().setSettings({lyricSize:36});
+    expect(useAppStore.getState().settings.currentLyricSize).toBe(36);
+    useAppStore.getState().setSettings({lyricSize:20});
+    expect(useAppStore.getState().settings.currentLyricSize).toBe(36);
+    expect(useAppStore.getState().player).toBe(player);
+    await persistNow();
+    expect(saved.mock.calls.at(-1)?.[0].settings).toMatchObject({lyricSize:20,currentLyricSize:36});
+    expect(saved.mock.calls.at(-1)?.[0].collections).toEqual(source.collections);
+  });
   it('旧用户默认收起侧栏，宽度和展开偏好保存时不改动歌曲与播放',async () => {
     const {useAppStore,persistNow}=await import('./store');
     await useAppStore.getState().initialize();

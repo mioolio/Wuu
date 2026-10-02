@@ -3,7 +3,7 @@ export interface LyricChar { offset: number; dur: number; text: string }
 export interface WordLyricLine { start: number; duration: number; chars: LyricChar[] }
 export interface PlainLyricLine { time: number; text: string }
 export type LyricLine = WordLyricLine | PlainLyricLine;
-export interface LyricsData { raw: boolean; lines: LyricLine[] }
+export interface LyricsData { raw: boolean; lines: LyricLine[]; timing?: 'raw' | 'enhanced' }
 
 export function lineTime(line: LyricLine): number { return 'start' in line ? line.start : line.time; }
 export function lineText(line: LyricLine): string { return 'chars' in line ? line.chars.map(c => c.text).join('') : line.text; }
@@ -62,7 +62,7 @@ export function parseRaw(text: string): WordLyricLine[] {
     if (!match) continue;
     if (creditLine(raw)) continue;
     const start = Number(match[1]) / 1000;
-    let duration = Number(match[2]) / 1000;
+    const duration = Number(match[2]) / 1000;
     const body = match[3];
     const parts = body.split(/<[^>]+>/);
     const tags = [...body.matchAll(/<(\d+),(\d+),\d+>/g)];
@@ -99,8 +99,8 @@ export function parseRaw(text: string): WordLyricLine[] {
         count++;
       }
       chars.length = count;
-      const last = chars.at(-1);
-      if (last) duration = last.offset + last.dur;
+      // Deduplicating provider text must not shorten its declared line lifetime:
+      // word durations are capped for fill, while the final note can continue.
     }
     if (chars.length) lines.push({ start, duration, chars });
   }
@@ -181,9 +181,9 @@ export function parseLRC(text: string): PlainLyricLine[] {
 
 export function parseLyrics(text: string, video = false): LyricsData {
   const raw = parseRaw(text);
-  if (raw.length) return { raw: true, lines: raw };
+  if (raw.length) return { raw: true, lines: raw, timing: 'raw' };
   const enhanced = parseEnhancedLRC(text);
-  if (enhanced.length) return { raw: true, lines: enhanced };
+  if (enhanced.length) return { raw: true, lines: enhanced, timing: 'enhanced' };
   const plain = parseLRC(text);
   if (plain.length) return { raw: false, lines: plain };
   const unsynced = text.split(/\r?\n/).map(stripMetadata).filter(line => line && !/^(?:\[[^\]]+\]\s*)+$/.test(line) && !creditLine(line));

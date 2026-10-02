@@ -41,6 +41,8 @@ function scanMusicFiles(outputDir = path.join(__dirname, '..', 'output')) {
     let realDuration = 0;
     let lyricist = '';
     let composer = '';
+    let source = '';
+    let trackId = '';
     if (infoFile) {
       try {
         const info = JSON.parse(fs.readFileSync(path.join(folderPath, infoFile), 'utf-8'));
@@ -51,6 +53,8 @@ function scanMusicFiles(outputDir = path.join(__dirname, '..', 'output')) {
         if (info.duration && info.duration > 0) realDuration = info.duration / 1000;  // ms → s
         if (info.lyricist) lyricist = info.lyricist;
         if (info.composer) composer = info.composer;
+        if (typeof info.source === 'string') source = info.source;
+        if (typeof info.trackId === 'string' || typeof info.trackId === 'number') trackId = String(info.trackId);
       } catch (e) {}
     }
 
@@ -115,6 +119,8 @@ function scanMusicFiles(outputDir = path.join(__dirname, '..', 'output')) {
       songName,
       artist,
       album,
+      source,
+      trackId,
       genre: getCachedGenres(audioPath), // Local embedded tags; [] means no known genre.
       audioPath,
       lrcPath: lrcFile ? path.join(folderPath, lrcFile) : null,

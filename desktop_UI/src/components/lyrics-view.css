@@ -58,21 +58,9 @@
 }
 
 .lyrics-panel.polished-lyrics .lyric-line.current {
-  font-size: calc(var(--lyric-size, 20px) * 1.24);
+  font-size: var(--lyric-current-size, 28px);
   font-weight: 750;
   color: var(--lyric-wait-color);
-}
-
-.lyrics-panel.polished-lyrics .lyric-line.current:not(.lyric-companion)::before {
-  content: '';
-  position: absolute;
-  left: 8px;
-  top: 50%;
-  width: 3px;
-  height: 18px;
-  border-radius: 2px;
-  background: var(--lyric-active);
-  transform: translateY(-50%);
 }
 
 .lyrics-panel.polished-lyrics .lyric-line.passed {
@@ -80,7 +68,7 @@
 }
 
 .lyrics-panel.polished-lyrics .lyric-line.current.lyric-companion {
-  font-size: var(--lyric-size, 20px);
+  font-size: var(--lyric-current-size, 28px);
   font-weight: 600;
   padding-top: 0;
   min-height: calc(var(--lyric-size, 20px) * 2.1);

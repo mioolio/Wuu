@@ -27,32 +27,38 @@ export default function PageScrollRail({ content, view, loading }: { content: Re
       setMetrics(previous => ({ ...previous, maximum: 0, value: 0 }));
       return;
     }
+    let disposed = false;
+    let scrollArea: HTMLElement | null = null;
     let frame = 0;
     let idle = 0;
     const host = main.querySelector<HTMLElement>('.page-host:not([hidden])');
     const sizes = new ResizeObserver(() => schedule());
     const observeSizes = () => {
+      if (disposed) return;
       sizes.disconnect(); sizes.observe(main);
       const panel = host?.querySelector<HTMLElement>(':scope > .panel');
       if (panel) sizes.observe(panel);
-      if (target.current) {
-        sizes.observe(target.current);
-        [...target.current.children].forEach(child => sizes.observe(child));
+      if (scrollArea) {
+        sizes.observe(scrollArea);
+        [...scrollArea.children].forEach(child => sizes.observe(child));
       }
     };
     const scroll = () => {
+      if (disposed) return;
       setScrolling(true); clearTimeout(idle);
-      idle = window.setTimeout(() => setScrolling(false), 120);
+      idle = window.setTimeout(() => { if (!disposed) setScrolling(false); }, 120);
       schedule();
     };
     const measure = () => {
+      if (disposed) return;
       frame = 0;
       const panel = host?.querySelector<HTMLElement>(':scope > .panel');
       // Library headers stay fixed while their virtual list or collection grid scrolls.
       const nested = panel?.querySelector<HTMLElement>('.song-viewport, .collection-grid');
       const next = nested || panel || null;
-      if (next !== target.current) {
-        target.current?.removeEventListener('scroll', scroll);
+      if (next !== scrollArea) {
+        scrollArea?.removeEventListener('scroll', scroll);
+        scrollArea = next;
         target.current = next;
         next?.classList.add('has-scroll-rail');
         if (next) managed.current.add(next);
@@ -78,8 +84,9 @@ export default function PageScrollRail({ content, view, loading }: { content: Re
       latest.current = measured;
       setMetrics(previous => Object.keys(measured).every(key => Math.abs(previous[key as keyof Metrics] - measured[key as keyof Metrics]) < .25) ? previous : measured);
     };
-    function schedule() { if (!frame) frame = requestAnimationFrame(measure); }
+    function schedule() { if (!disposed && !frame) frame = requestAnimationFrame(measure); }
     const structure = new MutationObserver(() => {
+      if (disposed) return;
       // New sections can change scrollHeight without changing the fixed viewport box.
       observeSizes();
       schedule();
@@ -87,10 +94,16 @@ export default function PageScrollRail({ content, view, loading }: { content: Re
     if (host) structure.observe(host, { childList: true, subtree: true, characterData: true });
     measure();
     return () => {
+      disposed = true;
       cancelAnimationFrame(frame); clearTimeout(idle); sizes.disconnect(); structure.disconnect();
-      target.current?.removeEventListener('scroll', scroll);
-      target.current = null;
-      drag.current = null; setDragging(false); setScrolling(false);
+      scrollArea?.removeEventListener('scroll', scroll);
+      // An old callback/cleanup owns only its captured page, never a newer
+      // effect's interaction target or observers after lazy mounting.
+      if (target.current === scrollArea) {
+        target.current = null;
+        drag.current = null; setDragging(false); setScrolling(false);
+      }
+      scrollArea = null;
     };
   }, [content, view, loading]);
 

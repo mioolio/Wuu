@@ -4,8 +4,13 @@
 
     <section class="settings-group" aria-label="歌词设置">
       <div class="group-title">歌词</div>
-      <label class="setting-row" for="mobile-lyric-size"><span class="setting-info"><span class="setting-name">歌词字号</span><span class="setting-desc">立即应用，在此浏览器中保存</span></span><output for="mobile-lyric-size" class="lyric-size-value">{{ lyricSize }} px</output></label>
-      <input id="mobile-lyric-size" class="lyric-size-range" type="range" aria-label="歌词字号" :aria-valuetext="lyricSize + ' 像素'" :min="MIN_LYRIC_SIZE" :max="MAX_LYRIC_SIZE" step="1" :value="lyricSize" @input="setLyricSize(Number($event.target.value))" />
+      <label class="setting-row" for="mobile-current-lyric-size"><span class="setting-info"><span class="setting-name">当前歌词字号</span><span class="setting-desc">仅放大正在播放的一行，唱完恢复普通字号</span></span><output for="mobile-current-lyric-size" class="lyric-size-value">{{ currentLyricSize }} px</output></label>
+      <input id="mobile-current-lyric-size" class="lyric-size-range" type="range" aria-label="当前歌词字号" :aria-valuetext="currentLyricSize + ' 像素'" :min="lyricSize" :max="MAX_CURRENT_LYRIC_SIZE" step="1" :value="currentLyricSize" @input="setCurrentLyricSize(Number($event.target.value))" />
+      <details class="lyric-advanced">
+        <summary>高级歌词设置</summary>
+        <label class="setting-row" for="mobile-lyric-size"><span class="setting-info"><span class="setting-name">普通歌词字号</span><span class="setting-desc">用于未播放和已唱完的歌词</span></span><output for="mobile-lyric-size" class="lyric-size-value">{{ lyricSize }} px</output></label>
+        <input id="mobile-lyric-size" class="lyric-size-range" type="range" aria-label="普通歌词字号" :aria-valuetext="lyricSize + ' 像素'" :min="MIN_LYRIC_SIZE" :max="MAX_LYRIC_SIZE" step="1" :value="lyricSize" @input="setLyricSize(Number($event.target.value))" />
+      </details>
     </section>
 
     <!-- 一起听 -->
@@ -60,10 +65,10 @@ import { computed } from 'vue';
 import { useListenTogether } from '../composables/useListenTogether.js';
 import AudioFxPanel from './AudioFxPanel.vue';
 import { useLyricPreferences } from '../composables/useLyricPreferences.js';
-import { MIN_LYRIC_SIZE, MAX_LYRIC_SIZE } from '../services/lyricPreferences.js';
+import { MIN_LYRIC_SIZE, MAX_LYRIC_SIZE, MAX_CURRENT_LYRIC_SIZE } from '../services/lyricPreferences.js';
 
 const { enabled, connected, peerCount } = useListenTogether();
-const { lyricSize, setLyricSize } = useLyricPreferences();
+const { lyricSize, setLyricSize, currentLyricSize, setCurrentLyricSize } = useLyricPreferences();
 
 const statusText = computed(() => {
   if (!enabled.value) return '未启用';
@@ -117,6 +122,9 @@ const statusText = computed(() => {
 .lyric-size-value { color: var(--text-secondary); font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .lyric-size-range { display: block; width: 100%; height: 44px; margin: 4px 0; padding: 0; border: 0; background: transparent; accent-color: var(--accent); cursor: pointer; }
 .lyric-size-range:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+.lyric-advanced { border-top: 1px solid rgba(255, 255, 255, 0.06); }
+.lyric-advanced summary { min-height: 44px; padding: 12px 0; cursor: pointer; color: var(--text-secondary); font-size: 13px; }
+.lyric-advanced summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
 
 .setting-info { flex: 1; min-width: 0; }
 .setting-name { font-size: 15px; color: #fff; margin-bottom: 3px; }

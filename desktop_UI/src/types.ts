@@ -52,6 +52,7 @@ export interface Settings {
   lyricDone: number;
   lyricWait: number;
   lyricSize: number;
+  currentLyricSize: number;
   themeFollowCover: boolean;
   progressColorEnabled: boolean;
   progressColor: string;
