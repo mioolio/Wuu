@@ -5,14 +5,14 @@ class FakeMedia extends EventTarget {
   static HAVE_FUTURE_DATA = 3;
   id = ''; playsInline = true; preload = ''; crossOrigin = ''; volume = 1;
   controls = false; style = {}; src = ''; currentTime = 0; duration = 120;
-  readyState = 4; paused = true; seeking = false; playbackRate = 1; error: MediaError | null = null;
+  readyState = 4; paused = true; seeking = false; playbackRate = 1; defaultPlaybackRate = 1; preservesPitch = false; error: MediaError | null = null;
   failedPaths = new Set<string>();
   async play() {
     if ([...this.failedPaths].some(path => this.src.includes(path))) throw new Error('Media decoding failed');
     this.paused = false; this.dispatchEvent(new Event('playing'));
   }
   pause() { if (!this.paused) { this.paused = true; this.dispatchEvent(new Event('pause')); } }
-  load() { this.currentTime = 0; this.dispatchEvent(new Event('loadedmetadata')); }
+  load() { this.currentTime = 0; this.playbackRate = this.defaultPlaybackRate; this.dispatchEvent(new Event('loadedmetadata')); }
   removeAttribute(name: string) { if (name === 'src') this.src = ''; }
 }
 const songs: Song[] = [
@@ -41,6 +41,19 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 const flush = async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); };
+async function disposePlayerFixture() {
+  const stateModule = await import('../store');
+  service.dispose();
+  stateModule.disposeSongMetadata();
+  // Disposing saves the current progress. Flush its owning module before a
+  // module reset or globals teardown so its real save timer cannot outlive it.
+  await stateModule.persistNow();
+}
+async function resetPlayerFixture() {
+  await disposePlayerFixture();
+  vi.resetModules();
+  media = new FakeMedia();
+}
 const mediaSession = { metadata: null as MediaMetadata | null, setActionHandler: vi.fn(), setPositionState: vi.fn(), playbackState: 'none' };
 class FakeMediaMetadata {
   constructor(data: MediaMetadataInit) { Object.assign(this, data); }
@@ -72,7 +85,8 @@ beforeEach(() => {
   getUserData.mockReset().mockResolvedValue({});
   store.getState().setPlayer({ desktopLyricOn: false });
   store.setState({ songs: [...songs], collections: [], stats: {}, dislikes: {}, progress: {}, actualDuration: {}, lastSession: null, view: 'home', activeCollectionId: null,
-    settings: { ...store.getState().settings, playMode: 1, volume: 1, fadePause: false, themeFollowCover: false, colorIntensity: 0.85 } });
+    settings: { ...store.getState().settings, playMode: 1, volume: 1, playbackRate: 1, fadePause: false, themeFollowCover: false, colorIntensity: 0.85,
+      progressColorEnabled:false,progressColor:'#fb7299',progressColor2:'#ff5e8a',desktopLyricBounds:null,desktopLyricLocked:false } });
 });
 
 describe('cover colors stay in sync with the active song and desktop lyrics', () => {
@@ -149,11 +163,78 @@ describe('cover colors stay in sync with the active song and desktop lyrics', ()
     await vi.waitFor(() => expect(rootProperties.get('--cover-color')).toBe('rgb(206, 76, 87)'));
     expect(rootProperties.get('--cover-accent')).not.toContain('undefined');
     await service.toggleDesktopLyric();
-    expect(desktopSend).toHaveBeenCalledWith({ type: 'color', color: { r: 206, g: 76, b: 87 } });
+    expect(desktopSend).toHaveBeenCalledWith({ type: 'color', color: { r: 206, g: 76, b: 87 }, colorReady: true });
     desktopSend.mockClear(); service.stop();
     expect(desktopSend).toHaveBeenCalledWith({ type: 'info', info: { title: '', artist: '' } });
-    expect(desktopSend).toHaveBeenCalledWith({ type: 'time', t: 0, playing: false });
-    expect(desktopSend).toHaveBeenCalledWith({ type: 'color', color: null });
+    expect(desktopSend).toHaveBeenCalledWith({ type: 'time', t: 0, playing: false, playbackRate: 1 });
+    expect(desktopSend).toHaveBeenCalledWith({ type: 'color', color: null, colorReady: true });
+  });
+  it('primes the first show with complete paused lyrics and pending color, then reopens with the resolved current color', async () => {
+    const palette=deferred<unknown>(); extractColor.mockReturnValue(palette.promise);
+    const song={...songs[0],coverPath:'C:/delayed.png',lrcPath:'C:/one.lrc'};
+    store.setState({songs:[song]});
+    const lyric=vi.spyOn(window.musicAPI,'getLyrics').mockResolvedValue('[00:00]Opening\n[00:30]Restored line');
+    await service.playSong(song); media.pause(); service.seek(35);
+    const toggle=vi.spyOn(window.desktopLyric,'toggle');
+    await service.toggleDesktopLyric();
+    expect(toggle).toHaveBeenLastCalledWith(true,expect.objectContaining({type:'snapshot',songKey:song.audioPath,info:{title:song.songName,artist:song.artist},color:null,colorReady:false,t:35,playing:false,
+      lrc:expect.objectContaining({lines:expect.arrayContaining([expect.objectContaining({text:'Restored line'})])}),settings:expect.objectContaining({progressColorEnabled:false})}));
+    await service.toggleDesktopLyric();
+    palette.resolve({r:42,g:146,b:166}); await flush();
+    await service.toggleDesktopLyric();
+    expect(toggle).toHaveBeenLastCalledWith(true,expect.objectContaining({color:{r:42,g:146,b:166},colorReady:true,t:35,playing:false}));
+    lyric.mockRestore(); toggle.mockRestore();
+  });
+  it.each([
+    {kind:'valid string',progressColor:'#2468ac',ready:true},
+    {kind:'invalid string',progressColor:'invalid',ready:false},
+    {kind:'array',progressColor:['#2468ac'],ready:false},
+    {kind:'object',progressColor:{color:'#2468ac'},ready:false},
+  ])('only a valid custom color ($kind) can make the first pending-cover snapshot ready', async ({progressColor,ready}) => {
+    const palette=deferred<unknown>(); extractColor.mockReturnValue(palette.promise);
+    const song={...songs[0],coverPath:'C:/pending-custom.png'}; store.setState({songs:[song]});
+    // Reproduce malformed persisted data despite the compile-time string type.
+    store.getState().setSettings({progressColorEnabled:true,progressColor:progressColor as string});
+    await service.playSong(song);
+    const toggle=vi.spyOn(window.desktopLyric,'toggle'); await service.toggleDesktopLyric();
+    expect(toggle).toHaveBeenLastCalledWith(true,expect.objectContaining({colorReady:ready,settings:expect.objectContaining({progressColorEnabled:true,progressColor})}));
+    expect(desktopSend).toHaveBeenCalledWith(expect.objectContaining({type:'color',colorReady:ready}));
+    desktopSend.mockClear(); store.getState().setSettings({progressColorEnabled:false});
+    expect(desktopSend).toHaveBeenCalledWith(expect.objectContaining({type:'settings',colorReady:false}));
+    palette.resolve(null); await flush(); toggle.mockRestore();
+  });
+  it('marks a new song snapshot pending before its data is visible and rejects an obsolete extraction', async () => {
+    const palette=deferred<unknown>(); extractColor.mockResolvedValueOnce({r:206,g:76,b:87}).mockReturnValueOnce(palette.promise);
+    const first={...songs[0],coverPath:'C:/first.png'},second={...songs[1],coverPath:'C:/second.png'};
+    store.setState({songs:[first,second]}); await service.playSong(first); await service.toggleDesktopLyric();
+    desktopSend.mockClear(); await service.playSong(second);
+    const snapshots=desktopSend.mock.calls.map(call=>call[0]).filter(payload=>payload.type==='snapshot');
+    expect(snapshots.length).toBeGreaterThan(0);
+    expect(snapshots.every(payload=>payload.songKey===second.audioPath && payload.colorReady===false)).toBe(true);
+    service.stop(); desktopSend.mockClear(); palette.resolve({r:42,g:146,b:166}); await flush();
+    expect(desktopSend).not.toHaveBeenCalledWith(expect.objectContaining({type:'color',color:{r:42,g:146,b:166}}));
+    const toggle=vi.spyOn(window.desktopLyric,'toggle'); await service.toggleDesktopLyric(); await service.toggleDesktopLyric();
+    expect(toggle).toHaveBeenLastCalledWith(true,expect.objectContaining({songKey:'',color:null,colorReady:true}));
+    toggle.mockRestore();
+  });
+  it('a rapid hide wins over an older in-flight show and does not restart the lyric clock', async () => {
+    await service.playSong(songs[0]);
+    const pending=deferred<void>(),toggle=vi.spyOn(window.desktopLyric,'toggle').mockReturnValueOnce(pending.promise);
+    const show=service.toggleDesktopLyric();
+    expect(store.getState().player.desktopLyricOn).toBe(true);
+    await service.toggleDesktopLyric(); pending.resolve(); await show;
+    expect(toggle).toHaveBeenLastCalledWith(false,undefined);
+    expect(store.getState().player.desktopLyricOn).toBe(false);
+    toggle.mockRestore();
+  });
+  it('clears the show intent when the window opening is cancelled before its committed frame is shown', async () => {
+    await service.playSong(songs[0]);
+    const toggle = vi.spyOn(window.desktopLyric, 'toggle').mockResolvedValueOnce(false);
+    desktopSend.mockClear();
+    await service.toggleDesktopLyric();
+    expect(store.getState().player.desktopLyricOn).toBe(false);
+    expect(desktopSend).not.toHaveBeenCalled();
+    toggle.mockRestore();
   });
   it('routes remote library covers to the URL decoder and local preview covers to the file decoder', async () => {
     const song = { ...songs[0], coverPath: 'https://example.test/cover.png' };
@@ -189,9 +270,62 @@ describe('cover colors stay in sync with the active song and desktop lyrics', ()
     warning.mockRestore();
   });
 });
-afterAll(async () => { service.dispose(); await (await import('../store')).persistNow(); vi.unstubAllGlobals(); });
+afterAll(async () => { await disposePlayerFixture(); vi.unstubAllGlobals(); });
 
 describe('React player service lifecycle and context', () => {
+  it('changes speed immediately without reopening or seeking the active media, including while paused', async () => {
+    await service.playSong(songs[0]); service.seek(42);
+    store.getState().setPlayer({ desktopLyricOn: true }); desktopSend.mockClear();
+    const source = media.src;
+    const load = vi.spyOn(media, 'load'), play = vi.spyOn(media, 'play'), pause = vi.spyOn(media, 'pause');
+    store.getState().setSettings({ playbackRate: 2 });
+    expect(media).toMatchObject({ playbackRate: 2, defaultPlaybackRate: 2, preservesPitch: true, currentTime: 42, paused: false, src: source });
+    expect(desktopSend).toHaveBeenCalledWith({ type: 'time', t: 42, playing: true, playbackRate: 2 });
+    expect(mediaSession.setPositionState).toHaveBeenLastCalledWith({ duration: 120, position: 42, playbackRate: 2 });
+    expect(load).not.toHaveBeenCalled(); expect(play).not.toHaveBeenCalled(); expect(pause).not.toHaveBeenCalled();
+    media.pause(); pause.mockClear(); desktopSend.mockClear();
+    store.getState().setSettings({ playbackRate: .5 });
+    expect(media).toMatchObject({ playbackRate: .5, defaultPlaybackRate: .5, preservesPitch: true, currentTime: 42, paused: true, src: source });
+    expect(desktopSend).toHaveBeenCalledWith({ type: 'time', t: 42, playing: false, playbackRate: .5 });
+    expect(load).not.toHaveBeenCalled(); expect(play).not.toHaveBeenCalled(); expect(pause).not.toHaveBeenCalled();
+    load.mockRestore(); play.mockRestore(); pause.mockRestore();
+  });
+  it('keeps the saved speed across local sources, previews and metadata rate resets', async () => {
+    store.getState().setSettings({ playbackRate: 1.75 });
+    await service.playSong(songs[0]); service.seek(35);
+    media.playbackRate = 1; media.defaultPlaybackRate = 1; media.preservesPitch = false;
+    media.dispatchEvent(new Event('loadedmetadata'));
+    expect(media).toMatchObject({ playbackRate: 1.75, defaultPlaybackRate: 1.75, preservesPitch: true, currentTime: 35 });
+    await service.playSong(songs[1]);
+    expect(media).toMatchObject({ playbackRate: 1.75, defaultPlaybackRate: 1.75, preservesPitch: true });
+    await service.playPreview({ name: 'Preview', artist: '', url: 'https://example.test/rate.mp3' });
+    expect(media).toMatchObject({ playbackRate: 1.75, defaultPlaybackRate: 1.75, preservesPitch: true });
+  });
+  it('sends the actual native rate with ratechange and the first paused desktop lyric snapshot', async () => {
+    await service.playSong(songs[0]); service.seek(35); media.pause();
+    store.getState().setPlayer({ desktopLyricOn: true }); desktopSend.mockClear();
+    media.playbackRate = 2; media.dispatchEvent(new Event('ratechange'));
+    expect(desktopSend).toHaveBeenCalledExactlyOnceWith({ type: 'time', t: 35, playing: false, playbackRate: 2 });
+    expect(mediaSession.setPositionState).toHaveBeenLastCalledWith({ duration: 120, position: 35, playbackRate: 2 });
+    store.getState().setPlayer({ desktopLyricOn: false });
+    const toggle = vi.spyOn(window.desktopLyric, 'toggle');
+    await service.toggleDesktopLyric();
+    expect(toggle).toHaveBeenCalledWith(true, expect.objectContaining({ type: 'snapshot', t: 35, playing: false, playbackRate: 2 }));
+    toggle.mockRestore();
+  });
+  it('persists software lock control only after native mouse passthrough succeeds', async () => {
+    store.getState().setPlayer({ desktopLyricOn: true });
+    const lock = vi.spyOn(window.desktopLyric, 'lock');
+    await service.toggleLyricLock();
+    expect(lock).toHaveBeenLastCalledWith(true); expect(store.getState().settings.desktopLyricLocked).toBe(true);
+    expect(desktopSend).toHaveBeenCalledWith({ type: 'lock', locked: true });
+    lock.mockRejectedValueOnce(new Error('Native lock failed'));
+    await expect(service.toggleLyricLock()).rejects.toThrow('Native lock failed');
+    expect(store.getState().settings.desktopLyricLocked).toBe(true);
+    await service.toggleLyricLock();
+    expect(lock).toHaveBeenLastCalledWith(false); expect(store.getState().settings.desktopLyricLocked).toBe(false);
+    lock.mockRestore();
+  });
   it('updates path metadata during playback without reopening, seeking, or replacing manual genre choices', async () => {
     store.setState({genreOverrides:{[songs[0].audioPath]:['Jazz']}});
     await service.playSong(songs[0]); service.seek(42);
@@ -437,10 +571,20 @@ describe('previous track follows playback rather than a replaced shuffle plan', 
 });
 
 describe('playable startup before delayed user preferences', () => {
+  it('applies persisted speed during startup and again after the same media service is reinitialized', async () => {
+    await resetPlayerFixture();
+    getUserData.mockResolvedValue({ settings: { playbackRate: 1.5 }, lastSession: { audioPath: songs[0].audioPath, t: 35 } });
+    service = (await import('./player')).playerService; store = (await import('../store')).useAppStore;
+    await service.initialize();
+    expect(media).toMatchObject({ playbackRate: 1.5, defaultPlaybackRate: 1.5, preservesPitch: true, currentTime: 35 });
+    service.dispose(); media.playbackRate = 1; media.defaultPlaybackRate = 1; media.preservesPitch = false;
+    await service.initialize();
+    expect(media).toMatchObject({ playbackRate: 1.5, defaultPlaybackRate: 1.5, preservesPitch: true });
+  });
   it('registers before the first playable songs, merges early duration/count/listening/progress and never restores over the manual song', async () => {
     const data=deferred<any>();
     // Do not await the pending initialization returned inside an async helper.
-    service.dispose(); (await import('../store')).disposeSongMetadata(); vi.resetModules(); media=new FakeMedia();
+    await resetPlayerFixture();
     getUserData.mockReturnValue(data.promise); onDurationUpdate.mockClear(); onSongMetadataUpdate.mockClear();
     service=(await import('./player')).playerService; store=(await import('../store')).useAppStore;
     const initializing=service.initialize(); await flush();
@@ -463,7 +607,7 @@ describe('playable startup before delayed user preferences', () => {
   });
   it('keeps early ended progress reset and repeated play count when disk preferences arrive', async () => {
     const data=deferred<any>();
-    service.dispose(); (await import('../store')).disposeSongMetadata(); vi.resetModules(); media=new FakeMedia();
+    await resetPlayerFixture();
     getUserData.mockReturnValue(data.promise);
     service=(await import('./player')).playerService; store=(await import('../store')).useAppStore;
     const initializing=service.initialize(); await flush();
@@ -476,7 +620,7 @@ describe('playable startup before delayed user preferences', () => {
     expect(media.currentTime).toBe(0);
   });
   it('retries a failed initialization with the original bindings and can then restore the saved song', async () => {
-    service.dispose(); (await import('../store')).disposeSongMetadata(); vi.resetModules(); media=new FakeMedia();
+    await resetPlayerFixture();
     getUserData.mockRejectedValueOnce(new Error('Unreadable preferences')).mockResolvedValue({lastSession:{audioPath:songs[1].audioPath,t:35}});
     onDurationUpdate.mockClear(); onSongMetadataUpdate.mockClear();
     service=(await import('./player')).playerService; store=(await import('../store')).useAppStore;
@@ -487,7 +631,7 @@ describe('playable startup before delayed user preferences', () => {
   });
   it('a disposed pending startup cannot restore again after the same service is reinitialized', async () => {
     const data=deferred<any>();
-    service.dispose(); (await import('../store')).disposeSongMetadata(); vi.resetModules(); media=new FakeMedia();
+    await resetPlayerFixture();
     getUserData.mockReturnValue(data.promise);
     service=(await import('./player')).playerService; store=(await import('../store')).useAppStore;
     const old=service.initialize(); await flush(); service.dispose();
@@ -499,7 +643,7 @@ describe('playable startup before delayed user preferences', () => {
   });
   it('does not revive playback after an early stop, even with persisted desktop lyrics', async () => {
     const data=deferred<any>();
-    service.dispose(); (await import('../store')).disposeSongMetadata(); vi.resetModules(); media=new FakeMedia();
+    await resetPlayerFixture();
     getUserData.mockReturnValue(data.promise);
     service=(await import('./player')).playerService; store=(await import('../store')).useAppStore;
     const initializing=service.initialize(); await flush(); service.stop();
@@ -507,7 +651,7 @@ describe('playable startup before delayed user preferences', () => {
     expect(store.getState().player.song).toBeNull(); expect(media.src).toBe(''); expect(media.paused).toBe(true);
   });
   it('checks manual selection again after a delayed automatic desktop lyric toggle', async () => {
-    service.dispose(); (await import('../store')).disposeSongMetadata(); vi.resetModules(); media=new FakeMedia();
+    await resetPlayerFixture();
     getUserData.mockResolvedValue({settings:{desktopLyricPersist:true},lastSession:{audioPath:songs[0].audioPath,t:35}});
     const toggle=deferred<void>(), toggling=vi.spyOn(window.desktopLyric,'toggle').mockReturnValueOnce(toggle.promise);
     vi.stubGlobal('location',{search:'?interfacePaused=1'});
@@ -518,7 +662,7 @@ describe('playable startup before delayed user preferences', () => {
     toggling.mockRestore(); vi.stubGlobal('location',undefined);
   });
   it('does not apply startup paused mode to a manual choice made while old lyrics still load', async () => {
-    service.dispose(); (await import('../store')).disposeSongMetadata(); vi.resetModules(); media=new FakeMedia();
+    await resetPlayerFixture();
     const lyric=deferred<string>(), request=vi.spyOn(window.musicAPI,'getLyrics').mockReturnValueOnce(lyric.promise);
     getSongs.mockResolvedValue([{...songs[0],lrcPath:'C:/one.lrc'},songs[1]]);
     getUserData.mockResolvedValue({lastSession:{audioPath:songs[0].audioPath,t:35}});

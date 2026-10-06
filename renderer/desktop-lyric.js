@@ -6,9 +6,25 @@ const curText = curRow.querySelector('.lyric-text');  // 当前行文字容器(�
 const nextRow = document.getElementById('next-row');
 const nextBase = nextRow.querySelector('.lyric-base');
 const idleEl = document.getElementById('idle');
-const btnLock = document.getElementById('btn-lock');
-const btnClose = document.getElementById('btn-close');
 const ghostEl = document.getElementById('ghost');
+const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+let ghostFrame = 0;
+let ghostTimer = null;
+function clearTransition() {
+  cancelAnimationFrame(ghostFrame);
+  clearTimeout(ghostTimer);
+  ghostEl.classList.remove('visible', 'slide-out');
+  ghostEl.textContent = '';
+  curRow.classList.remove('cur-in');
+  nextRow.classList.remove('next-in');
+}
+function measureTransition() {
+  const current = curRow.getBoundingClientRect();
+  const next = nextRow.getBoundingClientRect();
+  const distance = Math.max(0, next.top + next.height / 2 - current.top - current.height / 2);
+  document.documentElement.style.setProperty('--lyric-slide-distance', `${distance}px`);
+}
+reducedMotion.addEventListener('change', () => { if (reducedMotion.matches) clearTransition(); });
 
 // 跑马灯设置 (从主窗口同步, 默认值与主窗口 appSettings 一致)
 let marqueeEnabled = true;
@@ -19,6 +35,9 @@ let marqueeState = null;
 
 // 旧歌词滑出 + 淡出动画
 function showGhost(text) {
+  clearTransition();
+  if (reducedMotion.matches) return;
+  measureTransition();
   ghostEl.textContent = text;
   // 定位到当前行位置
   ghostEl.style.top = curRow.offsetTop + 'px';
@@ -28,11 +47,11 @@ function showGhost(text) {
   // 强制 reflow 确保过渡生效
   void ghostEl.offsetWidth;
   // 下一帧触发滑出
-  requestAnimationFrame(() => {
+  ghostFrame = requestAnimationFrame(() => {
     ghostEl.classList.add('slide-out');
   });
   // 动画结束后清理
-  setTimeout(() => {
+  ghostTimer = setTimeout(() => {
     ghostEl.classList.remove('visible', 'slide-out');
     ghostEl.textContent = '';
   }, 420);
@@ -40,12 +59,14 @@ function showGhost(text) {
 
 // 当前行新文字淡入
 function triggerCurIn() {
+  if (reducedMotion.matches) return;
   curRow.classList.remove('cur-in');
   void curRow.offsetWidth;
   curRow.classList.add('cur-in');
 }
 // 下一行新文字滑入
 function triggerNextIn() {
+  if (reducedMotion.matches) return;
   nextRow.classList.remove('next-in');
   void nextRow.offsetWidth;
   nextRow.classList.add('next-in');
@@ -53,12 +74,12 @@ function triggerNextIn() {
 
 let lrcData = null;
 let simulate = false;  // 低精度歌词模拟走字
-let locked = false;
 
 // 时间插值
 let lastT = 0;
 let lastWall = 0;
 let playing = false;
+let playbackRate = 1;
 let localRaf = null;       // 标记是否已启动
 let localRafRaf = null;    // RAF 句柄
 let localRafInterval = null; // setInterval 兜底句柄
@@ -71,50 +92,12 @@ let curTokens = [];
 // 前奏信息: 在第一句歌词之前显示歌曲名/歌手
 let introInfo = null;     // { title, artist }
 let introActive = false;  // 是否正在显示前奏信息
-
-// 锁定/解锁 (主窗口与歌词窗口共用同一组 SVG, 保证两侧图标始终一致)
-const LOCK_ICON_OPEN = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>';
-const LOCK_ICON_CLOSED = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 019.9-1"/></svg>';
-
-// 同步锁按钮视觉状态 (图标/tooltip 跟随 locked, 两个窗口复用, 避免不一致)
-function applyLockButtonUi(lockedState) {
-  btnLock.innerHTML = lockedState ? LOCK_ICON_CLOSED : LOCK_ICON_OPEN;
-  btnLock.title = lockedState ? '解锁' : '锁定(鼠标穿透)';
-}
-
-// 锁定/解锁
-btnLock.addEventListener('click', async () => {
-  locked = !locked;
-  await window.desktopLyric.lock(locked);
-  if (!locked) hoverInteractive = false;
-  applyLockButtonUi(locked);
-  // 广播给主窗口同步主窗口锁按钮 (主窗口 preload onLockChanged 监听 lyric-lock-changed)
-  window.desktopLyric.notifyLockChanged(locked);
-});
-
-// 锁定状态下悬停控制按钮区: 临时恢复交互让按钮可点击, 离开后恢复穿透
-// 原理: setIgnoreMouseEvents(true, {forward:true}) 只转发 mousemove(用于 hover 显示按钮),
-// 点击仍然穿透, 所以鼠标进入按钮区时必须显式切回可交互, 离开时再恢复穿透
-const bar = document.getElementById('bar');
-let hoverInteractive = false;
-async function setHoverInteractive(on) {
-  if (hoverInteractive === on) return;
-  hoverInteractive = on;
-  try { await window.desktopLyric.setInteractive(on); } catch (e) {}
-}
-bar.addEventListener('mouseenter', () => { if (locked) setHoverInteractive(true); });
-bar.addEventListener('mouseleave', () => { if (locked) setHoverInteractive(false); });
-// 兜底: 鼠标快速划出窗口时 mouseleave 可能丢失, 窗口级 mouseleave 时恢复穿透
-document.documentElement.addEventListener('mouseleave', () => { if (locked) setHoverInteractive(false); });
-
-btnClose.addEventListener('click', async () => {
-  await window.desktopLyric.toggle(false);
-  // 通知主窗口同步状态(否则主窗口的 desktopLyricOn 仍为 true, 按钮仍显示激活)
-  window.desktopLyric.notifyClosed();
-});
+let allowTransition = false;
 
 window.lyricReceiver.onUpdate((payload) => {
   if (payload.type === 'data') {
+    clearTransition();
+    allowTransition = false;
     lrcData = payload.lrc;
     simulate = payload.simulate === true;  // 低精度歌词模拟走字
     curIdx = -1;  // 强制重新测量
@@ -122,9 +105,13 @@ window.lyricReceiver.onUpdate((payload) => {
     marqueeState = null;  // 新歌词, 清除跑马灯状态
     startLocalRAF();
   } else if (payload.type === 'time') {
+    const expected = lastT + (playing ? Math.max(0, performance.now() - lastWall) / 1000 * playbackRate : 0);
+    if (Math.abs(payload.t - expected) > .35) { clearTransition(); allowTransition = false; }
     lastT = payload.t;
     lastWall = performance.now();
     playing = payload.playing;
+    playbackRate = typeof payload.playbackRate === 'number' && Number.isFinite(payload.playbackRate)
+      ? Math.min(2, Math.max(.5, payload.playbackRate)) : 1;
     if (!localRaf) startLocalRAF();
   } else if (payload.type === 'color') {
     applyLyricColor(payload.color);
@@ -138,15 +125,9 @@ window.lyricReceiver.onUpdate((payload) => {
       marqueeThreshold = typeof payload.settings.marqueeThreshold === 'number'
         ? payload.settings.marqueeThreshold : 1.0;
     }
-  } else if (payload.type === 'lock') {
-    // 主窗口切换穿透锁定: 同步歌词窗口锁按钮 UI (穿透状态主进程已处理)
-    if (locked !== payload.locked) {
-      locked = payload.locked;
-      applyLockButtonUi(locked);
-      // The native lock call already restored interaction; only reset the hover flag.
-      if (!locked) hoverInteractive = false;
-    }
   } else if (payload.type === 'clear') {
+    clearTransition();
+    allowTransition = false;
     lrcData = null;
     curRow.classList.add('empty');
     nextRow.classList.add('empty');
@@ -222,7 +203,7 @@ function startLocalRAF() {
     let t = lastT;
     if (playing && lastWall > 0) {
       const elapsed = (performance.now() - lastWall) / 1000;
-      t = lastT + elapsed;
+      t = lastT + elapsed * playbackRate;
     }
     render(t);
   };
@@ -443,14 +424,15 @@ function render(t) {
     return;
   }
 
-  // 切到新行: 触发过渡动画 + 重新测量 + 更新文字
+  let animateNext = false;
+  // Animate only the next timed line; seeks and new songs settle immediately.
   if (idx !== curIdx) {
     // 保存旧文字, 创建幽灵滑出(包括从前奏信息切换到歌词)
     const oldText = curBase.textContent;
-    const wasIntro = introActive;
-    if (oldText && (curIdx >= 0 || wasIntro)) {
+    const animate = playing && allowTransition && curIdx >= 0 && idx === curIdx + 1;
+    if (oldText && animate) {
       showGhost(oldText);
-    }
+    } else clearTransition();
     introActive = false;
 
     curIdx = idx;
@@ -471,8 +453,10 @@ function render(t) {
     marqueeState = null;
 
     // 触发当前行淡入
-    triggerCurIn();
+    if (animate) triggerCurIn();
+    animateNext = animate;
   }
+  allowTransition = true;
 
   curRow.classList.remove('empty');
 
@@ -533,7 +517,7 @@ function render(t) {
     // 文字变化时触发滑入动画
     if (nextBase.textContent !== newText) {
       nextBase.textContent = newText;
-      triggerNextIn();
+      if (animateNext) triggerNextIn();
     }
     nextRow.classList.remove('empty');
   } else {

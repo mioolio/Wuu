@@ -127,7 +127,8 @@ mediaSource → stereoInput(单声道上混) → highpass → 10段peaking EQ
 - 支持 LRC（行级时间戳）与 KRC（逐字时间戳）两种歌词格式
 - KRC 逐字歌词通过 `requestAnimationFrame` 按浏览器显示帧更新每个字的填充状态（帧率取决于设备与窗口状态）
 - 桌面歌词窗口：独立 BrowserWindow，支持锁定穿透（click-through）、拖拽定位、位置持久化
-- 锁定状态下悬停控制按钮区临时恢复交互，离开后恢复穿透
+- 悬浮窗只显示歌词；锁定与开关由软件底栏和歌词设置控制，下一句连续上移到当前句位置
+- 播放倍速在新版「设置 → 播放」调整，支持 0.5×–2×，保存偏好并同步歌词；旧版共用倍速设置
 - 歌词颜色自适应封面主色调，支持用户自定义已唱/未唱颜色
 - 长歌词跑马灯滚动（可配置速度/阈值/停留时间），回退到字号缩放
 - 多级回退策略获取歌词：trackPayload 内嵌数据 → music.douyin.com SSR 接口 → HTML 页面解析
@@ -492,13 +493,13 @@ mobile_UI/
 
 | 方法 | 说明 |
 |------|------|
-| `toggle(show)` | 显示/隐藏桌面歌词窗口 |
+| `toggle(show, snapshot?)` | 显示/隐藏；新版打开附完整状态快照并等待本次 DOM 提交确认 |
 | `lock(locked)` | 锁定/解锁（锁定后鼠标穿透） |
-| `setInteractive(on)` | 锁定态临时恢复/恢复穿透（悬停按钮时） |
+| `setInteractive(on)` | 锁定态临时恢复/恢复穿透（保留兼容 API，悬浮窗不再显示按钮） |
 | `send(payload)` | 发送歌词数据与当前时间 |
 | `setPosition(pos)` | 设置窗口位置（null = 居中） |
 | `onBoundsSaved(cb)` | 监听窗口位置已保存事件 |
-| `onClosed(cb)` | 监听 X 按钮关闭事件 |
+| `onClosed(cb)` | 监听兼容的关闭通知 |
 
 ### 5.3 repairAPI — 修复中心
 
@@ -677,6 +678,7 @@ npm run build:mobile
 | `npm run test:mobile` | 移动端单元测试 |
 | `npm run test:scanner` | Node.js test runner 验证基础扫描与后台补齐 |
 | `npm run test:together` | 离线回归生产房间消息处理、欢迎快照及客户端状态应用，使用模拟 socket |
+| `npm run test:desktop-lyrics` | 真实窗口逐帧检查首色、上移换句、倍速同步、跳转清退及减少动态效果 |
 | `npm run test:desktop` | 使用 fixture 运行 Playwright Electron smoke 测试 |
 | `npm run test:startup` | 使用隔离 fixture 验证分阶段启动与早期播放 |
 | `npm run test:mobile-ui` | 浏览器验证移动端歌词交互 |
@@ -852,7 +854,7 @@ Wuu-main/
 | music:// 协议 | Electron `protocol.handle` + Node.js 异步文件读取 + Buffer Response；单段 Range 分段读取与 206 / 416 响应 |
 | wuu:// 协议 | AES-256-GCM 保护 `{id,k,h}`，密文额外 XOR；端口独立混淆，外层字段未认证；自定义 WUU KEY 文件传递密钥 |
 | 封面色彩提取 | 48×48 RGBA 采样，12 个 30° 色相桶 + 1 灰度桶，按有效像素占比输出平均 RGB 与权重；nativeImage 分支将 BGRA 转为 RGBA |
-| 桌面歌词窗口 | 基于 BrowserWindow 的独立透明窗口，通过 setIgnoreMouseEvents 实现锁定状态下的鼠标穿透，悬停按钮区临时恢复交互，窗口位置持久化至配置文件 |
+| 桌面歌词窗口 | 基于 BrowserWindow 的独立透明窗口，通过 setIgnoreMouseEvents 实现锁定状态下的鼠标穿透，开关与锁定在软件内控制，窗口位置持久化至配置文件；完整快照避免首色闪烁，歌词按实际行距上移过渡 |
 | 播放失败修复链 | 播放器解码失败自动跳转 + IPC 上报 + play_failed.json 持久化 + 修复中心扫描合并 + 修复/删除自动清除记录的完整闭环 |
 | 歌库扫描与补齐 | 桌面 IPC 同步基础扫描 + setImmediate 后台补齐，HTTP 歌库使用 worker_threads + 10 分钟缓存，两条路径分工不同 |
 | 移动端一起听 | HTTP 音频流 + WebSocket 操作广播，单调 seq、host 仲裁、欢迎快照、指数退避重连及阈值进度校准 |

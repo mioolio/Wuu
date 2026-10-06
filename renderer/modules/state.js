@@ -71,6 +71,7 @@ let appSettings = {
   lyricWait: 0.55,
   lyricSize: 15,
   playMode: 1,
+  playbackRate: 1,
   themeFollowCover: false,
   progressColorEnabled: false,  // 是否启用自定义进度条颜色(默认关闭, 跟随封面色)
   progressColor: '#fb7299',  // 进度条自定义颜色1(起点)

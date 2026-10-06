@@ -272,6 +272,7 @@ async function reviewCoverLifecycle() {
     desktop.on('pageerror', error => errors.push(error.message));
     await desktop.emulateMedia({colorScheme:'dark', reducedMotion:'no-preference'});
     await desktop.waitForFunction(() => document.querySelector('.desktop-current-row')?.textContent === '下一站会有温柔');
+    assert.equal(await desktop.locator('button, .desktop-lyric-controls').count(), 0, 'The floating window contains lyrics only; controls remain in the software');
     await waitUntil(async () => (await app.evaluate(() => global.__wuuSmoke.polish.lyricPayloads)).some(payload => payload.type === 'color' && payload.color && !Array.isArray(payload.color) && Number.isFinite(payload.color.r)), 'The main renderer sends normalized RGB through real desktop lyric IPC');
     const roseInk = await mainInk(), roseDesktop = await desktopInk();
     assert.ok(roseInk.includes('gradient') && !roseInk.includes('undefined'), 'Main lyrics have a valid foreground gradient');
@@ -441,7 +442,7 @@ async function reviewCoverLifecycle() {
     report.checks.push('main long lyrics preserve the full original text through stable wrapping after paused forward and backward seeks', 'reduced motion keeps main wrapping and stops desktop marquee with stable font fitting', 'reduced motion disables decorative animation', 'screenshots under dark and light system preferences');
 
     // Closing and reopening a paused overlay must replay its data, color, and current clock.
-    await desktop.getByRole('button', {name:'关闭桌面歌词', exact:true}).click();
+    await page.getByRole('button', {name:'关闭桌面歌词', exact:true}).click();
     await page.getByRole('button', {name:'打开桌面歌词', exact:true}).waitFor();
     await seek(48.35);
     await page.getByRole('button', {name:'打开桌面歌词', exact:true}).click();
@@ -461,9 +462,9 @@ async function reviewCoverLifecycle() {
     const lastColor = await app.evaluate(() => global.__wuuSmoke.polish.lyricPayloads.filter(payload => payload.type === 'color').at(-1));
     assert.equal(lastColor.color, null, 'A coverless track clears the desktop color through IPC');
     await screenshot('player-coverless');
-    await desktop.getByRole('button', {name:'关闭桌面歌词', exact:true}).click();
+    await page.getByRole('button', {name:'关闭桌面歌词', exact:true}).click();
     await page.getByRole('button', {name:'打开桌面歌词', exact:true}).waitFor();
-    report.checks.push('coverless fallback clears previous accent', 'desktop close updates main controls');
+    report.checks.push('coverless fallback clears previous accent', 'software controls close the lyrics-only desktop window');
     // Five immediate changes from index two end at index one; older decoded artwork must not win later.
     await page.getByRole('button', {name:'下一首', exact:true}).evaluate(button => {
       for (let index = 0; index < 5; index++) button.click();

@@ -56,6 +56,8 @@ function applySettings() {
   }
   // 暂停音量淡出开关 (默认开启: appSettings.fadePause !== false)
   if (settingFadePause) settingFadePause.checked = appSettings.fadePause !== false;
+  applyPlaybackRate();
+  if (settingPlaybackRate) settingPlaybackRate.value = String(appSettings.playbackRate);
   // 对外地址设置
   if (settingPublicHostMode) settingPublicHostMode.value = appSettings.publicHostMode === 'manual' ? 'manual' : 'auto';
   if (settingPublicHost) {

@@ -49,9 +49,9 @@ function sendSongInfoToDesktop() {
 
 function startDesktopLyricRAF() {
   if (!desktopLyricOn || desktopLyricRaf !== null) return;
-  window.desktopLyric.send({ type: 'time', t: audio.currentTime, playing: isPlaying });
+  window.desktopLyric.send({ type: 'time', t: audio.currentTime, playing: isPlaying, playbackRate: audio.playbackRate });
   desktopLyricRaf = setInterval(() => {
-    window.desktopLyric.send({ type: 'time', t: audio.currentTime, playing: isPlaying });
+    window.desktopLyric.send({ type: 'time', t: audio.currentTime, playing: isPlaying, playbackRate: audio.playbackRate });
   }, 200);
 }
 
@@ -61,7 +61,7 @@ function stopDesktopLyricRAF() {
     desktopLyricRaf = null;
   }
   if (desktopLyricOn) {
-    window.desktopLyric.send({ type: 'time', t: audio.currentTime, playing: false });
+    window.desktopLyric.send({ type: 'time', t: audio.currentTime, playing: false, playbackRate: audio.playbackRate });
   }
 }
 
@@ -73,6 +73,7 @@ async function toggleDesktopLyric() {
     sendLyricDataToDesktop();
     sendCoverColorToDesktop();
     sendSongInfoToDesktop();
+    window.desktopLyric.send({ type: 'time', t: audio.currentTime, playing: isPlaying, playbackRate: audio.playbackRate });
     if (isPlaying) startDesktopLyricRAF();
     btnLyricLock.classList.remove('hidden');
     // 恢复已保存的穿透锁定状态 (重启后自动应用), 并同步歌词窗口锁按钮 UI
@@ -118,8 +119,9 @@ function updBtnLyricLockUi() {
 }
 
 async function toggleDesktopLyricLock() {
-  desktopLyricLocked = !desktopLyricLocked;
-  await window.desktopLyric.lock(desktopLyricLocked);
+  const locked = !desktopLyricLocked;
+  await window.desktopLyric.lock(locked);
+  desktopLyricLocked = locked;
   // 同步歌词窗口锁按钮 UI (歌词窗口 lyricReceiver 监听 type:'lock')
   window.desktopLyric.send({ type: 'lock', locked: desktopLyricLocked });
   updBtnLyricLockUi();

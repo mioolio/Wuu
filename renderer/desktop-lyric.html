@@ -103,14 +103,14 @@
       z-index: 5;
     }
     #ghost.visible { opacity: 1; }
-    #ghost.slide-out { transform: translateY(-34px); opacity: 0; }
+    #ghost.slide-out { transform: translateY(calc(-1 * var(--lyric-slide-distance, 34px))); opacity: 0; }
 
     /* 当前行: 圆形滚动 — 新文字从下方(下一行位置)先上移到位, 再放大显示
        分两段: 0→40% 上移(easeOutCubic 快速减速), 40%→100% 放大(带轻微回弹) */
     @keyframes cur-in {
       0% {
-        opacity: 0;
-        transform: translateY(30px) scale(0.6);
+        opacity: 1;
+        transform: translateY(var(--lyric-slide-distance, 30px)) scale(0.6);
         animation-timing-function: cubic-bezier(0.33, 1, 0.68, 1);
       }
       40% {
@@ -141,45 +141,19 @@
     }
     #next-row.next-in { animation: next-in 0.45s cubic-bezier(0.33, 1, 0.68, 1); }
 
-    /* 控制条 */
-    #bar {
-      position: absolute; top: 0; right: 0;
-      display: flex; gap: 4px;
-      padding: 8px 10px;  /* 扩大命中区域, 锁定穿透模式下更易悬停到 */
-      -webkit-app-region: no-drag;
-      opacity: 0; transition: opacity 0.2s;
-    }
-    #wrap:hover #bar { opacity: 1; }
-    #bar button {
-      width: 26px; height: 26px; min-width: 26px; min-height: 26px;
-      flex-shrink: 0; flex-grow: 0;
-      background: rgba(0,0,0,0.5);
-      border: none; border-radius: 50%;
-      color: #fff; cursor: pointer;
-      display: flex; align-items: center; justify-content: center;
-      transition: background 0.15s;
-      padding: 0;
-    }
-    #bar button:hover { background: rgba(0,0,0,0.75); }
-    #bar svg { width: 14px; height: 14px; }
-
     #idle {
       font-size: 14px; color: rgba(255,255,255,0.4);
       text-align: center;
     }
     #idle.hidden { display: none; }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation: none !important; transition: none !important; }
+      #ghost { display: none; }
+    }
   </style>
 </head>
 <body>
   <div id="wrap">
-    <div id="bar">
-      <button id="btn-lock" title="锁定(鼠标穿透)">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
-      </button>
-      <button id="btn-close" title="关闭桌面歌词">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-      </button>
-    </div>
     <div id="ghost"></div>
     <div id="cur-row" class="lyric-row empty">
       <div class="lyric-text">

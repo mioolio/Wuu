@@ -1,8 +1,8 @@
 # Wuu 技术实现与协议说明
 
-本文按源码说明运行边界、数据结构、算法、并发控制和验证入口。已提交实现的核对基线为 `f785660`；文档更新日期为 2026-10-02。依赖版本范围来自各层 `package.json`，实际安装版本以对应锁文件为准。功能清单与安装入口见 [README](../README.md)，交互约定见 [播放器体验](player-experience.md)。
+本文按源码说明运行边界、数据结构、算法、并发控制和验证入口。文档更新日期为 2026-10-07。依赖版本范围来自各层 `package.json`，实际安装版本以对应锁文件为准。功能清单与安装入口见 [README](../README.md)，交互约定见 [播放器体验](player-experience.md)。
 
-本次文档提交不包含工作区中尚未提交的桌面歌词改动；相关实现状态在本文末尾单独说明。
+桌面歌词的首次状态快照、换句过渡和倍速同步见第 15 节。
 
 ## 1. 进程、框架与模块职责
 
@@ -178,11 +178,11 @@ interface PlainLyricLine {time: number; text: string} // 绝对秒
 
 主歌词视图读取媒体时间，通过 `requestAnimationFrame` 更新逐字展示；手工滚动暂缓自动跟随，点击行调用 seek。减少动态时仍计算时间和填充，只取消装饰性位移/旋转。
 
-桌面歌词通过 preload 接收歌曲、歌词结构、设置、颜色及时间消息。主播放器约每 200ms 发送一次时间锚点；独立窗口利用锚点和本地单调时间估算两次 IPC 之间的进度，暂停、跳转和新锚点重新校准。更新帧率受实际显示和浏览器调度影响，不能保证固定 60fps。
+桌面歌词通过 preload 接收歌曲、歌词结构、设置、颜色及时间消息。主播放器约每 200ms 发送一次时间锚点；独立窗口利用锚点、本地单调时间和实际 playbackRate 估算两次 IPC 之间的进度，暂停、跳转和新锚点重新校准。更新帧率受实际显示和浏览器调度影响，不能保证固定 60fps。
 
 已提交窗口的外推公式为 `lastTime + (playing ? (performance.now()-lastWall)/1000 : 0)`。长句溢出滚动根据已填充宽度与可见宽度推导目标，按 `1-exp(-dt*12)` 平滑趋近，`dt` 上限 0.05 秒；ResizeObserver 观察固定容器，不逐帧重新测量布局。主进程缓存各消息 type 的最后值，加载完成及 `requestState` 时回放，并校验请求来自实际歌词窗口。
 
-[window/desktop-lyric.js](../window/desktop-lyric.js) 创建透明置顶、`skipTaskbar` 窗口。锁定用 `setIgnoreMouseEvents(true,{forward:true})`，控制区悬停通过 IPC 暂时恢复鼠标交互。窗口位置与锁定偏好保存；晚开窗口在订阅后请求当前播放状态。
+[window/desktop-lyric.js](../window/desktop-lyric.js) 创建透明置顶、`skipTaskbar` 窗口。锁定用 `setIgnoreMouseEvents(true,{forward:true})`，锁定与开关在软件内控制。窗口位置与锁定偏好保存；晚开窗口在订阅后请求当前播放状态。
 
 ## 7. 封面像素算法与异步图片生命周期
 
@@ -383,8 +383,12 @@ npm run build:mobile
 
 fixture 写入位于忽略的 `.test-artifacts/`。单元/fixture 通过只证明其覆盖的行为，不代表真实平台登录、会员音质、第三方 URL 长期可用、原生签名二进制兼容或所有移动系统已实测。
 
-## 15. 尚未随本文提交的桌面歌词改动
+## 15. 桌面歌词显示与倍速同步
 
-本次核对时，本地工作区另外包含 `player.ts`、preload、桌面歌词组件与窗口管理改动，以及未跟踪的 `desktopLyricFrame.ts` 和 `desktop-lyrics-motion*.cjs`。它们用于首次显示前的完整快照、封面颜色就绪等待，以及可打断的旧/新句两层过渡。
+[player.ts](../desktop_UI/src/services/player.ts) 每次打开发送歌曲、歌词、设置、颜色就绪状态及带倍速的播放时钟完整快照。主进程为本次打开分配递增 openingEpoch；React 完成本次 DOM 提交后，`lyricReceiver.ready(epoch)` 通过 preload 确认，主进程只接受实际歌词窗口对应 epoch 后显示。取色未完成时隐藏文字，真实提色或确定的自定义/无封面回退就绪后再呈现；首次颜色直接应用，后续颜色才过渡。
 
-这些路径及 `npm run test:desktop-lyrics` 仍属于待提交实现；本文的文档提交不会把相关代码和脚本一并发布。`player-experience.md` 中对应的首次帧/换句规则是工作区实现约定，远端基线验证使用前述已有脚本。集成该代码后应单独检查类型、单元和真实窗口帧验证，并同步此状态说明。
+[desktopLyricFrame.ts](../desktop_UI/src/services/desktopLyricFrame.ts) 外推 `lastTime + elapsed × playbackRate`，新锚点重设时钟。正常切句时预告文字按实测行中心距离上移并放大，约 280ms 到达当前行；旧句冻结填充后退场。快速跳转、换歌或下一次切句清理前次动画，最多一层当前文字及一层不可交互的旧文字。减少动态时立即落实最终状态。
+
+播放倍速偏好为 settings.playbackRate，默认 1，范围 0.5–2、步长 0.25；读取和更新时拒绝非有限数并规范范围。播放器应用实际/defaultPlaybackRate 并保持音调，切歌和元数据就绪时恢复；ratechange 立即更新歌词锚点与系统媒体会话。旧版使用同一保存字段及带倍速的歌词 IPC。悬浮歌词移除锁定/关闭按钮，在软件底栏或新版歌词设置控制，解锁可拖动，锁定可穿透。
+
+`npm run test:desktop-lyrics` 使用真实 Electron 生产构建、音频和 PNG 解码，检查打开/重开第一帧、延迟提色、上移轨迹、倍速时间与逐字填充、快速跳转清退、设置持久化和减少动态。单元测试覆盖快照缓存、打开确认、模型时钟及可打断过渡；`node scripts/experience-desktop.cjs` 检查新旧版本切换后进度、倍速与歌词窗口状态。

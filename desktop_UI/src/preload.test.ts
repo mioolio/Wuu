@@ -3,6 +3,18 @@ import { runInNewContext } from 'node:vm';
 import { describe,expect,it,vi } from 'vitest';
 
 describe('React IPC 订阅生命周期',() => {
+  it('passes the complete lyric snapshot with the show request while old callers can still send only a boolean', () => {
+    const apis: Record<string, any> = {};
+    const invoke = vi.fn();
+    runInNewContext(readFileSync(new URL('../../preload.js', import.meta.url), 'utf8'), { require: () => ({
+      contextBridge: { exposeInMainWorld: (name: string, api: any) => { apis[name] = api; } }, ipcRenderer: { invoke },
+    }) });
+    const snapshot={type:'snapshot',colorReady:false,info:{title:'Waiting for real cover color'}};
+    apis.desktopLyric.toggle(true,snapshot);
+    expect(invoke).toHaveBeenLastCalledWith('lyric-toggle',true,snapshot);
+    apis.desktopLyric.toggle(false);
+    expect(invoke).toHaveBeenLastCalledWith('lyric-toggle',false,undefined);
+  });
   it('allows a newly mounted lyric receiver to request the latest cached state', () => {
     const apis: Record<string, any> = {};
     const send = vi.fn();
@@ -12,6 +24,8 @@ describe('React IPC 订阅生命周期',() => {
     }) });
     apis.lyricReceiver.requestState();
     expect(send).toHaveBeenCalledWith('lyric-request-state');
+    apis.lyricReceiver.ready(7);
+    expect(send).toHaveBeenLastCalledWith('lyric-opening-ready',7);
   });
   it('卸载一个页面只清理它自己的监听，保留其他页面订阅',() => {
     const apis:Record<string,any>={};

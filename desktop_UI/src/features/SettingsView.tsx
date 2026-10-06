@@ -18,7 +18,7 @@ const categories = [
 type Category = typeof categories[number]['id'];
 
 function Toggle({ label, description, checked, onChange, disabled = false }: { label: string; description?: string; checked: boolean; onChange: (value: boolean) => void; disabled?: boolean }) {
-  return <label className="setting-row"><span><strong>{label}</strong>{description && <small className="muted">{description}</small>}</span><input className="switch" type="checkbox" checked={checked} disabled={disabled} onChange={event => onChange(event.target.checked)} /></label>;
+  return <label className="setting-row"><span><strong>{label}</strong>{description && <small className="muted">{description}</small>}</span><input className="switch" aria-label={label} type="checkbox" checked={checked} disabled={disabled} onChange={event => onChange(event.target.checked)} /></label>;
 }
 function Range({ label, value, min, max, step = 1, unit = '', disabled = false, onChange }: { label: string; value: number; min: number; max: number; step?: number; unit?: string; disabled?: boolean; onChange: (value: number) => void }) {
   return <label className={`setting-row ${disabled ? 'setting-disabled' : ''}`}><span><strong>{label}</strong></span><span className="setting-range"><output>{Number(value.toFixed(2))}{unit}</output><input aria-label={label} aria-valuetext={`${Number(value.toFixed(2))}${unit}`} type="range" min={min} max={max} step={step} value={value} disabled={disabled} onChange={event => onChange(Number(event.target.value))} /></span></label>;
@@ -33,6 +33,8 @@ function Advanced({ title, description, children }: { title: string; description
 export default function SettingsView() {
   const settings = useAppStore(state => state.settings);
   const setSettings = useAppStore(state => state.setSettings);
+  const desktopLyricOn = useAppStore(state => state.player.desktopLyricOn);
+  const [desktopLyricBusy, setDesktopLyricBusy] = useState(false);
   const [category, setCategory] = useState<Category>('appearance');
   const [switching, setSwitching] = useState(false);
   const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
@@ -90,6 +92,13 @@ export default function SettingsView() {
     catch (error) { notify(errorMessage(error), 'error'); }
   };
   const activeCategory = categories.find(item => item.id === category)!;
+  const controlDesktopLyrics = async (action: () => Promise<void>) => {
+    if (desktopLyricBusy) return;
+    setDesktopLyricBusy(true);
+    try { await action(); }
+    catch (error) { notify(errorMessage(error), 'error'); }
+    finally { setDesktopLyricBusy(false); }
+  };
   const switchToClassic = async () => {
     if (switching) return;
     setSwitching(true);
@@ -133,6 +142,7 @@ export default function SettingsView() {
         </div>
         <div id="settings-panel-playback" className="settings-category" role="tabpanel" aria-labelledby="settings-tab-playback" hidden={category !== 'playback'}>
           <Group title="播放行为">
+            <label className="setting-row"><span><strong>播放倍速</strong><small className="muted">调整歌曲播放速度，保持原有音高；下次启动继续使用</small></span><select aria-label="播放倍速" value={settings.playbackRate} onChange={event => setSettings({ playbackRate: Number(event.target.value) })}>{[.5,.75,1,1.25,1.5,1.75,2].map(rate => <option key={rate} value={rate}>{rate}×{rate === 1 ? '·正常' : ''}</option>)}</select></label>
             <Toggle label="暂停时淡出音量" description="暂停前平滑降低音量" checked={settings.fadePause} onChange={value => setSettings({ fadePause: value })} />
             <Toggle label="显示播放队列按钮" description="在播放器中快速查看接下来播放的歌曲" checked={settings.showFloatListBtn} onChange={value => setSettings({ showFloatListBtn: value })} />
           </Group>
@@ -162,6 +172,8 @@ export default function SettingsView() {
             </Advanced>
           </Group>
           <Group title="桌面歌词">
+            <div className="setting-row"><span><strong>显示桌面歌词</strong><small className="muted">窗口只显示歌词，开关和锁定在软件内调整</small></span><button disabled={desktopLyricBusy} aria-pressed={desktopLyricOn} onClick={() => void controlDesktopLyrics(() => playerService.toggleDesktopLyric())}>{desktopLyricOn ? '关闭桌面歌词' : '打开桌面歌词'}</button></div>
+            <Toggle label="锁定桌面歌词（鼠标穿透）" description="锁定后，点击会穿过歌词窗口；在这里关闭锁定即可恢复拖动" checked={settings.desktopLyricLocked} disabled={desktopLyricBusy} onChange={() => void controlDesktopLyrics(() => playerService.toggleLyricLock())} />
             <Toggle label="启动时打开桌面歌词" checked={settings.desktopLyricPersist} onChange={value => setSettings({ desktopLyricPersist: value })} />
             <div className="setting-row"><span><strong>桌面歌词位置</strong><small className="muted">将歌词窗口放回默认位置</small></span><button onClick={() => { setSettings({ desktopLyricBounds: null }); void getBridge('desktopLyric').setPosition(null).then(() => notify('桌面歌词位置已重置', 'success')).catch((error: unknown) => notify(errorMessage(error), 'error')); }}>重置位置</button></div>
           </Group>

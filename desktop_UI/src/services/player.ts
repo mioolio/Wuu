@@ -1,5 +1,5 @@
 import { errorMessage, getBridge, mediaUrl, subscribe } from '../api';
-import { applyUserDataChange, persistNow, scheduleSave, useAppStore } from '../store';
+import { applyUserDataChange, normalizePlaybackRate, persistNow, scheduleSave, useAppStore } from '../store';
 import { notify } from '../ui';
 import type { PreviewSong, Song } from '../types';
 import { AudioEffects, normalizeFxSettings } from './audioFx';
@@ -46,6 +46,8 @@ class PlayerService {
   private previewPosition = -1;
   private previewPositions = new WeakMap<PreviewSong, number>();
   private coverColor: { r: number; g: number; b: number } | null = null;
+  private coverColorReady = true;
+  private lyricWindowRequest = 0;
   private lyrics: LyricsData = { raw: false, lines: [] };
 
   constructor() {
@@ -69,6 +71,7 @@ class PlayerService {
     if (!this.initialized) {
       this.startupVersion = this.version;
       this.initialized = true;
+      this.applyPlaybackRate(useAppStore.getState().settings.playbackRate);
       for (const [event, handler] of this.handlers) {
         this.media.addEventListener(event, handler);
         this.unsubscribes.push(() => this.media.removeEventListener(event, handler));
@@ -85,6 +88,7 @@ class PlayerService {
         this.updateDuration(); scheduleSave();
       });
       this.bind('desktopLyric', 'onClosed', () => {
+        this.lyricWindowRequest++;
         useAppStore.getState().setPlayer({ desktopLyricOn: false });
         this.stopLyricTimer();
       });
@@ -102,6 +106,7 @@ class PlayerService {
           this.updateMediaMetadata(); this.syncDesktop(true);
         }
         if (state.settings.volume !== previous.settings.volume) { this.cancelFade(); this.applyVolume(state.settings.volume); }
+        if (state.settings.playbackRate !== previous.settings.playbackRate) this.applyPlaybackRate(state.settings.playbackRate);
         if (state.settings.audioFx !== previous.settings.audioFx) this.effects?.apply(normalizeFxSettings(state.settings.audioFx));
         if (state.settings !== previous.settings) {
           this.sendSettings();
@@ -119,6 +124,7 @@ class PlayerService {
     await useAppStore.getState().initialize();
     if (!this.initialized || lifecycle !== this.initializationVersion || !useAppStore.getState().hydrated) return;
     this.applyVolume(useAppStore.getState().settings.volume);
+    this.applyPlaybackRate(useAppStore.getState().settings.playbackRate);
     this.applyCoverTheme();
     this.installMediaSession();
     if (this.startupVersion !== this.version) return;
@@ -147,6 +153,7 @@ class PlayerService {
   }
 
   dispose(): void {
+    this.lyricWindowRequest++;
     this.initializationVersion++;
     this.version++;
     this.cancelFade(); this.flushDuration(); this.saveProgress(); this.media.pause();
@@ -207,6 +214,7 @@ class PlayerService {
       this.media.load();
       if (countPlay) this.incrementPlay(song.audioPath);
     } else if (!restore) this.seek(0);
+    this.coverColorReady = !song.coverPath;
     this.setLyrics('', isVideo(song));
     this.sendInfo(); this.syncDesktop(true); this.updateMediaMetadata();
     void this.updateCoverColor(song.coverPath ? mediaUrl(song.coverPath) : '', song.coverPath || undefined, version);
@@ -254,6 +262,7 @@ class PlayerService {
     if (this.previewPosition >= 0) this.previewPositions.set(preview, this.previewPosition);
     useAppStore.getState().setPlayer({ song: null, index: -1, preview, playing: false, time: 0, duration: 0, loading: true, error: '', lyricText: preview.lyric || '' });
     this.media.src = mediaUrl(preview.url); this.media.load();
+    this.coverColorReady = !preview.cover;
     this.setLyrics(preview.lyric || '', isVideo(null, preview));
     if (!preview.lyric && preview.source === 'playlist' && preview.original?.lyricUrl) {
       void fetch(preview.original.lyricUrl).then(response => {
@@ -271,6 +280,7 @@ class PlayerService {
 
   private async playMedia(version = this.version): Promise<void> {
     if (version !== this.version) return;
+    this.applyPlaybackRate(useAppStore.getState().settings.playbackRate);
     try { await this.media.play(); }
     catch (error) {
       if (version !== this.version || (error instanceof DOMException && error.name === 'AbortError')) return;
@@ -301,8 +311,9 @@ class PlayerService {
     this.songHistory = []; this.songHistoryPosition = -1;
     this.previewHistory = []; this.previewHistoryPosition = -1;
     useAppStore.getState().setPlayer({ song: null, preview: null, index: -1, time: 0, duration: 0, playing: false, loading: false, lyricText: '', error: '' });
-    this.coverColor = null; this.applyCoverTheme();
-    this.send({ type: 'clear' }); this.sendInfo(); this.sendTime(); this.send({ type: 'color', color: null }); this.syncDesktop(true);
+    this.coverColor = null; this.coverColorReady = true; this.applyCoverTheme();
+    this.send(this.lyricSnapshot());
+    this.send({ type: 'clear' }); this.sendInfo(); this.sendTime(); this.send({ type: 'color', color: null, colorReady: true }); this.syncDesktop(true);
   }
 
   private playlist(): Song[] {
@@ -462,6 +473,13 @@ class PlayerService {
       this.gain.gain.cancelScheduledValues(this.context.currentTime); this.gain.gain.value = volume; this.media.volume = 1;
     } else this.media.volume = Math.min(1, volume);
   }
+  private applyPlaybackRate(value: number): void {
+    const rate = normalizePlaybackRate(value);
+    const changed = this.media.playbackRate !== rate;
+    this.media.preservesPitch = true;
+    if (this.media.defaultPlaybackRate !== rate) this.media.defaultPlaybackRate = rate;
+    if (changed) { this.media.playbackRate = rate; this.sendTime(); this.syncDesktop(true); }
+  }
   private cancelFade(): void {
     if (this.fadeTimer) { clearInterval(this.fadeTimer); this.fadeTimer = null; }
     this.applyVolume(useAppStore.getState().settings.volume);
@@ -559,6 +577,7 @@ class PlayerService {
       if (target > 0) this.media.currentTime = target;
       this.requestedTime = 0;
     }
+    this.applyPlaybackRate(useAppStore.getState().settings.playbackRate);
     this.onTick();
   };
   private onEnded = (): void => {
@@ -582,9 +601,11 @@ class PlayerService {
   private onWaiting = (): void => { this.flushDuration(); this.lastWall = 0; useAppStore.getState().setPlayer({ loading: true }); };
   private onSeeking = (): void => { this.flushDuration(); this.lastWall = 0; };
   private onSeeked = (): void => { this.lastWall = this.media.paused ? 0 : performance.now(); this.lastPosition = this.media.currentTime; this.onTick(); this.sendTime(); };
+  private onRateChange = (): void => { this.sendTime(); this.syncDesktop(true); };
   private handlers: [string, EventListener][] = [
     ['loadedmetadata', this.onMetadata], ['durationchange', () => this.updateDuration()], ['timeupdate', this.onTick], ['playing', this.onPlay],
     ['pause', this.onPause], ['ended', this.onEnded], ['error', this.onError], ['waiting', this.onWaiting], ['seeking', this.onSeeking], ['seeked', this.onSeeked],
+    ['ratechange', this.onRateChange],
   ];
 
   private setLyrics(text: string, video: boolean): void { this.lyrics = parseLyrics(text, video); this.sendLyricData(); }
@@ -592,17 +613,36 @@ class PlayerService {
     if (!useAppStore.getState().player.desktopLyricOn) return;
     try { getBridge('desktopLyric').send(payload); } catch (error) { console.warn('桌面歌词同步失败', error); }
   }
-  private sendTime(): void { this.send({ type: 'time', t: this.media.currentTime || 0, playing: !this.media.paused }); }
-  private sendLyricData(): void { this.send({ type: 'data', lrc: this.lyrics, simulate: !this.lyrics.raw && useAppStore.getState().settings.simulateLrcProgress }); this.sendSettings(); this.sendTime(); }
+  private sendTime(): void { this.send({ type: 'time', t: this.media.currentTime || 0, playing: !this.media.paused, playbackRate: this.media.playbackRate }); }
+  private sendLyricData(): void { this.send(this.lyricSnapshot()); }
+  private lyricSettings() {
+    const settings = useAppStore.getState().settings;
+    return { marqueeEnabled: settings.marqueeEnabled, marqueeThreshold: settings.marqueeThreshold,
+      marqueeSpeed: settings.marqueeSpeed, marqueePause: settings.marqueePause, lyricDone: settings.lyricDone, lyricWait: settings.lyricWait,
+      lyricSize: settings.lyricSize, currentLyricSize: settings.currentLyricSize,
+      progressColorEnabled: settings.progressColorEnabled, progressColor: settings.progressColor, progressColor2: settings.progressColor2 };
+  }
+  private lyricColorReady(): boolean {
+    const settings = useAppStore.getState().settings;
+    return this.coverColorReady || (settings.progressColorEnabled && typeof settings.progressColor === 'string' && /^#[\da-f]{6}$/i.test(settings.progressColor));
+  }
+  private lyricSnapshot() {
+    const { player, settings } = useAppStore.getState();
+    const { song, preview } = player;
+    return { type: 'snapshot', songKey: preview?.url || song?.audioPath || '', lrc: this.lyrics,
+      simulate: !this.lyrics.raw && settings.simulateLrcProgress,
+      info: { title: preview?.name || song?.songName || '', artist: preview?.artist || song?.artist || '' },
+      settings: this.lyricSettings(), color: this.coverColor,
+      colorReady: this.lyricColorReady(),
+      locked: settings.desktopLyricLocked, t: this.media.readyState >= 1 ? this.media.currentTime || 0 : player.time,
+      playing: !this.media.paused, playbackRate: this.media.playbackRate };
+  }
   private sendInfo(): void {
     const { song, preview } = useAppStore.getState().player;
     this.send({ type: 'info', info: { title: preview?.name || song?.songName || '', artist: preview?.artist || song?.artist || '' } });
   }
   private sendSettings(): void {
-    const settings = useAppStore.getState().settings;
-    this.send({ type: 'settings', settings: { marqueeEnabled: settings.marqueeEnabled, marqueeThreshold: settings.marqueeThreshold,
-      marqueeSpeed: settings.marqueeSpeed, marqueePause: settings.marqueePause, lyricDone: settings.lyricDone, lyricWait: settings.lyricWait, lyricSize: settings.lyricSize,
-      progressColorEnabled: settings.progressColorEnabled, progressColor: settings.progressColor, progressColor2: settings.progressColor2 } });
+    this.send({ type: 'settings', settings: this.lyricSettings(), colorReady: this.lyricColorReady() });
   }
   private startLyricTimer(): void {
     if (!useAppStore.getState().player.desktopLyricOn || this.lyricTimer) return;
@@ -612,12 +652,26 @@ class PlayerService {
   async toggleDesktopLyric(): Promise<void> {
     const state = useAppStore.getState();
     const show = !state.player.desktopLyricOn;
-    await getBridge('desktopLyric').toggle(show);
+    const request = ++this.lyricWindowRequest;
     state.setPlayer({ desktopLyricOn: show });
+    if (!show) this.stopLyricTimer();
+    let shown: unknown;
+    try { shown = await getBridge('desktopLyric').toggle(show, show ? this.lyricSnapshot() : undefined); }
+    catch (error) {
+      if (request === this.lyricWindowRequest) state.setPlayer({ desktopLyricOn: !show });
+      throw error;
+    }
+    if (request !== this.lyricWindowRequest) return;
+    if (show && shown === false) {
+      state.setPlayer({ desktopLyricOn: false }); this.stopLyricTimer(); return;
+    }
     if (show) {
       if (state.settings.desktopLyricBounds) await getBridge('desktopLyric').setPosition(state.settings.desktopLyricBounds);
+      if (request !== this.lyricWindowRequest) return;
       await getBridge('desktopLyric').lock(state.settings.desktopLyricLocked);
-      this.send({ type: 'lock', locked: state.settings.desktopLyricLocked }); this.sendInfo(); this.sendLyricData(); this.send({ type: 'color', color: this.coverColor });
+      if (request !== this.lyricWindowRequest) return;
+      this.send(this.lyricSnapshot());
+      this.send({ type: 'color', color: this.coverColor, colorReady: this.lyricColorReady() });
       if (!this.media.paused) this.startLyricTimer();
     } else this.stopLyricTimer();
   }
@@ -629,8 +683,10 @@ class PlayerService {
 
   private async updateCoverColor(url: string, path: string | undefined, version: number): Promise<void> {
     const request = ++this.coverRequest;
+    this.coverColorReady = !url;
     // Keep the previous hue during extraction so a change of song never flashes pink.
-    if (!url) { this.coverColor = null; this.applyCoverTheme(); this.send({ type: 'color', color: null }); return; }
+    if (!url) { this.coverColor = null; this.applyCoverTheme(); this.send({ type: 'color', color: null, colorReady: true }); return; }
+    this.send({ type: 'color', color: this.coverColor, colorReady: this.lyricColorReady() });
     try {
       const api = getBridge('musicAPI');
       const source = path || url;
@@ -643,10 +699,10 @@ class PlayerService {
       const result = /^(https?:|data:)/i.test(source) ? await api.extractCoverColorFromURL(source) : await api.extractCoverColor(localPath);
       if (version !== this.version || request !== this.coverRequest) return;
       const color = normalizeCoverColor(result);
-      this.coverColor = color; this.applyCoverTheme(); this.send({ type: 'color', color });
+      this.coverColor = color; this.coverColorReady = true; this.applyCoverTheme(); this.send({ type: 'color', color, colorReady: true });
     } catch (error) {
       if (version !== this.version || request !== this.coverRequest) return;
-      this.coverColor = null; this.applyCoverTheme(); this.send({ type: 'color', color: null });
+      this.coverColor = null; this.coverColorReady = true; this.applyCoverTheme(); this.send({ type: 'color', color: null, colorReady: true });
       console.warn('封面主题色读取失败', error);
     }
   }

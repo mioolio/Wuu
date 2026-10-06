@@ -7,6 +7,69 @@ const { BrowserWindow, ipcMain, screen } = require('electron');
 const state = require('../core/state');
 const { loadRenderer } = require('./renderer-entry');
 const latestLyricPayloads = new Map();
+let latestLyricSnapshot = null;
+let openingEpoch = 0;
+let pendingOpening = null;
+const lyricWindowModes = new WeakMap();
+
+function cacheLyricPayload(payload, newOpeningEpoch) {
+  if (!payload || typeof payload.type !== 'string') return;
+  if (payload.type === 'snapshot') {
+    const retainedOpeningEpoch = latestLyricSnapshot?.openingEpoch;
+    latestLyricSnapshot = { ...payload };
+    // Only a show request starts an opening. Ordinary player snapshots retain
+    // the current epoch, including while React subscribes after window loading.
+    delete latestLyricSnapshot.openingEpoch;
+    const epoch = newOpeningEpoch ?? retainedOpeningEpoch;
+    if (epoch > 0) latestLyricSnapshot.openingEpoch = epoch;
+    latestLyricPayloads.clear();
+    for (const update of [
+      { type: 'settings', settings: payload.settings }, { type: 'color', color: payload.color },
+      { type: 'lock', locked: payload.locked }, { type: 'info', info: payload.info },
+      { type: 'data', lrc: payload.lrc, simulate: payload.simulate }, { type: 'time', t: payload.t, playing: payload.playing, playbackRate: payload.playbackRate },
+    ]) latestLyricPayloads.set(update.type, update);
+    return;
+  }
+  if (payload.type === 'clear') latestLyricPayloads.delete('data');
+  if (payload.type === 'data') latestLyricPayloads.delete('clear');
+  latestLyricPayloads.set(payload.type, payload);
+  const current = latestLyricSnapshot || { type: 'snapshot', lrc: { raw: false, lines: [] }, info: { title: '', artist: '' },
+    settings: {}, color: null, colorReady: false, locked: false, t: 0, playing: false, playbackRate: 1, songKey: '' };
+  const changes = payload.type === 'data' ? { lrc: payload.lrc, simulate: payload.simulate }
+    : payload.type === 'clear' ? { lrc: { raw: false, lines: [] } }
+    : payload.type === 'info' ? { info: payload.info }
+    : payload.type === 'time' ? { t: payload.t, playing: payload.playing, ...(payload.playbackRate != null ? { playbackRate: payload.playbackRate } : {}) }
+    : payload.type === 'lock' ? { locked: payload.locked }
+    : payload.type === 'color' ? { color: payload.color, colorReady: payload.colorReady !== false }
+    : payload.type === 'settings' ? { settings: payload.settings, ...(typeof payload.colorReady === 'boolean' ? { colorReady: payload.colorReady } : {}) } : {};
+  latestLyricSnapshot = { ...current, ...changes };
+}
+function isClassicLyricWindow(webContents) {
+  const url = (webContents.getURL?.() || '').replace(/\\/g, '/');
+  if (!url || /^about:blank(?:[?#]|$)/i.test(url)) return lyricWindowModes.get(webContents) === 'classic';
+  return /\/renderer\/desktop-lyric\.html(?:[?#]|$)/i.test(url);
+}
+function replayLyricState(webContents) {
+  if (isClassicLyricWindow(webContents)) {
+    for (const payload of latestLyricPayloads.values()) webContents.send('lyric-update', payload);
+  } else if (latestLyricSnapshot) webContents.send('lyric-update', latestLyricSnapshot);
+}
+function forwardLyricPayload(payload) {
+  const lyricWin = state.getLyricWin();
+  if (payload?.type === 'snapshot' && lyricWin && !lyricWin.isDestroyed() && isClassicLyricWindow(lyricWin.webContents)) {
+    for (const update of latestLyricPayloads.values()) state.sendToLyric('lyric-update', update);
+  } else state.sendToLyric('lyric-update', payload?.type === 'snapshot' ? latestLyricSnapshot : payload);
+}
+function cancelPendingOpening() {
+  const pending = pendingOpening;
+  pendingOpening = null;
+  pending?.resolve(false);
+}
+function showLyricWindow(win) {
+  win.show();
+  // Windows may reset skipTaskbar after the first show of a hidden window.
+  try { win.setSkipTaskbar(true); } catch (e) {}
+}
 
 // 读取已保存的桌面歌词位置 (从 userdata.json)
 function _readSavedLyricBounds() {
@@ -61,13 +124,21 @@ function createDesktopLyricWindow() {
     },
   });
   state.setLyricWin(lyricWin);
+  let mode = 'modern';
+  try { mode = require('../core/storage').readUserData().settings?.interfaceMode || 'modern'; } catch (e) {}
+  lyricWindowModes.set(lyricWin.webContents, mode);
   lyricWin.setAlwaysOnTop(true, 'screen-saver');
   // 初始可交互(未锁定状态, 可拖动)
   lyricWin.setIgnoreMouseEvents(false);
   lyricWin.webContents.on('did-finish-load', () => {
-    for (const payload of latestLyricPayloads.values()) lyricWin.webContents.send('lyric-update', payload);
+    replayLyricState(lyricWin.webContents);
   });
-  loadRenderer(lyricWin, 'lyrics').catch(error => console.error('[React desktop lyrics]', error.message));
+  lyricWin.on('closed', () => { if (pendingOpening?.win === lyricWin) cancelPendingOpening(); });
+  lyricWin.webContents.on('render-process-gone', () => { if (pendingOpening?.win === lyricWin) cancelPendingOpening(); });
+  loadRenderer(lyricWin, 'lyrics', { mode }).catch(error => {
+    if (pendingOpening?.win === lyricWin) cancelPendingOpening();
+    console.error('[React desktop lyrics]', error.message);
+  });
 
   // 监听窗口移动: 拖动后保存位置到 userdata.json
   lyricWin.on('moved', () => {
@@ -82,21 +153,25 @@ function createDesktopLyricWindow() {
 
 // 销毁桌面歌词窗口 (主窗口关闭 / before-quit 时调用)
 function destroyDesktopLyricWindow() {
+  cancelPendingOpening();
   const lyricWin = state.getLyricWin();
   if (lyricWin && !lyricWin.isDestroyed()) {
     lyricWin.destroy();
   }
   state.setLyricWin(null);
+  latestLyricPayloads.clear();
+  latestLyricSnapshot = null;
 }
 
 // 显示/隐藏桌面歌词窗口
-ipcMain.handle('lyric-toggle', (event, show) => {
+ipcMain.handle('lyric-toggle', (event, show, snapshot) => {
+  cancelPendingOpening();
   const lyricWin = state.getLyricWin();
   if (!lyricWin || lyricWin.isDestroyed()) {
-    let persistLocked = false;
+    let persistLocked = snapshot?.type === 'snapshot' && snapshot.locked === true;
     try {
       const { readUserData } = require('../core/storage');
-      persistLocked = readUserData().settings?.desktopLyricLocked === true;
+      if (snapshot?.type !== 'snapshot') persistLocked = readUserData().settings?.desktopLyricLocked === true;
     } catch (e) {}
     createDesktopLyricWindow();
     const w0 = state.getLyricWin();
@@ -111,15 +186,40 @@ ipcMain.handle('lyric-toggle', (event, show) => {
   }
   const w = state.getLyricWin();
   if (!w) return false;
-  if (show) {
-    w.show();
-    // 兜底: Windows 上 show:false 创建的窗口首次 show() 后 skipTaskbar 可能失效,
-    // 导致任务栏悬停出现歌词+主界面两个预览, show 后重新设置
-    try { w.setSkipTaskbar(true); } catch (e) {}
+  if (!show) { w.hide(); return false; }
+  if (isClassicLyricWindow(w.webContents)) {
+    if (snapshot?.type === 'snapshot') { cacheLyricPayload(snapshot); forwardLyricPayload(snapshot); }
+    showLyricWindow(w);
     return true;
   }
-  w.hide();
-  return false;
+  if (w.isVisible?.()) w.hide();
+  const epoch = ++openingEpoch;
+  return new Promise(resolve => {
+    pendingOpening = { win: w, epoch, resolve };
+    const current = snapshot?.type === 'snapshot' ? snapshot : latestLyricSnapshot || { type: 'snapshot',
+      lrc: { raw: false, lines: [] }, info: { title: '', artist: '' }, settings: {},
+      color: null, colorReady: false, locked: false, t: 0, playing: false, songKey: '' };
+    cacheLyricPayload(current, epoch);
+    forwardLyricPayload(latestLyricSnapshot);
+  });
+});
+
+// React acknowledges the committed DOM after resetting the opening's color
+// transition, even when a pending cover keeps its lyric stage empty.
+ipcMain.on('lyric-opening-ready', (event, epoch) => {
+  const pending = pendingOpening;
+  if (!pending || typeof epoch !== 'number' || epoch !== pending.epoch
+    || event.sender !== pending.win.webContents || pending.win !== state.getLyricWin()
+    || pending.win.isDestroyed() || event.sender.isDestroyed()) return;
+  try {
+    showLyricWindow(pending.win);
+    pendingOpening = null;
+    pending.resolve(true);
+  } catch (error) {
+    if (pendingOpening !== pending) return;
+    cancelPendingOpening();
+    console.warn('[React desktop lyrics opening]', error.message);
+  }
 });
 
 // 锁定桌面歌词(鼠标穿透, 点击穿过到下层窗口)
@@ -128,14 +228,14 @@ ipcMain.handle('lyric-lock', (event, locked) => {
   if (!lyricWin || lyricWin.isDestroyed()) return;
   const isLocked = locked === true;
   lyricWin.setIgnoreMouseEvents(isLocked, { forward: true });
-  latestLyricPayloads.set('lock', { type: 'lock', locked: isLocked });
+  cacheLyricPayload({ type: 'lock', locked: isLocked });
 });
 
 // 桌面歌词窗口内按钮锁定状态变更, 广播给主窗口同步 (主窗口锁按钮跟随)
 // preload onLyricLockChanged 订阅 'lyric-lock-changed', 参数 { locked }
 ipcMain.on('lyric-lock-changed', (event, payload) => {
   const locked = payload && payload.locked === true;
-  latestLyricPayloads.set('lock', { type: 'lock', locked });
+  cacheLyricPayload({ type: 'lock', locked });
   state.sendToMain('lyric-lock-changed', locked);
 });
 
@@ -178,23 +278,20 @@ ipcMain.handle('lyric-set-position', (event, pos) => {
 // 主进程转发歌词数据/时间到桌面歌词窗口
 // 注意: 不检查 lyricWin.isVisible(), 因为主窗口最小化时仍需转发时间
 ipcMain.on('lyric-data', (event, payload) => {
-  if (payload && typeof payload.type === 'string') {
-    if (payload.type === 'clear') latestLyricPayloads.delete('data');
-    if (payload.type === 'data') latestLyricPayloads.delete('clear');
-    latestLyricPayloads.set(payload.type, payload);
-  }
-  state.sendToLyric('lyric-update', payload);
+  cacheLyricPayload(payload);
+  forwardLyricPayload(payload);
 });
 
 // Replay after React registers its listener, even when playback is paused.
 ipcMain.on('lyric-request-state', (event) => {
   const lyricWin = state.getLyricWin();
   if (!lyricWin || lyricWin.isDestroyed() || event.sender !== lyricWin.webContents || event.sender.isDestroyed()) return;
-  for (const payload of latestLyricPayloads.values()) event.sender.send('lyric-update', payload);
+  replayLyricState(event.sender);
 });
 
 // 桌面歌词窗口通过X按钮关闭时, 通知主窗口同步按钮状态
 ipcMain.on('lyric-closed-by-user', (event) => {
+  if (pendingOpening && event.sender === pendingOpening.win.webContents) cancelPendingOpening();
   state.sendToMain('lyric-closed-by-user');
 });
 

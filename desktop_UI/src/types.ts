@@ -45,6 +45,7 @@ export interface Settings {
   sidebarWidth: number;
   playMode: number;
   volume: number;
+  playbackRate: number;
   fadePause: boolean;
   glassOpacity: number;
   discCover: boolean;

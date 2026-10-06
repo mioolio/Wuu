@@ -184,7 +184,7 @@ lyricsInner.addEventListener('click', (e) => {
     tNow.textContent = fmt(audio.currentTime);
     // 暂停状态下点击歌词跳转: 同步桌面歌词, 否则桌面歌词停留在旧位置
     if (desktopLyricOn) {
-      window.desktopLyric.send({ type: 'time', t: audio.currentTime, playing: false });
+      window.desktopLyric.send({ type: 'time', t: audio.currentTime, playing: false, playbackRate: audio.playbackRate });
     }
   }
 });
@@ -623,6 +623,14 @@ if (settingMarqueePause) {
 }
 
 // === 暂停音量淡出开关 ===
+if (settingPlaybackRate) {
+  settingPlaybackRate.addEventListener('change', () => {
+    appSettings.playbackRate = Number(settingPlaybackRate.value);
+    applyPlaybackRate();
+    saveUserData();
+  });
+}
+
 if (settingFadePause) {
   settingFadePause.addEventListener('change', () => {
     appSettings.fadePause = settingFadePause.checked;

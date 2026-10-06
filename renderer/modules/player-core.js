@@ -37,6 +37,15 @@ function syncDesktopState() {
 const audio = document.createElement('video');
 audio.id = 'media-player';
 audio.playsInline = true;
+function applyPlaybackRate() {
+  const value = appSettings.playbackRate;
+  const rate = typeof value === 'number' && Number.isFinite(value)
+    ? Math.round(Math.min(2, Math.max(.5, value)) * 4) / 4 : 1;
+  appSettings.playbackRate = rate;
+  audio.defaultPlaybackRate = rate;
+  audio.playbackRate = rate;
+  audio.preservesPitch = true;
+}
 // 音量通过 WebAudio GainNode 控制, 允许 >1.0 增益
 // 原因: Chromium 的 AAC 解码输出比 Windows Media Foundation 小声(已知现象)
 // HTMLMediaElement.volume 最大 1.0 无法补偿, 用 GainNode 让用户可调高至 1.5x
@@ -200,10 +209,14 @@ function fadePause(duration = 0.5) {
 function dbgAudio(evt) { /* no-op */ }
 
 audio.addEventListener('loadedmetadata', () => {
+  applyPlaybackRate();
   seekInProgress = false;
   lastSeekTarget = -1;
   const dur = getDuration();
   tEnd.textContent = fmt(dur);
+});
+audio.addEventListener('ratechange', () => {
+  if (desktopLyricOn) window.desktopLyric.send({ type: 'time', t: audio.currentTime, playing: isPlaying, playbackRate: audio.playbackRate });
 });
 audio.addEventListener('timeupdate', onTick);
 audio.addEventListener('play', () => {
@@ -535,7 +548,7 @@ async function play(idx, autoResume = true, updateContext = true, countPlay = tr
   }
   // 桌面歌词: 发送时间更新, 让桌面歌词立即同步到新歌位置 (暂停切歌时尤为重要)
   if (desktopLyricOn) {
-    window.desktopLyric.send({ type: 'time', t: audio.currentTime || 0, playing: false });
+    window.desktopLyric.send({ type: 'time', t: audio.currentTime || 0, playing: false, playbackRate: audio.playbackRate });
   }
   updCur(); scrollCur();
   // Callers restoring a paused interface can pause after the deferred resume.
@@ -623,7 +636,8 @@ function onTick() {
     const sinceUserJump = now - lastLyricClickTime;
     if (sinceUserJump > 500) {
       const jump = currTime - lastAudioTime;
-      if (jump > 2 || currTime > dur + 0.5) {
+      // A throttled timeupdate can cover one wall second at 2× speed.
+      if (jump > 2 * Math.max(1, audio.playbackRate) || currTime > dur + 0.5) {
         // 诊断插桩: 记录误触发跳变检测的完整上下文, 便于区分 seek 误伤 vs 真实播放异常
         console.warn('[SEEK-DIAG] 跳变检测触发: jump=' + jump.toFixed(1) + 's, currTime=' + currTime.toFixed(1) + 's, lastAudioTime=' + lastAudioTime.toFixed(1) + 's, dur=' + dur.toFixed(1) + 's, 距上次用户seek=' + Math.round(sinceUserJump) + 'ms');
         audio.pause();

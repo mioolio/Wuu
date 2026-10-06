@@ -117,8 +117,25 @@ async function waitUntil(check, message, timeout = 10000) {
     const mediaSnapshot = () => page.evaluate(() => {
       const media = window.__experienceMedia;
       return {time:media?.currentTime || 0, src:media?.currentSrc || '', paused:media?.paused,
-        sameElement:media === window.__experienceFirstMedia, events:window.__experienceMediaEvents?.length || 0};
+        sameElement:media === window.__experienceFirstMedia, events:window.__experienceMediaEvents?.length || 0,
+        rate:media?.playbackRate, defaultRate:media?.defaultPlaybackRate, preservesPitch:media?.preservesPitch};
     });
+    async function setModernRate(rate) {
+      const before = await mediaSnapshot();
+      await openModern('设置'); await page.getByRole('tab', {name:'播放', exact:true}).click();
+      const select = page.getByRole('combobox', {name:'播放倍速', exact:true});
+      assert.deepEqual(await select.locator('option').evaluateAll(options => options.map(option => Number(option.value))), [.5,.75,1,1.25,1.5,1.75,2]);
+      await select.selectOption(String(rate));
+      await page.waitForFunction(rate => window.__experienceMedia?.playbackRate === rate && window.__experienceMedia?.defaultPlaybackRate === rate, rate);
+      await waitUntil(() => app.evaluate((_electron, rate) => global.__wuuSmoke.data.settings.playbackRate === rate, rate), 'The actual playback rate preference is saved');
+      const after = await mediaSnapshot();
+      assert.ok(after.sameElement && after.src === before.src && after.paused === before.paused, 'Changing playback rate retains the media, source and playing state');
+      assert.equal(after.preservesPitch, true, 'Changing speed preserves the original audio pitch');
+      assert.deepEqual(await page.evaluate(start => window.__experienceMediaEvents.slice(start), before.events), [], 'Changing speed does not pause or reload the song');
+      if (before.paused) assert.ok(Math.abs(after.time-before.time) <= .05, 'Changing speed while paused retains the exact position');
+      await openModern('正在播放');
+      return after;
+    }
     async function confirmNavigationPlayback(before, label) {
       await waitUntil(async () => (await mediaSnapshot()).time > before.time+.1, `${label}: playback should continue advancing`);
       const after = await mediaSnapshot();
@@ -201,10 +218,18 @@ async function waitUntil(check, message, timeout = 10000) {
     await resize(1100,720);
     await settingsKeyboard();
     await page.getByRole('tab', {name:'歌词', exact:true}).click();
-    const lyricSize = page.getByRole('slider', {name:'歌词字号', exact:true});
+    const ordinaryDetails = page.locator('#settings-panel-lyrics .settings-advanced').filter({hasText:'普通歌词字号'});
+    assert.equal(await ordinaryDetails.evaluate(element => element.open), false, 'Ordinary lyric size is initially inside its folded advanced setting');
+    await ordinaryDetails.locator('summary').click();
+    const lyricSize = page.getByRole('slider', {name:'普通歌词字号', exact:true});
     const savedSize = Number(await lyricSize.inputValue())+1;
     await lyricSize.focus(); await page.keyboard.press('ArrowRight');
     await waitUntil(() => app.evaluate((_electron,value) => global.__wuuSmoke.data.settings.lyricSize === value && global.__wuuSmoke.calls.includes('save-userdata'), savedSize), 'Settings changes are saved through the real save IPC');
+    const currentSize = page.getByRole('slider', {name:'当前歌词字号', exact:true});
+    const savedCurrentSize = Number(await currentSize.inputValue())+1;
+    await currentSize.focus(); await page.keyboard.press('ArrowRight');
+    await waitUntil(() => app.evaluate((_electron,value) => global.__wuuSmoke.data.settings.currentLyricSize === value, savedCurrentSize), 'The independent current lyric size is saved through the real IPC');
+    assert.equal(Number(await lyricSize.inputValue()), savedSize, 'Changing current lyric emphasis preserves the separate ordinary lyric size');
     report.checks.push('settings categories support keyboard navigation and progressively reveal advanced controls');
     report.checks.push('settings changes save through IPC');
 
@@ -288,6 +313,7 @@ async function waitUntil(check, message, timeout = 10000) {
       const saved = await app.evaluate(() => global.__wuuSmoke.data);
       assert.equal(saved.settings.interfaceMode,'modern');
       assert.equal(saved.settings.lyricSize,savedSize, 'Both renderers retain user settings');
+      assert.equal(saved.settings.currentLyricSize,savedCurrentSize, 'Both renderers retain the independent current lyric emphasis size');
       assert.deepEqual(saved.genreOverrides?.[fixture[2].path],['电子'], 'The old renderer preserves new user genre metadata');
       report.playback.push({label:`genuine renderer round trip ${width}×${height}`, before:beforeSwitch.time, legacy:legacySession.time, returned:restored.time});
       report.checks.push(`modern and original renderers fit ${width}×${height}, with song, position, preferences, and genre metadata restored`);
@@ -309,7 +335,10 @@ async function waitUntil(check, message, timeout = 10000) {
       assert.ok(Math.abs(sample.after-sample.time) <= .05, `${label}: the paused playback position does not advance`);
       assert.equal(sourcePath(restored.src), sourcePath(before.src), `${label}: the same song is restored`);
       assert.ok(Math.abs(restored.time-before.time) <= 1, `${label}: the paused position is restored accurately`);
-      report.playback.push({label, before:before.time, restored:restored.time, paused:true, drift:sample.after-sample.time});
+      assert.equal(restored.rate, before.rate, `${label}: the selected playback rate is restored`);
+      assert.equal(restored.defaultRate, before.rate, `${label}: future playback retains the selected rate`);
+      assert.equal(restored.preservesPitch, true, `${label}: audio pitch is preserved`);
+      report.playback.push({label, before:before.time, restored:restored.time, paused:true, rate:restored.rate, drift:sample.after-sample.time});
       return restored;
     }
     const observedLyricPages = new WeakSet();
@@ -332,6 +361,7 @@ async function waitUntil(check, message, timeout = 10000) {
       const selector = mode === 'classic' ? '#cur-row .lyric-base' : '.desktop-current-row .desktop-lyric-track';
       await lyricPage.waitForFunction(({selector, expectedText}) => document.querySelector(selector)?.textContent.trim() === expectedText, {selector,expectedText}, {timeout:10000});
       const text = await lyricPage.locator(selector).textContent();
+      assert.equal(await lyricPage.locator('button, .desktop-lyric-controls, #bar').count(), 0, `${label}: the floating window has no lock, close or toolbar controls`);
       const file = path.join(artifacts, `${label}.png`);
       await lyricPage.screenshot({path:file}); report.screenshots.push(file);
       report.desktopLyrics.push({label, mode, windows:nativeWindows, text:text.trim()});
@@ -339,6 +369,7 @@ async function waitUntil(check, message, timeout = 10000) {
 
     await resize(1100,720);
     await lyricsHierarchy();
+    await setModernRate(1.5);
     await page.getByRole('button', {name:'暂停', exact:true}).click();
     await page.getByRole('button', {name:'播放', exact:true}).waitFor();
     await page.waitForFunction(() => window.__experienceMedia?.paused === true);
@@ -346,10 +377,9 @@ async function waitUntil(check, message, timeout = 10000) {
     const currentLyric = (await page.locator('.lyric-line[aria-current="true"]').first().textContent()).trim();
     await page.getByRole('button', {name:'打开桌面歌词', exact:true}).click();
     await confirmDesktopLyrics('modern', currentLyric, 'paused-modern-desktop-lyrics');
-    const modernLyricPage = app.windows().find(window => /[?&]window=lyrics(?:[&#]|$)/.test(window.url()));
-    await modernLyricPage.getByRole('button', {name:'锁定歌词', exact:true}).click();
-    await modernLyricPage.getByRole('button', {name:'解锁歌词', exact:true}).click();
-    await waitUntil(() => app.evaluate(() => global.__wuuSmoke.data.settings.desktopLyricLocked === false), 'Unlocking from desktop lyrics saves the actual lock state');
+    await page.getByRole('button', {name:'锁定桌面歌词', exact:true}).click();
+    await page.getByRole('button', {name:'解锁桌面歌词', exact:true}).click();
+    await waitUntil(() => app.evaluate(() => global.__wuuSmoke.data.settings.desktopLyricLocked === false), 'Software controls save the actual unlocked state');
     await confirmPaused(pausedModern, 'modern paused with desktop lyrics');
     await openModern('设置'); await page.getByRole('tab', {name:'外观', exact:true}).click();
     await page.getByRole('button', {name:'切换到旧版界面', exact:true}).click();
@@ -359,21 +389,25 @@ async function waitUntil(check, message, timeout = 10000) {
     await page.locator('#now-playing').click(); await page.locator('#view-player').waitFor({state:'visible'});
     assert.equal((await page.locator('#title').textContent()).trim(), fixture[0].name, 'The original player keeps the paused song title');
     await confirmDesktopLyrics('classic', currentLyric, 'paused-classic-desktop-lyrics');
-    const classicLyricPage = app.windows().find(window => /\/renderer\/desktop-lyric\.html(?:[?#]|$)/.test(window.url()));
-    assert.equal(await classicLyricPage.locator('#btn-lock').getAttribute('title'), '锁定(鼠标穿透)', 'The original desktop lyric window replays the latest unlocked state');
-    report.checks.push('unlocking in desktop lyrics remains unlocked after changing the interface');
+    assert.equal(await page.locator('#btn-lyric-lock').evaluate(button => button.classList.contains('active')), false, 'The original software lock control restores the latest unlocked state');
+    report.checks.push('unlocking from the software remains unlocked after changing the interface; floating lyrics contain no toolbar');
     await capture('paused-classic-player-1100x720', true);
     await page.locator('#nav [data-view="settings"]').click();
+    assert.equal(await page.locator('#setting-playback-rate').inputValue(), '1.5', 'The original settings display the persisted 1.5× speed');
+    assert.equal(await app.evaluate(() => global.__wuuSmoke.data.settings.playbackRate), 1.5);
     await page.locator('#btn-modern-interface').click();
     await page.waitForURL(/\/desktop_UI\/dist\/index\.html(?:[?#]|$)/, {timeout:15000});
     await modernNav().waitFor();
     await page.getByRole('button', {name:'播放', exact:true}).waitFor({timeout:15000});
     const pausedReturn = await confirmPaused(pausedClassic, 'original to modern while paused');
+    await openModern('设置'); await page.getByRole('tab', {name:'播放', exact:true}).click();
+    assert.equal(await page.getByRole('combobox', {name:'播放倍速', exact:true}).inputValue(), '1.5', 'Returning to modern settings displays the persisted 1.5× speed');
     await openModern('正在播放');
     assert.equal((await page.locator('.record-info h1').textContent()).trim(), fixture[0].name, 'The modern player keeps the paused song title');
     await page.waitForFunction(expectedText => document.querySelector('.lyric-line[aria-current="true"]')?.textContent.trim() === expectedText, currentLyric);
     await confirmDesktopLyrics('modern', currentLyric, 'paused-return-modern-desktop-lyrics');
     await capture('paused-return-modern-player-1100x720');
+    await setModernRate(1);
     await page.getByRole('button', {name:'关闭桌面歌词', exact:true}).click();
     await page.getByRole('button', {name:'播放', exact:true}).click();
     await waitUntil(async () => {
@@ -381,6 +415,7 @@ async function waitUntil(check, message, timeout = 10000) {
       return !current.paused && current.time > pausedReturn.time+.15;
     }, 'Playback can resume after the paused round trip');
     report.checks.push('paused renderer switching retains the song and position, keeps both native desktop lyric renderers visible and synchronized, and allows playback to resume');
+    report.checks.push('1.5× speed persists modern→original→modern in real media and settings, preserves pitch and paused position, and changing it back to 1× does not reload the song');
     assert.deepEqual(report.rendererErrors, [], 'Neither renderer reports uncaught errors');
     report.ok = true;
   } catch (error) {

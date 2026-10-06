@@ -205,6 +205,34 @@ describe('启动、刷新和后台元数据', () => {
 afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe('现有用户数据迁移',() => {
+  it.each([
+    { playbackRate: undefined, expected: 1 }, { playbackRate: .5, expected: .5 }, { playbackRate: 2, expected: 2 },
+    { playbackRate: 1.6, expected: 1.5 }, { playbackRate: .1, expected: .5 }, { playbackRate: 5, expected: 2 },
+    { playbackRate: NaN, expected: 1 }, { playbackRate: Infinity, expected: 1 }, { playbackRate: '2', expected: 1 },
+  ])('加载保存倍速时限定有效范围与四分之一步长 %#', async ({ playbackRate, expected }) => {
+    window.musicAPI.getUserData = vi.fn().mockResolvedValue({ ...source, settings: { ...source.settings, playbackRate } });
+    const { useAppStore } = await import('./store');
+    await useAppStore.getState().initialize();
+    expect(useAppStore.getState().settings.playbackRate).toBe(expected);
+  });
+  it('保存并恢复倍速与锁定偏好，非法修改不丢已有速度或用户数据', async () => {
+    const { useAppStore, persistNow } = await import('./store');
+    await useAppStore.getState().initialize();
+    useAppStore.getState().setPlayer({ song: songs[0], playing: true, time: 42 });
+    const player = useAppStore.getState().player;
+    useAppStore.getState().setSettings({ playbackRate: 1.75, desktopLyricLocked: true });
+    useAppStore.getState().setSettings({ playbackRate: NaN });
+    expect(useAppStore.getState().settings.playbackRate).toBe(1.75);
+    expect(useAppStore.getState().player).toBe(player);
+    await persistNow();
+    const stored = saved.mock.calls.at(-1)![0];
+    expect(stored.settings).toMatchObject({ playbackRate: 1.75, desktopLyricLocked: true, volume: source.settings.volume });
+    expect(stored.collections).toEqual(source.collections); expect(stored.progress).toEqual(source.progress);
+    vi.resetModules(); window.musicAPI.getUserData = vi.fn().mockResolvedValue(stored);
+    const restored = (await import('./store')).useAppStore;
+    await restored.getState().initialize();
+    expect(restored.getState().settings).toMatchObject({ playbackRate: 1.75, desktopLyricLocked: true });
+  });
   it.each([{lyricSize:20,current:25},{lyricSize:24,current:30},{lyricSize:36,current:45}])('旧普通字号 $lyricSize 迁移原当前行比例，不修改普通字号',async ({lyricSize,current}) => {
     window.musicAPI.getUserData=vi.fn().mockResolvedValue({...source,settings:{...source.settings,lyricSize}});
     const {useAppStore,serializeUserData}=await import('./store');

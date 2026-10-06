@@ -8,7 +8,7 @@ import type { Collection, PlayerState, Settings, Song, SongStats, View } from '.
 export const defaultSettings: Settings = {
   interfaceMode: 'modern',
   sidebarCollapsed: true, sidebarWidth: SIDEBAR_DEFAULT_WIDTH,
-  playMode: 1, volume: 1, fadePause: true, glassOpacity: 0.72, discCover: false, colorIntensity: 0.85,
+  playMode: 1, volume: 1, playbackRate: 1, fadePause: true, glassOpacity: 0.72, discCover: false, colorIntensity: 0.85,
   lyricDone: 0.9, lyricWait: 0.55, lyricSize: 20, currentLyricSize: 28, themeFollowCover: false,
   progressColorEnabled: false, progressColor: '#fb7299', progressColor2: '#ff5e8a',
   simulateLrcProgress: false, showFloatListBtn: true, artistGroupMode: 'bucket',
@@ -158,6 +158,10 @@ function pathTimes(value: any): Record<string, number> {
 function finiteSetting(value: unknown, fallback: number, min: number, max: number): number {
   return typeof value === 'number' && Number.isFinite(value) ? Math.min(max, Math.max(min, value)) : fallback;
 }
+export function normalizePlaybackRate(value: unknown, fallback = 1): number {
+  const safeFallback = Math.max(.5, Math.min(2, Number.isFinite(fallback) ? fallback : 1));
+  return Math.round(finiteSetting(value, safeFallback, .5, 2) * 4) / 4;
+}
 
 export const useAppStore = create<AppState>((set, get) => ({
   songs: [], collections: [], dislikes: {}, likeTimes: {}, stats: {}, progress: {}, actualDuration: {}, genreOverrides: {}, lastSession: null,
@@ -212,6 +216,7 @@ export const useAppStore = create<AppState>((set, get) => ({
             sidebarWidth: normalizeSidebarWidth(userData?.settings?.sidebarWidth),
             glassOpacity: finiteSetting(userData?.settings?.glassOpacity, defaultSettings.glassOpacity, .12, 1),
             colorIntensity: finiteSetting(userData?.settings?.colorIntensity, defaultSettings.colorIntensity, 0, 1),
+            playbackRate: normalizePlaybackRate(userData?.settings?.playbackRate),
             lyricSize,
             currentLyricSize: finiteSetting(userData?.settings?.currentLyricSize, legacyCurrentSize, lyricSize, 60),
           }, hydrated: false, loading: false, error: '',
@@ -255,6 +260,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   setSettings: patch => {
     applyUserDataChange(state => {
       const settings = { ...state.settings, ...patch };
+      if ('playbackRate' in patch) settings.playbackRate = normalizePlaybackRate(patch.playbackRate, normalizePlaybackRate(state.settings.playbackRate));
       if ('lyricSize' in patch || 'currentLyricSize' in patch) {
         const previousSize = finiteSetting(state.settings.lyricSize, defaultSettings.lyricSize, 12, 36);
         settings.lyricSize = finiteSetting(settings.lyricSize, previousSize, 12, 36);

@@ -83,6 +83,7 @@ const settingMarqueePause = $('setting-marquee-pause');
 const marqueePauseVal = $('marquee-pause-val');
 // 暂停音量淡出开关 DOM
 const settingFadePause = $('setting-fade-pause');
+const settingPlaybackRate = $('setting-playback-rate');
 // 对外地址设置 DOM
 const settingPublicHostMode = $('setting-public-host-mode');
 const settingPublicHost = $('setting-public-host');

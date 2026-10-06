@@ -36,7 +36,7 @@ contextBridge.exposeInMainWorld('windowAPI', {
 // 桌面歌词相关 API (主窗口用)
 contextBridge.exposeInMainWorld('desktopLyric', {
   // 显示/隐藏桌面歌词窗口
-  toggle: (show) => ipcRenderer.invoke('lyric-toggle', show),
+  toggle: (show, snapshot) => ipcRenderer.invoke('lyric-toggle', show, snapshot),
   // 锁定/解锁(锁定后鼠标穿透)
   lock: (locked) => ipcRenderer.invoke('lyric-lock', locked),
   // 锁定状态下临时恢复交互(鼠标悬停控制按钮时), 离开按钮后恢复穿透
@@ -86,6 +86,7 @@ contextBridge.exposeInMainWorld('repairAPI', {
 contextBridge.exposeInMainWorld('lyricReceiver', {
   onUpdate: (cb) => listen('lyric-update', cb),
   requestState: () => ipcRenderer.send('lyric-request-state'),
+  ready: (openingEpoch) => ipcRenderer.send('lyric-opening-ready', openingEpoch),
 });
 
 // ===== 桌面端播放状态同步 API (供 renderer 推送状态到主进程) =====
