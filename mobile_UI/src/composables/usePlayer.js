@@ -32,6 +32,7 @@ const isDisliked = ref(false);      // 当前歌曲是否已不推荐
 // ===== 内部状态 =====
 let audioEl = null;
 let songRequest = 0; // 只有当前歌曲的异步结果可以更新播放器
+let lyricRequest = 0; // 歌词按歌曲身份失效，取消媒体播放不能丢弃同曲歌词
 let navigationRequest = 0;
 // 按实际播放顺序保存历史，不能用会随删歌变化的歌库 index 代替。
 const playbackHistory = [];
@@ -247,7 +248,8 @@ async function startDesktopSync() {
     if (!state || !state.songInfo || (state.index < 0 && !state.songInfo.preview)) return;
 
     const song = {
-      id: state.songInfo.preview ? `preview:${state.audioPath}` : state.index,
+      id: state.songInfo.preview ? `preview:${state.audioPath}`
+        : Number.isSafeInteger(state.songInfo.id) && state.songInfo.id >= 0 ? state.songInfo.id : state.index,
       preview: !!state.songInfo.preview, lyric: state.songInfo.lyric || '',
       songName: state.songInfo.songName || '',
       artist: state.songInfo.artist || '',
@@ -270,6 +272,7 @@ async function startDesktopSync() {
 
 function stopDesktopSync() {
   songRequest++;
+  lyricRequest++;
   navigationRequest++;
   pendingHistory = null;
   pendingSeek = null;
@@ -553,7 +556,7 @@ async function playSong(song, options = {}, historyIndex = null) {
   const restoreRevision = seekRevision;
   // 歌词不必等待音频开始播放（移动浏览器可能禁止自动播放）。
   if (song.preview) lyricText.value = typeof song.lyric === 'string' ? song.lyric : '';
-  else loadLyric(song.id, request);
+  else loadLyric(song.id);
   updateMediaMetadata();
   refreshLikedSet();
   let started = false;
@@ -679,7 +682,7 @@ async function resume(options = {}) {
 }
 
 function clearSong() {
-  playbackIntent = false; songRequest++; navigationRequest++;
+  playbackIntent = false; songRequest++; lyricRequest++; navigationRequest++;
   remoteSongRequest = -1; pendingSeek = null; pendingHistory = null;
   stopProgressTimer();
   _lastSyncedPaused = true;
@@ -913,11 +916,18 @@ const progressPercent = computed(() => {
 });
 
 // ===== 歌词加载 =====
-async function loadLyric(id, request = songRequest, preserve = false) {
+async function loadLyric(id, preserve = false) {
+  const request = ++lyricRequest;
+  const song = currentSong.value;
+  const key = songKey(song);
+  const audioPath = typeof song?.audioPath === 'string' ? song.audioPath : '';
   if (!preserve) lyricText.value = '';
   try {
-    const text = await fetchLyric(id);
-    if (request === songRequest && currentSong.value?.id === id) lyricText.value = text;
+    // Desktop and server libraries can use different indices. The audio and
+    // its lyrics must resolve the same file, including the very first sync.
+    const text = await fetchLyric(id, audioPath);
+    if (request === lyricRequest && currentSong.value?.id === id
+      && songKey(currentSong.value) === key && !currentSong.value?.preview) lyricText.value = text;
   } catch (e) {
     console.warn('歌词加载失败:', e);
   }
@@ -934,7 +944,7 @@ function updateRemoteSongInfo(song) {
     // no longer identify this song; refresh them without replacing its media.
     seekRevision++;
     void refreshLikedSet(); void refreshDislikedSet();
-    void loadLyric(song.id, songRequest, true);
+    void loadLyric(song.id, true);
   }
 }
 

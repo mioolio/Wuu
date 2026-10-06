@@ -40,6 +40,10 @@ let _desktopState = {
   songInfo: null,        // 当前歌曲信息 { songName, artist, hasCover, ... }
   updatedAt: 0,          // 更新时间戳
 };
+// Keep the last accepted media state while a remote source is still loading.
+// Delayed cache reads and newly joined phones must not expose its pause/zero
+// intermediates before the matching renderer acknowledgement arrives.
+let _desktopConfirmedState = { ..._desktopState };
 
 // 更新桌面端播放状态 (由桌面渲染进程通过 IPC 调用)
 function updateDesktopState(patch) {
@@ -350,16 +354,19 @@ function _isDesktopSender(sender) {
   return !!(win && !win.isDestroyed() && sender === win.webContents);
 }
 function _desktopTogetherSnapshot() {
-  const info = _desktopState.songInfo;
+  const state = _desktopConfirmedState;
+  const info = state.songInfo;
   const cachedIndex = audioPathToIndex(info?.audioPath);
-  const song = info?.audioPath && (info.preview || _desktopState.index >= 0)
-    ? { ...info, id: info.preview ? `preview:${info.audioPath}` : cachedIndex >= 0 ? cachedIndex : _desktopState.index } : null;
-  const rate = normalizeTogetherRate(_desktopState.playbackRate);
-  const elapsed = _desktopState.isPlaying ? Math.max(0, (Date.now() - _desktopState.updatedAt) / 1000) * rate : 0;
-  const position = Math.max(0, Number(_desktopState.currentTime) || 0) + elapsed;
+  // Desktop and HTTP scanners have independent array orders. A desktop index
+  // is never a safe fallback for the server's lyric/collection endpoints.
+  const song = info?.audioPath && (info.preview || cachedIndex >= 0)
+    ? { ...info, id: info.preview ? `preview:${info.audioPath}` : cachedIndex } : null;
+  const rate = normalizeTogetherRate(state.playbackRate);
+  const elapsed = state.isPlaying ? Math.max(0, (Date.now() - state.updatedAt) / 1000) * rate : 0;
+  const position = Math.max(0, Number(state.currentTime) || 0) + elapsed;
   return { song, songId: song?.id ?? null, audioPath: song?.audioPath ?? null,
-    position: _desktopState.duration > 0 ? Math.min(_desktopState.duration, position) : position,
-    duration: _desktopState.duration || 0, isPlaying: !!song && !!_desktopState.isPlaying,
+    position: state.duration > 0 ? Math.min(state.duration, position) : position,
+    duration: state.duration || 0, isPlaying: !!song && !!state.isPlaying,
     playbackRate: rate, desktopConnected: _desktopConnected() };
 }
 function _broadcastTogether(msg, excludeWs) {
@@ -376,19 +383,31 @@ function _notifyPeers() {
     hostId: 0, desktopConnected });
 }
 function _sendDesktopSnapshot(ws) {
+  if (!ws && (_togetherPending || !_desktopConnected())) return;
+  const info = _desktopConfirmedState.songInfo;
+  if (info?.audioPath && !info.preview && !getRawSongsSync()) {
+    const sender = _desktopTogetherSender;
+    void getRawSongsAsync().then(() => {
+      if (sender !== _desktopTogetherSender || !_desktopConnected() || (ws && !_togetherClients.has(ws))) return;
+      _sendDesktopSnapshot(ws);
+    })
+      .catch(e => dbgErr('[SERVER] 一起听歌库读取失败:', e.message));
+    return;
+  }
   const entry = { type: 'op', op: 'state', seq: ++_togetherSeq, from: 0,
     ts: Date.now(), payload: _desktopTogetherSnapshot() };
   if (ws) { if (ws.readyState === 1) ws.send(JSON.stringify(entry)); }
   else _broadcastTogether(entry);
 }
 function _publishDesktopTogether(patch = {}) {
-  if (!_desktopConnected()) return;
   // Source loading emits intermediate pause/zero-time states. Only the actual
   // renderer's completion for the newest command releases that room update.
   if (_togetherPending) {
     if (!(patch.togetherSession === _togetherSession && Number.isSafeInteger(patch.togetherSeq) && patch.togetherSeq >= _togetherPending.seq)) return;
     _togetherPending = null;
   }
+  _desktopConfirmedState = { ..._desktopState, songInfo: _desktopState.songInfo ? { ..._desktopState.songInfo } : null };
+  if (!_desktopConnected()) return;
   if (_togetherClients.size) _sendDesktopSnapshot();
 }
 function _setDesktopTogetherSender(sender, ready) {
@@ -476,9 +495,19 @@ function _ensureTogetherWss() {
     _togetherClients.set(ws, { id, alive: true });
     dbgLog(`[SERVER] 一起听客户端 #${id} 加入 (IP: ${getClientIP(req)})`);
     if (_accessLogEnabled) logAccess(req, '一起听', '客户端加入');
-    ws.send(JSON.stringify({ type: 'welcome', id, seq: _togetherSeq, hostId: 0,
-      peers: _togetherClients.size + (_desktopConnected() ? 1 : 0),
-      desktopConnected: _desktopConnected(), hostSong: _desktopTogetherSnapshot() }));
+    const welcome = () => {
+      if (ws.readyState !== 1 || !_togetherClients.has(ws)) return;
+      ws.send(JSON.stringify({ type: 'welcome', id, seq: _togetherSeq, hostId: 0,
+        peers: _togetherClients.size + (_desktopConnected() ? 1 : 0),
+        desktopConnected: _desktopConnected(), hostSong: _desktopTogetherSnapshot() }));
+    };
+    // The first phone may arrive while startup warmup is still scanning. Wait
+    // only for its song identity; desktop audio remains independent of this.
+    if (_desktopConfirmedState.songInfo?.audioPath && !_desktopConfirmedState.songInfo.preview && !getRawSongsSync()) {
+      void getRawSongsAsync().then(welcome).catch(e => {
+        dbgErr('[SERVER] 一起听首次歌库读取失败:', e.message); welcome();
+      });
+    } else welcome();
     _notifyPeers();
     ws.on('message', data => _handleTogetherMessage(ws, data.toString()));
     ws.on('pong', () => { const meta = _togetherClients.get(ws); if (meta) meta.alive = true; });
@@ -1104,13 +1133,17 @@ function startServer(port, bindIP, whitelist, rateLimit, accessLogEnabled) {
       return;
     }
 
-    // GET /api/lyric/:index → 返回歌词文本
+    // GET /api/lyric-by-path?path=... or legacy /api/lyric/:index → lyric text.
     // 优先 rawPath(逐字格式), 文件不存在时回退到 lrcPath(标准格式), 与桌面端逻辑一致
     const apiLyricMatch = pathname.match(/^\/api\/lyric\/(\d+)$/);
-    if (apiLyricMatch && req.method === 'GET') {
+    if ((pathname === '/api/lyric-by-path' || apiLyricMatch) && req.method === 'GET') {
       try {
         const songs = await getRawSongsAsync();
-        const idx = parseInt(apiLyricMatch[1], 10);
+        const audioPath = pathname === '/api/lyric-by-path' ? url.searchParams.get('path') : null;
+        const idx = audioPath !== null ? audioPathToIndex(audioPath) : apiLyricMatch ? parseInt(apiLyricMatch[1], 10) : -1;
+        if (pathname === '/api/lyric-by-path' && idx < 0) {
+          res.writeHead(403); res.end(); return;
+        }
         const song = songs[idx];
         let lrcPath = null;
         if (song) {
@@ -1134,16 +1167,23 @@ function startServer(port, bindIP, whitelist, rateLimit, accessLogEnabled) {
     // GET /api/state → 获取桌面端当前播放状态 (移动端同步用)
     if (pathname === '/api/state' && req.method === 'GET') {
       try {
+        // Warm the server's index before the one-time phone initialization.
+        // Audio and lyrics must refer to the same path even when scanners sort
+        // differently or a library refresh changes every numeric index.
+        if (_desktopConfirmedState.songInfo?.audioPath && !_desktopConfirmedState.songInfo.preview) await getRawSongsAsync();
+        const confirmed = _desktopConfirmedState;
+        const info = confirmed.songInfo;
+        const index = info?.preview ? -1 : audioPathToIndex(info?.audioPath);
         const state = {
-          playMode: _desktopState.playMode,
-          isPlaying: _desktopState.isPlaying,
-          index: _desktopState.index,
-          audioPath: _desktopState.songInfo ? (_desktopState.songInfo.audioPath || _desktopState.audioPath) : _desktopState.audioPath,
-          currentTime: _desktopState.currentTime,
-          duration: _desktopState.duration,
-          playbackRate: _desktopState.playbackRate,
-          songInfo: _desktopState.songInfo,
-          updatedAt: _desktopState.updatedAt,
+          playMode: confirmed.playMode,
+          isPlaying: confirmed.isPlaying,
+          index,
+          audioPath: info ? (info.audioPath || confirmed.audioPath) : confirmed.audioPath,
+          currentTime: confirmed.currentTime,
+          duration: confirmed.duration,
+          playbackRate: confirmed.playbackRate,
+          songInfo: info ? { ...info, id: info.preview ? `preview:${info.audioPath}` : index } : null,
+          updatedAt: confirmed.updatedAt,
         };
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(JSON.stringify({ ok: true, state }));

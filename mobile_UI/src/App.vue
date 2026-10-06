@@ -1,5 +1,5 @@
 <!-- =========== 移动端 App 根组件 =========== -->
-<!-- 底部导航、常驻音频、跨页面迷你播放器；歌词支持按钮和滑动切换。 -->
+<!-- 底部导航、常驻音频、跨页面迷你播放器；左右滑动切换封面和歌词。 -->
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { usePlayer } from './composables/usePlayer.js';
@@ -89,11 +89,11 @@ function switchTab(tab) {
   activeTab.value = tab;
 }
 
-// ===== 播放器右滑: 切换歌词视图 =====
+// ===== 封面左滑: 切换歌词视图 =====
 function showLyricsView() {
   showLyrics.value = true;
 }
-// 歌词视图左滑: 返回封面
+// 歌词右滑: 返回封面
 function hideLyricsView() {
   showLyrics.value = false;
 }
@@ -174,10 +174,6 @@ function playAll(songsList) {
 
     <header class="app-header">
       <span class="wordmark" aria-label="Wuu 音乐">Wuu<span class="brand-dot" aria-hidden="true"></span></span>
-      <div v-if="activeTab === 'recommend' && currentSong" class="view-switch" aria-label="播放视图">
-        <button :class="{ selected: !showLyrics }" :aria-pressed="!showLyrics" @click="hideLyricsView">封面</button>
-        <button :class="{ selected: showLyrics }" :aria-pressed="showLyrics" @click="showLyricsView">歌词</button>
-      </div>
     </header>
 
     <!-- 主内容区 -->
@@ -260,9 +256,6 @@ function playAll(songsList) {
 .app-header { flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: calc(64px + env(safe-area-inset-top)); padding: calc(8px + env(safe-area-inset-top)) max(24px, env(safe-area-inset-right)) 8px max(24px, env(safe-area-inset-left)); width: 100%; max-width: 720px; margin-inline: auto; }
 .wordmark { display: inline-flex; align-items: baseline; gap: 3px; font-size: 26px; font-weight: 750; letter-spacing: -1.2px; color: var(--text); }
 .brand-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
-.view-switch { display: flex; padding: 3px; border-radius: 14px; background: var(--bg-card-elevated); }
-.view-switch button { min-width: 56px; min-height: 44px; padding: 8px 14px; border: 0; border-radius: 11px; background: transparent; color: var(--text-secondary); font-size: 14px; }
-.view-switch button.selected { background: var(--bg-card); color: var(--text); font-weight: 600; }
 .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-height: 0; width: 100%; max-width: 720px; margin-inline: auto; }
 .join-notice { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-shrink: 0; margin: 4px 24px 12px; padding: 8px 12px; background: var(--accent-soft); border-radius: 14px; color: var(--text); font-size: 13px; }
 .join-notice button { min-height: 44px; padding: 8px 12px; background: var(--accent); color: var(--on-accent); border: 0; border-radius: 10px; white-space: nowrap; font-weight: 600; }

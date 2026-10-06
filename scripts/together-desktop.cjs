@@ -9,11 +9,26 @@ const vm = require('vm');
 const root = path.join(__dirname, '..');
 const artifacts = path.join(root, '.test-artifacts', 'together');
 fs.mkdirSync(artifacts, { recursive: true });
-const report = { ok: false, checks: [], media: [], rateMeasurements: [], streams: [], requests: [], screenshots: [], rendererErrors: [], rendererCrashes: [], transport: {} };
+const report = { ok: false, checks: [], media: [], startupLyrics: [], rateMeasurements: [], streams: [], requests: [], screenshots: [], rendererErrors: [], rendererCrashes: [], transport: {} };
 const normalize = value => String(value || '').replace(/\\/g, '/');
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const reportFile = path.join(artifacts, process.argv.includes('--classic-only') ? 'classic-report.json' : 'report.json');
 const saveReport = () => fs.writeFileSync(reportFile, JSON.stringify(report, null, 2));
+
+async function touchSwipe(locator, direction) {
+  const box = await locator.boundingBox(); assert.ok(box, 'The native touch target is visible');
+  const y = box.y + Math.min(200, box.height * .35);
+  const from = box.x + box.width * (direction === 'left' ? .8 : .2);
+  const to = box.x + box.width * (direction === 'left' ? .2 : .8);
+  const session = await locator.page().context().newCDPSession(locator.page());
+  try {
+    await session.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 });
+    await session.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: from, y, id: 1 }] });
+    for (const fraction of [.25, .5, .75, 1]) await session.send('Input.dispatchTouchEvent', { type: 'touchMove',
+      touchPoints: [{ x: from + (to - from) * fraction, y, id: 1 }] });
+    await session.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  } finally { await session.detach(); }
+}
 
 // Observe the original native constructors/methods and media events. No context,
 // audio node, media element, resume call, source or clock is supplied by the test.
@@ -268,9 +283,43 @@ async function run() {
       if (enabled) await control.check(); else await control.uncheck();
       assert.equal(await control.isChecked(), enabled);
     };
+    let lastOpenedPhoneCover;
+    const openPhoneLyrics = async () => {
+      await phoneTab('播放'); await phone.locator('.player-view').waitFor({ state: 'visible' });
+      lastOpenedPhoneCover = await phone.locator('.player-view').evaluate(element => ({
+        title: element.querySelector('.song-name')?.textContent?.trim(),
+        credits: [...element.querySelectorAll('.player-credits span')].map(span => span.textContent.trim()),
+        displayedTime: element.querySelector('.progress-bar .time')?.textContent?.trim(),
+      }));
+      await touchSwipe(phone.locator('.player-view'), 'left');
+      await phone.locator('.lyrics-view').waitFor({ state: 'visible' });
+    };
+    const closePhoneLyrics = async () => {
+      await touchSwipe(phone.locator('.lyrics-view'), 'right');
+      await phone.locator('.player-view').waitFor({ state: 'visible' });
+    };
+    const startupLyrics = await app.evaluate(() => global.__wuuTogether.startupLyrics);
+    const requireStartupLyrics = async (label, index, time, beforeMetadata) => {
+      const expected = startupLyrics[index];
+      const position = [0, 5, 10, 20, 30, 40, 50, 70].findLastIndex(value => value <= time);
+      await phone.locator('.lyrics-view .lyric-line.cur .lyric-text').filter({ hasText: new RegExp('^' + expected.lines[position] + '$') }).waitFor();
+      assert.deepEqual(await phone.locator('.lyrics-view .lyric-text').allTextContents(), expected.lines, `${label}: only the actual audio song's distinct lyrics appear`);
+      assert.deepEqual(lastOpenedPhoneCover.credits,
+        [`作词 ${expected.lyricist}`, `作曲 ${expected.composer}`], `${label}: title credits belong to the same song`);
+      assert.equal(lastOpenedPhoneCover.title, tracks[index].name);
+      assert.equal((await phone.locator('.lyrics-title').textContent()).trim(), tracks[index].name, `${label}: the live lyric title retains the actual song identity`);
+      const media = await sample(phone), source = new URL(media.source);
+      assert.equal(source.pathname, '/api/stream-by-path'); assert.equal(source.searchParams.get('path'), tracks[index].rawPath);
+      assert.equal(media.paused, true, `${label}: reading lyrics does not begin playback`);
+      if (beforeMetadata) assert.equal(media.readyState, 0, `${label}: first-open lyrics really render before native metadata is released`);
+      else assert.ok(Math.abs(media.time - time) < .2, `${label}: native audio retains the restored position`);
+      assert.equal(lastOpenedPhoneCover.displayedTime, '0:35');
+      report.startupLyrics.push({ label, current: expected.lines[position], expectedPath: expected.audioPath, cover: lastOpenedPhoneCover, media, beforeMetadata });
+    };
 
-    await desktopSeek(20); await desktopRate(.5);
-    await waitMedia(desktop, { path: tracks[0].path, paused: true, time: 20, rate: .5 });
+    await desktopSeek(35); await desktopRate(.5);
+    await waitMedia(desktop, { path: tracks[0].path, paused: true, time: 35, rate: .5 });
+    await app.evaluate(() => global.__wuuTogether.armMobileMediaGate('first-http-startup'));
     report.phase = 'production-mobile-startup-and-path-validation';
     await app.evaluate(() => global.__wuuTogether.openMobile());
     phone = app.windows().find(page => page.url().startsWith(`http://127.0.0.1:${port}/`));
@@ -281,6 +330,19 @@ async function run() {
     });
     await phone.locator('.bottom-nav').waitFor();
     assert.equal(await phone.locator('audio').count(), 1, 'The mobile UI owns one actual audio element');
+    assert.equal(await phone.locator('.view-switch').count(), 0, 'The cover/lyrics header tabs are removed');
+    const firstHttpState = await phone.evaluate(async () => (await (await fetch('/api/state')).json()).state);
+    const serverLibrary = await phone.evaluate(async () => (await (await fetch('/api/songs?page=1&pageSize=30')).json()).songs);
+    const firstServerSong = serverLibrary.find(song => song.audioPath === tracks[0].rawPath);
+    assert.ok(firstServerSong); assert.notEqual(firstServerSong.id, tracks[0].id, 'The actual scanner and desktop libraries have different orders');
+    assert.equal(firstHttpState.index, firstServerSong.id); assert.equal(firstHttpState.songInfo.id, firstServerSong.id);
+    assert.equal(firstHttpState.audioPath, tracks[0].rawPath);
+    report.firstHttpState = firstHttpState; report.serverLibrary = serverLibrary;
+    await openPhoneLyrics(); await requireStartupLyrics('first-http-before-metadata', 0, 35, true);
+    assert.ok(await app.evaluate(() => global.__wuuTogether.releaseMobileMediaGate()) > 0, 'HTTP startup had a genuinely held production audio request');
+    await waitMedia(phone, { path: tracks[0].path, paused: true, time: 35, rate: .5 });
+    await requireStartupLyrics('first-http-after-metadata', 0, 35, false); await closePhoneLyrics();
+    report.checks.push('first default-off HTTP startup remaps the genuinely different server library order; first left swipe shows the actual song, credits and paused 35 second lyrics before/after native metadata without next');
     const syncMode = await phone.evaluate(async () => (await fetch('/api/sync-mode')).json());
     assert.equal(syncMode.mode, 'merged', 'Default-off independence is checked with merged storage mode');
     const localRange = await readStream(tracks[0].rawPath);
@@ -296,15 +358,51 @@ async function run() {
     await phoneSong(1); await waitMedia(phone, { path: tracks[1].path, paused: false });
     await phoneButton('暂停').click(); await phoneSeek(47); await phoneRate(2);
     await waitMedia(phone, { path: tracks[1].path, paused: true, time: 47, rate: 2 });
-    await waitMedia(desktop, { path: tracks[0].path, paused: true, time: 20, rate: .5 });
+    await waitMedia(desktop, { path: tracks[0].path, paused: true, time: 35, rate: .5 });
     assert.equal(await commandCount(), initialCommands);
     assert.equal(await phone.evaluate(() => window.__togetherTransport.filter(entry => entry.message.type === 'welcome').length), 0);
     await mark('default-off-independent'); report.checks.push('default-off mobile song/pause/seek/rate remain independent even with merged storage synchronization');
 
-    await membership(true); await aligned('join-paused-desktop', { path: tracks[0].path, paused: true, time: 20, rate: .5 });
+    await membership(true); await aligned('join-paused-desktop', { path: tracks[0].path, paused: true, time: 35, rate: .5 });
     const joinedSource = new URL((await sample(phone)).source);
     assert.equal(joinedSource.pathname, '/api/stream-by-path'); assert.equal(joinedSource.searchParams.get('path'), tracks[0].rawPath);
     await phone.getByText('已连接电脑', { exact: true }).waitFor();
+    const coldCommands = await commandCount();
+    phoneHistory.push(...await phone.evaluate(() => window.__togetherTransport));
+    const coldNetwork = await phone.context().newCDPSession(phone);
+    try {
+      // The preceding HTTP case has already decoded this URL. A cache hit can
+      // otherwise bypass the real HTTP gate entirely on reload.
+      await coldNetwork.send('Network.enable');
+      await coldNetwork.send('Network.clearBrowserCache');
+      await coldNetwork.send('Network.setCacheDisabled', { cacheDisabled: true });
+      report.savedWsStartupCache = { cleared: true, disabledDuringStartup: true };
+      await app.evaluate(() => global.__wuuTogether.armMobileMediaGate('first-saved-ws-startup'));
+      await phone.reload({ waitUntil: 'domcontentloaded' }); await phone.locator('.bottom-nav').waitFor();
+      await phone.waitForFunction(() => window.__togetherTransport.some(entry => entry.message.type === 'welcome' && entry.message.hostSong?.song));
+      const coldWelcome = await phone.evaluate(() => window.__togetherTransport.find(entry => entry.message.type === 'welcome').message);
+      assert.equal(coldWelcome.hostSong.song.audioPath, tracks[0].rawPath);
+      assert.equal(coldWelcome.hostSong.song.id, firstServerSong.id, 'Cold real WS welcome uses the canonical server index');
+      report.firstWsWelcome = coldWelcome;
+      let held;
+      for (let attempt = 0; attempt < 200; attempt++) {
+        held = await app.evaluate(() => global.__wuuTogether.log.mediaGates.find(entry => entry.label === 'first-saved-ws-startup' && !entry.releasedAt));
+        if (held) break;
+        await delay(60);
+      }
+      assert.ok(held, 'A genuinely cold saved WS startup must reach the production HTTP media gate, rather than reuse decoded cache');
+      assert.equal(new URL(held.url, `http://127.0.0.1:${port}`).searchParams.get('path'), tracks[0].rawPath);
+      report.savedWsStartupCache.heldRequest = held;
+      await openPhoneLyrics(); await requireStartupLyrics('first-saved-ws-before-metadata', 0, 35, true);
+      assert.ok(await app.evaluate(() => global.__wuuTogether.releaseMobileMediaGate()) > 0, 'Saved WS startup held a genuine production audio request');
+      await aligned('first-saved-ws-after-metadata', { path: tracks[0].path, paused: true, time: 35, rate: .5 });
+      await requireStartupLyrics('first-saved-ws-after-metadata', 0, 35, false); await closePhoneLyrics();
+    } finally {
+      await coldNetwork.send('Network.setCacheDisabled', { cacheDisabled: false }).catch(() => {});
+      await coldNetwork.detach().catch(() => {});
+    }
+    assert.equal(await commandCount(), coldCommands, 'First-open lyrics and paused cold welcome do not send a next or playback command');
+    report.checks.push('saved membership cold WS startup receives a real canonical welcome and first native left swipe renders matching lyrics/credits at 35 seconds before/after actual metadata without next or playback commands');
     await phoneTab('播放'); await phoneButton('播放').click(); await aligned('phone-play', { path: tracks[0].path, paused: false, rate: .5 });
     await phoneButton('暂停').click(); await aligned('phone-pause', { path: tracks[0].path, paused: true, rate: .5 });
     const progress = phone.locator('.player-view .progress-range');
@@ -467,11 +565,11 @@ async function run() {
     await phoneButton('暂停').click(); await aligned('preview-phone-pause', { path: firstPreview, paused: true, rate: 2 });
     await phoneSeek(5); await aligned('preview-phone-seek', { path: firstPreview, paused: true, time: 4.95, rate: 2 }, .2);
     await phoneRate(.5); await aligned('preview-phone-rate', { path: firstPreview, paused: true, time: 4.95, rate: .5 }, .2);
-    await phoneTab('播放'); await phone.locator('.view-switch').getByRole('button', { name: '歌词', exact: true }).click();
+    await openPhoneLyrics();
     const expectedLines = await app.evaluate(() => global.__wuuTogether.previewLines);
     await phone.locator('.lyrics-view .lyric-line.cur').filter({ hasText: expectedLines[1] }).waitFor();
     assert.deepEqual(await phone.locator('.lyrics-view .lyric-text').allTextContents(), expectedLines, 'Phone uses actual preview lyric metadata without a fabricated library index');
-    await phone.locator('.view-switch').getByRole('button', { name: '封面', exact: true }).click();
+    await closePhoneLyrics();
     await phoneButton('播放').click(); await aligned('preview-phone-play', { path: firstPreview, paused: false, rate: .5 });
     await desktopButton('暂停').click(); await aligned('preview-desktop-pause', { path: firstPreview, paused: true, rate: .5 });
     await desktopSeek(12); await aligned('preview-desktop-seek', { path: firstPreview, paused: true, time: 12, rate: .5 }, .2);
@@ -495,8 +593,8 @@ async function run() {
       stats: JSON.stringify(global.__wuuSmoke.data.stats), progress: JSON.stringify(global.__wuuSmoke.data.progress),
       likes: JSON.stringify(global.__wuuSmoke.data.likes), dislikes: JSON.stringify(global.__wuuSmoke.data.dislikes), collections: JSON.stringify(global.__wuuSmoke.data.collections) }));
     assert.deepEqual(previewAfter, previewBaseline, 'Listening to previews does not import songs or write local-song statistics/progress');
-    assert.equal(report.requests.filter(entry => entry.at >= previewStartedAt && /\/api\/(?:lyric|progress|play-count)/.test(entry.url)).length, 0,
-      'Preview never fetches fake-index lyrics/progress or reports fake-index listening statistics');
+    assert.equal(report.requests.filter(entry => entry.at >= previewStartedAt && /\/api\/(?:lyric(?:-by-path)?(?:\/|\?|$)|progress(?:\/|\?|$)|play-count(?:\?|$))/.test(entry.url)).length, 0,
+      'Preview never requests library lyrics by index or path, fetches library progress, or reports library listening statistics');
     assert.equal(report.requests.filter(entry => entry.at >= previewStartedAt && entry.method === 'POST' && /\/api\/(?:like|dislike|collections)/.test(entry.url)).length, 0,
       'Preview controls cannot write local likes, dislikes or collections');
     report.checks.push('replaced and arbitrary preview URLs are denied by HTTP and real WS validation; previews never import or alter library statistics/progress');

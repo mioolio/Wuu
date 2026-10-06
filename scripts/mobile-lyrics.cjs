@@ -18,29 +18,32 @@ async function waitUntil(check, message, timeout = 15000) {
   assert.fail(message);
 }
 
-// These touch events go through the same Vue gesture handlers as a finger swipe.
-// DOM event dispatch is used because Electron windows do not create a mobile context.
+// Chromium delivers genuine TouchEvents to the production gesture handlers.
+// The same native input path also exercises range exclusion and vertical scroll.
 async function touchGesture(locator, direction) {
-  await locator.evaluate((element, direction) => {
-    const box = element.getBoundingClientRect();
-    const left = box.left + box.width * .2, right = box.left + box.width * .8;
-    const from = direction === 'left' ? right : left, to = direction === 'left' ? left : right;
-    const y = box.top + Math.min(200, box.height * .35);
-    const fire = (type, x, ended = false) => {
-      const point = { identifier: 1, target: element, clientX: x, clientY: y, pageX: x, pageY: y };
-      const event = new Event(type, { bubbles: true, cancelable: true });
-      Object.defineProperties(event, { touches: { value: ended ? [] : [point] }, changedTouches: { value: [point] } });
-      element.dispatchEvent(event);
-    };
-    fire('touchstart', from); fire('touchmove', to); fire('touchend', to, true);
-  }, direction);
+  const box = await locator.boundingBox(); assert.ok(box, 'The touch target is visible');
+  const vertical = direction === 'up' || direction === 'down';
+  const left = box.x + box.width * .2, right = box.x + box.width * .8;
+  const y = box.y + Math.min(200, box.height * .35);
+  const from = { x: vertical ? box.x + box.width * .5 : direction === 'left' ? right : left,
+    y: vertical ? box.y + box.height * (direction === 'up' ? .7 : .3) : y };
+  const to = { x: vertical ? from.x : direction === 'left' ? left : right,
+    y: vertical ? box.y + box.height * (direction === 'up' ? .3 : .7) : y };
+  const session = await locator.page().context().newCDPSession(locator.page());
+  try {
+    await session.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 });
+    await session.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ ...from, id: 1 }] });
+    for (const fraction of [.25, .5, .75, 1]) await session.send('Input.dispatchTouchEvent', { type: 'touchMove',
+      touchPoints: [{ x: from.x + (to.x - from.x) * fraction, y: from.y + (to.y - from.y) * fraction, id: 1 }] });
+    await session.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  } finally { await session.detach(); }
 }
 
 (async () => {
   let app, page;
   try {
     app = await electron.launch({ executablePath: require('electron'), args: [path.join(__dirname, 'mobile-smoke-main.cjs')], cwd: root,
-      env: { ...process.env }, timeout: 30000 });
+      env: { ...process.env, WUU_MOBILE_LYRIC_PATH_FIXTURE: '1' }, timeout: 30000 });
     page = await app.firstWindow();
     page.setDefaultTimeout(15000);
     page.on('pageerror', error => report.rendererErrors.push(error.message));
@@ -54,7 +57,7 @@ async function touchGesture(locator, direction) {
       const sample = () => {
         const audio = document.querySelector('audio');
         if (audio?.getAttribute('src')) {
-          window.__mobileMediaSamples.push({ at: performance.now(), readyState: audio.readyState, time: audio.currentTime,
+          window.__mobileMediaSamples.push({ at: performance.now(), readyState: audio.readyState, time: audio.currentTime, source: audio.currentSrc || audio.src,
             duration: Number.isFinite(audio.duration) ? audio.duration : null, paused: audio.paused,
             displayedTime: document.querySelector('.player-view .progress-bar .time')?.textContent?.trim() || '',
             lyric: document.querySelector('.lyric-line.cur .lyric-text, .lyric-line.active .lyric-text')?.textContent?.trim() || '' });
@@ -69,6 +72,7 @@ async function touchGesture(locator, direction) {
       fixture.lyrics[0] = '[作词:真实署名作者][作曲:真实署名作曲]\n[00:02.00]编曲:制作署名\n[00:03.00]混音:混音署名\n' + fixture.lyrics[0];
       fixture.state.songInfo.lyricist = '  歌曲署名作者  ';
       fixture.state.songInfo.composer = '歌曲署名作曲';
+      fixture.armMediaGate('first-http-lyrics-before-metadata');
     });
     await page.reload({ waitUntil: 'domcontentloaded' });
     const cover = () => page.locator('.player-view');
@@ -89,6 +93,10 @@ async function touchGesture(locator, direction) {
     };
     const audio = () => page.locator('audio').evaluate(element => ({ time: element.currentTime, duration: element.duration,
       paused: element.paused, readyState: element.readyState, source: element.currentSrc || element.src }));
+    const fixtureSongs = await app.evaluate(() => global.__wuuMobileFixture.songs);
+    const isSongSource = (source, index) => !!source && new URL(source).searchParams.get('path') === fixtureSongs[index].audioPath;
+    const lyricRequest = index => app.evaluate((_electron, index) => global.__wuuMobileFixture.requests.some(request =>
+      request.path === '/api/lyric-by-path' && request.id === index), index);
     const waitingInk = () => page.evaluate(() => getComputedStyle(document.body).color);
     const capture = async name => {
       const file = path.join(artifacts, name + '.png');
@@ -146,15 +154,40 @@ async function touchGesture(locator, direction) {
     };
 
     await cover().waitFor({ state: 'visible' });
+    await waitUntil(async () => isSongSource((await audio()).source, 0) && await lyricRequest(0), 'First HTTP startup uses the actual song path for both audio and lyrics');
+    assert.equal(await page.locator('.view-switch').count(), 0, 'The cover/lyrics header switch has been removed');
+    const desktopState = await page.evaluate(async () => (await (await fetch('/api/state')).json()).state);
+    assert.equal(desktopState.index, 1); assert.equal(desktopState.audioPath, fixtureSongs[0].audioPath);
+    assert.notEqual(desktopState.index, fixtureSongs[0].id, 'The startup fixture really contains a mismatched desktop/library index');
+    await waitUntil(async () => (await cover().locator('.progress-bar .time').first().textContent()).trim() === '0:35', 'The cover displays the pending startup clock before opening lyrics');
+    await waitUntil(() => page.evaluate(() => window.__mobileMediaSamples.some(sample => sample.readyState < 1 && sample.displayedTime === '0:35')), 'A real rendered frame exposes the pending 35 second clock before metadata');
+    await openLyrics();
+    await requireLine('海岸·30秒歌词', 'The first left swipe shows the correct paused 35 second lyric before native metadata');
+    const beforeMetadata = await audio();
+    assert.equal(beforeMetadata.readyState, 0); assert.equal(beforeMetadata.paused, true);
+    assert.ok(isSongSource(beforeMetadata.source, 0));
+    assert.ok((await lyricView().locator('.lyric-text').allTextContents()).every(text => !text.startsWith('迟到·')));
+    report.media.push({ step: 'first-http-lyrics-before-metadata', ...beforeMetadata });
+    assert.ok(await app.evaluate(() => global.__wuuMobileFixture.releaseMediaGate()) > 0, 'The first-open test releases a genuinely held HTTP audio request');
     await waitUntil(async () => { const media = await audio(); return media.readyState >= 1 && Math.abs(media.time - 35) < .2; }, 'Delayed metadata should apply the pending 35 second seek');
     const initial = await audio();
     assert.equal(initial.paused, true); assert.ok(Math.abs(initial.duration - 90) < .1);
-    assert.equal((await cover().locator('.progress-bar .time').first().textContent()).trim(), '0:35');
     const pending = await page.evaluate(() => window.__mobileMediaSamples.filter(sample => sample.readyState < 1 && sample.displayedTime === '0:35'));
     assert.ok(pending.length, 'The paused 35 second position should be displayed before audio metadata arrives');
     report.pendingMetadata = { samples: pending.length, first: pending[0], last: pending.at(-1) };
     report.media.push({ step: 'initial-paused', ...initial });
-    report.checks.push('paused startup restores 35 seconds before and after delayed native metadata');
+    await requireLine('海岸·30秒歌词', 'Native metadata preserves the first-open paused lyric and position without next');
+    assert.ok(isSongSource(initial.source, 0));
+    report.checks.push('first HTTP startup with a mismatched desktop index loads lyrics by actual audio path and keeps paused 35 second focus before/after native metadata without next');
+    await touchGesture(lyricView(), 'up');
+    assert.equal(await lyricView().isVisible(), true, 'Vertical native lyric scrolling does not switch back to the cover');
+    await closeLyrics();
+    assert.equal((await cover().locator('.progress-bar .time').first().textContent()).trim(), '0:35', 'Returning from the first lyric open retains the restored clock');
+    await touchGesture(cover().getByRole('slider', { name: '播放进度', exact: true }), 'left');
+    assert.equal(await cover().isVisible(), true, 'Dragging the native progress range does not switch to lyrics');
+    await seekCoverTo(35);
+    await waitUntil(async () => Math.abs((await audio()).time - 35) < .2, 'Restore the same startup position after testing the native progress gesture');
+    report.checks.push('native left/right touch swipes switch cover and lyrics, while range dragging and vertical lyric scrolling preserve the current view');
     const credits = cover().locator('.player-credits[aria-label="词曲信息"]');
     await credits.waitFor({ state: 'visible' });
     assert.deepEqual((await credits.locator('span').allTextContents()).map(text => text.trim()), ['作词 歌曲署名作者', '作曲 歌曲署名作曲']);
@@ -274,23 +307,26 @@ async function touchGesture(locator, direction) {
     if (!(await audio()).paused) await cover().locator('.play-btn').click();
 
     const listTab = page.locator('.bottom-nav').getByRole('button', { name: '音乐库', exact: true });
-    const olderLyricResponse = page.waitForResponse(response => response.url().endsWith('/api/lyric/1'));
+    const olderLyricResponse = page.waitForResponse(response => {
+      const url = new URL(response.url());
+      return url.pathname === '/api/lyric-by-path' && url.searchParams.get('path') === fixtureSongs[1].audioPath;
+    });
     await listTab.click();
     await page.locator('.song-list-view .song-item').filter({ hasText: '延迟返回的旧歌' }).click();
-    await waitUntil(() => app.evaluate(() => global.__wuuMobileFixture.requests.some(request => request.path === '/api/lyric/1')), 'The first delayed lyric request starts');
+    await waitUntil(() => lyricRequest(1), 'The first delayed lyric request starts');
     await listTab.click();
     await page.locator('.song-list-view .song-item').filter({ hasText: '最终选择的歌曲' }).click();
     await openLyrics();
     await waitUntil(async () => (await lyricView().locator('.lyric-text').allTextContents()).length === 8 &&
       (await lyricView().locator('.lyric-text').allTextContents()).every(text => text.startsWith('最终·')), 'The last selected song displays its own lyrics');
-    await waitUntil(() => app.evaluate(() => global.__wuuMobileFixture.requests.some(request => request.path === '/api/lyric/1' && request.servedAt)), 'Wait for the older request to complete');
+    await waitUntil(() => app.evaluate(() => global.__wuuMobileFixture.requests.some(request => request.path === '/api/lyric-by-path' && request.id === 1 && request.servedAt)), 'Wait for the older request to complete');
     await (await olderLyricResponse).text();
     // Allow the delivered fetch result and Vue update to finish before inspecting DOM.
     await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     const rows = await lyricView().locator('.lyric-text').allTextContents();
     assert.equal(rows.length, 8); assert.ok(rows.every(text => text.startsWith('最终·')));
     assert.ok(!(await lyricView().textContent()).includes('迟到·'));
-    assert.ok((await audio()).source.endsWith('/api/stream/2'));
+    assert.ok(isSongSource((await audio()).source, 2));
     await waitUntil(async () => (await currentLine().allTextContents()).some(text => text.startsWith('最终·')), 'The final song owns the active lyric as well');
     await capture('05-final-song-after-stale-lyrics');
     report.checks.push('rapid song selection ignores late lyrics from the previous song');
@@ -454,7 +490,7 @@ async function touchGesture(locator, direction) {
     await waitUntil(() => page.evaluate(() => !!window.__mobileEndedFocus), 'Native audio reaches the actual track end');
     report.finalFocus = await page.evaluate(() => window.__mobileEndedFocus);
     assert.ok(Math.abs(report.finalFocus.time - report.finalFocus.duration) < .02);
-    assert.ok(report.finalFocus.source.endsWith('/api/stream/0'));
+    assert.ok(isSongSource(report.finalFocus.source, 0));
     assert.equal(report.finalFocus.current.length, 1);
     assert.equal(report.finalFocus.current[0].text, 'RAW下一句');
     assert.equal(report.finalFocus.current[0].size, 60);
@@ -464,8 +500,8 @@ async function touchGesture(locator, direction) {
     report.fixture = await app.evaluate(() => ({ origin: global.__wuuMobileFixture.origin, requests: global.__wuuMobileFixture.requests }));
     const delayedAudio = report.fixture.requests.find(request => request.path.startsWith('/api/stream') && request.delayMs === 900 && request.servedAt);
     assert.ok(delayedAudio && delayedAudio.servedAt - delayedAudio.startedAt >= 850, 'The metadata test used a genuinely delayed HTTP audio response');
-    const oldLyric = report.fixture.requests.find(request => request.path === '/api/lyric/1' && request.servedAt);
-    const finalLyric = report.fixture.requests.find(request => request.path === '/api/lyric/2' && request.servedAt);
+    const oldLyric = report.fixture.requests.find(request => request.path === '/api/lyric-by-path' && request.id === 1 && request.servedAt);
+    const finalLyric = report.fixture.requests.find(request => request.path === '/api/lyric-by-path' && request.id === 2 && request.servedAt);
     assert.ok(oldLyric.servedAt > finalLyric.servedAt, 'The race test delivered older lyrics after the final song lyrics');
     assert.deepEqual(report.rendererErrors, [], 'The mobile renderer should not emit uncaught errors');
     report.ok = true;

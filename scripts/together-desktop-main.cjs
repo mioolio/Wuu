@@ -12,6 +12,20 @@ fs.mkdirSync(configDir, { recursive: true });
 require('./smoke-main.cjs');
 
 const fixture = global.__wuuSmoke;
+const startupTimes = [0, 5, 10, 20, 30, 40, 50, 70];
+const startupLyrics = fixture.songs.map((song, index) => {
+  const prefix = `首开${String.fromCharCode(65 + index)}`;
+  const lyricist = `${prefix}词作者`, composer = `${prefix}曲作者`;
+  const file = path.join(artifacts, `${prefix}.lrc`);
+  const lines = startupTimes.map(time => `${prefix}·${time}秒歌词`);
+  fs.writeFileSync(file, `[lyricist:${lyricist}]\n[composer:${composer}]\n` + startupTimes.map((time, i) =>
+    `[${String(Math.floor(time / 60)).padStart(2, '0')}:${String(time % 60).padStart(2, '0')}.00]${lines[i]}`).join('\n'), 'utf8');
+  Object.assign(song, { lrcPath: file, rawPath: null, lyricist, composer });
+  return { audioPath: song.audioPath, lines, lyricist, composer };
+});
+// Desktop library order stays A,B,C. The real production HTTP/WS server scans
+// B,C,A, reproducing a desktop index that cannot identify a mobile lyric.
+const serverSongs = [fixture.songs[1], fixture.songs[2], fixture.songs[0]].map((song, id) => ({ ...song, id }));
 const port = Number(process.env.WUU_TOGETHER_PORT);
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('A dedicated fixture port is required');
 Object.assign(fixture.data.settings, { interfaceMode: 'modern', mobileEnabled: true, serverEnabled: false,
@@ -19,7 +33,18 @@ Object.assign(fixture.data.settings, { interfaceMode: 'modern', mobileEnabled: t
 const storage = require('../core/storage');
 Object.assign(storage, { configDir, ensureConfigDir: () => fs.mkdirSync(configDir, { recursive: true }) });
 
-const log = { ipc: [], commands: [], scans: [], crashes: [], mainIds: [], upstream: [], audioOutput: [] };
+const log = { ipc: [], commands: [], scans: [], crashes: [], mainIds: [], upstream: [], audioOutput: [], mediaGates: [] };
+const mediaGate = { armed: false, label: '', pending: [] };
+const armMobileMediaGate = label => {
+  if (mediaGate.pending.length) throw new Error('Release the previous native media gate first');
+  mediaGate.armed = true; mediaGate.label = label;
+};
+const releaseMobileMediaGate = () => {
+  mediaGate.armed = false;
+  const pending = mediaGate.pending.splice(0);
+  pending.forEach(deliver => deliver());
+  return pending.length;
+};
 const unknownPath = path.join(artifacts, 'outside-library.wav');
 fs.copyFileSync(fixture.songs[0].audioPath, unknownPath);
 const previewLyric = '[lyricist:一起听测试作者]\n[composer:一起听测试作者]\n[00:00.00]试听中的海风\n[00:04.00]把远方的声音带到手机\n[00:12.00]暂存心动，选择保存';
@@ -51,7 +76,8 @@ ipcMain.handle('netease-preview', async (_event, { songId: id, quality }) => {
     meta: { title: `新曲 ${String(id).replace('remote-', '')}`, artist: '一起听试听', cover: fixture.songs[0].coverPath }, lrcText: previewLyric } };
 });
 global.__wuuTogether = { log, port, origin: `http://127.0.0.1:${port}`, configDir,
-  unknownPath, previewLines, previewLyric, get previewOrigin() { return previewOrigin; },
+  unknownPath, previewLines, previewLyric, startupLyrics, serverSongs, armMobileMediaGate, releaseMobileMediaGate,
+  get previewOrigin() { return previewOrigin; },
   unmuteMain: () => {
     // smoke-main mutes its windows at startup. The fixture WAV is already all
     // zero PCM, so keep real native output active without making any sound.
@@ -108,8 +134,8 @@ workerThreads.Worker = class FixtureLibraryWorker extends EventEmitter {
   }
   postMessage(message) {
     if (message?.type !== 'scan') throw new Error('Unexpected fixture scanner request');
-    log.scans.push({ at: Date.now(), paths: fixture.songs.map(song => song.audioPath) });
-    setImmediate(() => this.emit('message', { type: 'scan-result', ok: true, songs: fixture.songs }));
+    log.scans.push({ at: Date.now(), paths: serverSongs.map(song => song.audioPath) });
+    setImmediate(() => this.emit('message', { type: 'scan-result', ok: true, songs: serverSongs }));
   }
   terminate() { return Promise.resolve(0); }
 };
@@ -117,7 +143,26 @@ let server;
 try { server = require('../server'); }
 finally { workerThreads.Worker = OriginalWorker; ipcMain.handle = originalHandle; }
 ipcMain.handle('playlist-server-status', () => ({ ok: true, running: server.isRunning(), port: server.getPort() }));
-server.startServer(port, '127.0.0.1', [], 0, false);
+// Hold only controlled native-test audio requests. Releasing delegates to the
+// unmodified production request listener, Range validation and real file bytes.
+const originalCreateServer = http.createServer;
+http.createServer = function (...args) {
+  const listener = typeof args.at(-1) === 'function' ? args.pop() : null;
+  if (listener) args.push((req, res) => {
+    if (mediaGate.armed && /^\/api\/stream(?:-by-path|\/)/.test(req.url || '')) {
+      const entry = { label: mediaGate.label, requestedAt: Date.now(), url: req.url };
+      log.mediaGates.push(entry);
+      mediaGate.pending.push(() => {
+        entry.releasedAt = Date.now();
+        if (res.destroyed) { entry.aborted = true; return; }
+        listener(req, res);
+      });
+    } else listener(req, res);
+  });
+  return Reflect.apply(originalCreateServer, this, args);
+};
+try { server.startServer(port, '127.0.0.1', [], 0, false); }
+finally { http.createServer = originalCreateServer; }
 app.whenReady().then(() => {
   const main = require('../core/state').getMainWindow();
   if (main) log.mainIds.push({ windowId: main.id, webContentsId: main.webContents.id });

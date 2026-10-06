@@ -216,7 +216,7 @@ interface PlainLyricLine {time: number; text: string} // 绝对秒
 | --- | --- | --- |
 | `/api/songs?page=&pageSize=&q=`、`/api/refresh`、`/api/random` | GET，缓存歌库分页/刷新/抽样 | 手机列表和首播 |
 | `/api/stream/:index`、`/api/stream-by-path?path=` | GET，支持单区间 Range | 播放与按路径桌面同步 |
-| `/api/cover/:index`、`/api/cover-by-path?path=`、`/api/lyric/:index` | GET | 图片与歌词 |
+| `/api/cover/:index`、`/api/cover-by-path?path=`、`/api/lyric/:index`、`/api/lyric-by-path?path=` | GET；路径歌词只接受歌库中已知音频路径 | 图片与歌词 |
 | `/api/state`、`/api/sync-mode` | GET；sync-mode 亦接受 POST `{mode}` | 桌面状态快照，`merged`/`isolated` 模式 |
 | `/api/collections`、`/api/collections/create` | GET / POST `{name}` | 共用歌单 |
 | `/api/like`、`/api/like-collection`、`/api/dislike` | POST 歌曲索引、歌单 ID 和增删信息 | 手机收藏与不推荐 |
@@ -230,9 +230,9 @@ interface PlainLyricLine {time: number; text: string} // 绝对秒
 
 [mobile_UI/src/composables/usePlayer.js](../mobile_UI/src/composables/usePlayer.js) 管理手机音频、历史、歌词、桌面同步和 MediaSession。HTTP `/api/state` 只用于首次暂停选歌；设置中显式开启的一起听通过 WS 和主进程 IPC 连接实际桌面播放器，桌面负责自然结束切歌。
 
-手机首次同步将目标进度保存到音频元数据就绪后再 seek，首次进入仍由用户操作触发播放。歌词文本到达、暂停和跳转立即校准；活动行与逐字填充使用同一时钟，隐藏、暂停、卸载时停止逐帧更新。每次切歌隔离歌词、音源及历史进度请求，手工跳转优先于迟到恢复。历史按路径定位当前数组，避免删除后索引复用。
+手机首次同步将目标进度保存到音频元数据就绪后再 seek，首次进入仍由用户操作触发播放。HTTP 状态和 WS 首次快照均按音频路径匹配服务端歌库索引，等待首次缓存就绪；歌词也按该音频路径读取，避免桌面与手机列表顺序不同导致首开错词。歌词文本到达、暂停和跳转立即校准；活动行与逐字填充使用同一时钟，隐藏、暂停、卸载时停止逐帧更新。每次切歌隔离歌词、音源及历史进度请求，手工跳转优先于迟到恢复。历史按路径定位当前数组，避免删除后索引复用。
 
-桌面状态在手机启动时同步一次，不是持续轮询镜像。手机每 3 秒检查进度，变化达到 5 秒才上报；恢复已有进度要求超过 5 秒且距离结尾超过 5 秒。`songRequest/navigationRequest/seekRevision` 分别隔离切歌、前后导航与 seek 恢复。
+桌面状态在手机启动时同步一次，不是持续轮询镜像。手机每 3 秒检查进度，变化达到 5 秒才上报；恢复已有进度要求超过 5 秒且距离结尾超过 5 秒。`songRequest/navigationRequest/seekRevision` 分别隔离切歌、前后导航与 seek 恢复；`lyricRequest` 按歌曲路径和索引独立隔离歌词，断线取消在途播放时仍接收同一首的有效歌词，换曲、重排和播放器卸载使旧歌词请求失效。
 
 MediaSession 提供元数据、封面、play/pause、上一首/下一首、seekto、stop；`setPositionState` 更新系统进度。能力与显示取决于浏览器及操作系统。当前未配置离线 service worker 和 PWA manifest，不能将普通主屏书签描述成已实现离线 PWA。
 
@@ -375,7 +375,7 @@ npm run build:mobile
 
 | 验证入口 | 真实覆盖范围 |
 | --- | --- |
-| `npm test` | 桌面 Vitest、移动 Node tests、启动扫描、WS 房间与经典试听竞态测试，按顺序执行 |
+| `npm test` | 桌面 Vitest、移动 Node tests、启动扫描、服务歌曲身份、WS 房间与经典试听竞态测试，按顺序执行 |
 | `npm run typecheck` / `build:desktop` | TypeScript 严格检查及 Vite 资源生成 |
 | `test:scanner` / `test:startup` | 基础歌库快速返回、迟到标签/用户数据、早期操作与播放不中断 |
 | `test:previous` | 真音频随机历史、回退再前进、顺序首尾、暂停与进度 |

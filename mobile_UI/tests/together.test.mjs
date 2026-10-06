@@ -87,7 +87,7 @@ test('真正与电脑一起听：显式加入、双向控制、倍速、重连�
     message(socket, { type: 'op', from: 0, seq: 10, op: 'state', payload: snapshot(2, 18, false, 2) });
     await flush(); assert.equal(audio.currentTime, 18); assert.equal(audio.paused, true); assert.equal(socket.messages.length, 0);
   });
-  await t.test('同路径重新编号合并最新id/署名并重取索引歌词，不重开音频', async () => {
+  await t.test('同路径重新编号合并最新id/署名并按歌曲路径重取歌词，不重开音频', async () => {
     const socket = sockets.at(-1), source = audio.source, plays = audio.playCount;
     const value = snapshot(2, 18, false, 2);
     value.song = { ...value.song, id: 0, lyricist: 'Latest real writer' };
@@ -95,7 +95,7 @@ test('真正与电脑一起听：显式加入、双向控制、倍速、重连�
     message(socket, { type: 'op', from: 0, seq: 11, op: 'state', payload: value }); await flush();
     assert.equal(player.currentSong.value.id, 0); assert.equal(player.currentSong.value.lyricist, 'Latest real writer');
     assert.equal(audio.source, source); assert.equal(audio.playCount, plays); assert.equal(audio.currentTime, 18);
-    assert.ok(player.lyricText.value.includes('/api/lyric/0'));
+    assert.ok(player.lyricText.value.includes('/api/lyric-by-path?path=%2Ffixture%2F2.wav'));
     player.pause(); assert.equal(socket.messages.at(-1).payload.songId, 0);
     assert.equal(socket.messages.at(-1).payload.audioPath, song(2).audioPath);
   });

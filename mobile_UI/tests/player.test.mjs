@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { activeLyricIndex, parseLyrics, readLyricTime } from '../src/services/lyrics.js';
 
 const deferred = () => {
   let resolve, reject;
@@ -65,6 +66,7 @@ async function fixture(t, route = () => undefined) {
   return { player, audio, requests };
 }
 const song = id => ({ id, songName: `歌曲 ${id}`, audioPath: `/fixture/${id}.wav` });
+const lyricUrl = item => `/api/lyric-by-path?path=${encodeURIComponent(item.audioPath)}`;
 const libraryResponse = (url, songs) => {
   if (!url.startsWith('/api/songs?')) return undefined;
   const params = new URL(url, 'http://fixture').searchParams;
@@ -74,6 +76,59 @@ const libraryResponse = (url, songs) => {
   return response({ ok: true, total: songs.length, songs: songs.slice((page - 1) * size, page * size) });
 };
 
+test('首次桌面列表错序时按实际音频路径取词，metadata前首次打开就定位正确且不需下一首', async t => {
+  const selected = song(1);
+  const expected = '[00:00]B 开头\n[00:30]B 正在唱\n[01:00]B 末句';
+  const { player, audio, requests } = await fixture(t, url => {
+    if (url === '/api/state') return response({ ok: true, state: {
+      index: 0, songInfo: selected, audioPath: selected.audioPath,
+      currentTime: 35, duration: 90, isPlaying: true,
+    } });
+    if (url.startsWith('/api/lyric-by-path?')) {
+      assert.equal(new URL(url, 'http://fixture').searchParams.get('path'), selected.audioPath);
+      return response(expected);
+    }
+    if (url === '/api/lyric/0') return response('[00:00]A 开头\n[00:30]A 正在唱');
+    if (url === '/api/lyric/1') return response(expected);
+  });
+  await player.startDesktopSync();
+  await flush();
+  assert.equal(audio.source, '/api/stream-by-path?path=%2Ffixture%2F1.wav');
+  assert.equal(player.currentSong.value.id, selected.id, '初始收藏等操作使用服务端歌曲身份');
+  assert.equal(player.lyricText.value, expected, '音频B的首屏不能取到桌面序号0对应的A歌词');
+  const lines = parseLyrics(player.lyricText.value);
+  const firstTime = readLyricTime(audio, player.currentTime.value);
+  assert.equal(lines[activeLyricIndex(lines, firstTime)].text, 'B 正在唱');
+  assert.equal(audio.readyState, 0, '首次打开可以早于媒体metadata');
+  assert.equal(audio.paused, true);
+  audio.metadata();
+  assert.equal(audio.currentTime, 35);
+  assert.equal(lines[activeLyricIndex(lines, readLyricTime(audio, player.currentTime.value))].text, 'B 正在唱');
+  assert.equal(audio.playCalls.length, 0);
+  assert.ok(requests.some(([url]) => url.startsWith('/api/lyric-by-path?')));
+});
+
+test('首次welcome播放与歌词在途时断线，同曲重连仍接收有效词而不必下一首', async t => {
+  const lyric = deferred(), playing = deferred();
+  const expected = '[00:00]当前歌曲\n[00:30]重连后仍在唱';
+  const { player, audio } = await fixture(t, url => url.startsWith('/api/lyric') ? lyric.promise : undefined);
+  audio.playResult = playing.promise;
+  const opening = player.playSong(song(0), { position: 35, restoreProgress: false, notify: false, remote: true });
+  await flush();
+  player.cancelRemotePlayback();
+  player.updateRemoteSongInfo({ ...song(0) });
+  lyric.resolve(response(expected));
+  playing.resolve();
+  await opening;
+  await flush();
+  assert.equal(player.lyricText.value, expected, '取消在途媒体播放不能同时丢弃仍属于当前歌曲的词');
+  const lines = parseLyrics(player.lyricText.value);
+  assert.equal(lines[activeLyricIndex(lines, readLyricTime(audio, player.currentTime.value))].text, '重连后仍在唱');
+  audio.metadata();
+  assert.equal(audio.currentTime, 35);
+  assert.equal(audio.paused, true, '断线取消的旧play不能在歌词回包时恢复播放');
+});
+
 test('首次同步在元数据前提供桌面进度，元数据到达后真正seek且不自动播放', async t => {
   const { player, audio, requests } = await fixture(t, url => url === '/api/state'
     ? response({ ok: true, state: { index: 0, songInfo: song(0), audioPath: '/fixture/0.wav', currentTime: 35, duration: 90, playMode: 1, isPlaying: true } }) : undefined);
@@ -81,7 +136,7 @@ test('首次同步在元数据前提供桌面进度，元数据到达后真正se
   await flush();
   assert.equal(player.currentTime.value, 35);
   assert.equal(player.duration.value, 90);
-  assert.match(player.lyricText.value, /lyric\/0/);
+  assert.ok(player.lyricText.value.includes(lyricUrl(song(0))));
   assert.equal(audio.currentTime, 0);
   assert.equal(audio.playCalls.length, 0);
   audio.dispatchEvent(new Event('timeupdate'));
@@ -116,9 +171,9 @@ test('桌面同步保留歌曲词曲署名，再同步无署名歌曲时不会�
 test('连续切歌丢弃旧歌词和旧进度响应', async t => {
   const oldLyric = deferred(), oldProgress = deferred();
   const { player, audio } = await fixture(t, url => {
-    if (url === '/api/lyric/0') return oldLyric.promise;
+    if (url === lyricUrl(song(0))) return oldLyric.promise;
     if (url === '/api/progress/0') return oldProgress.promise;
-    if (url === '/api/lyric/1') return response('[00:00]最后选择的歌');
+    if (url === lyricUrl(song(1))) return response('[00:00]最后选择的歌');
   });
   const first = player.playSong(song(0));
   await flush();
@@ -132,6 +187,67 @@ test('连续切歌丢弃旧歌词和旧进度响应', async t => {
   assert.equal(player.currentSong.value.id, 1);
   assert.equal(player.lyricText.value, '[00:00]最后选择的歌');
   assert.equal(audio.currentTime, 12);
+});
+
+test('同曲重排序号再改回时，晚到的旧歌词版本不能覆盖最新词或重开媒体', async t => {
+  const oldFirst = deferred(), oldReindex = deferred();
+  const expected = '[00:00]最新文件歌词\n[00:30]当前真实句';
+  let lyricCalls = 0;
+  const { player, audio, requests } = await fixture(t, url => {
+    if (!url.startsWith('/api/lyric')) return;
+    lyricCalls++;
+    return lyricCalls === 1 ? oldFirst.promise : lyricCalls === 2 ? oldReindex.promise : response(expected);
+  });
+  await player.playSong(song(0), { position: 35, autoplay: false, notify: false });
+  const source = audio.source;
+  player.updateRemoteSongInfo({ ...song(0), id: 1 });
+  player.updateRemoteSongInfo({ ...song(0), songName: '已刷新元数据' });
+  await flush();
+  assert.equal(player.lyricText.value, expected);
+  oldFirst.resolve(response('[00:00]同ID的旧版本'));
+  oldReindex.resolve(response('[00:00]重排中间版本'));
+  await flush();
+  assert.equal(player.lyricText.value, expected);
+  assert.equal(player.currentSong.value.id, 0);
+  assert.equal(audio.source, source);
+  assert.equal(audio.playCalls.length, 0);
+  audio.metadata();
+  assert.equal(audio.currentTime, 35);
+  const lyricRequests = requests.filter(([url]) => url.startsWith('/api/lyric'));
+  assert.deepEqual(lyricRequests.map(([url]) => url), Array(3).fill(lyricUrl(song(0))));
+});
+
+test('断线后切到同ID另一文件仍拒绝旧文件歌词，清空歌曲也使在途词失效', async t => {
+  const oldLyric = deferred(), nextLyric = deferred(), playing = deferred();
+  let lyricCalls = 0;
+  const { player, audio } = await fixture(t, url => {
+    if (!url.startsWith('/api/lyric')) return;
+    return ++lyricCalls === 1 ? oldLyric.promise : nextLyric.promise;
+  });
+  audio.playResult = playing.promise;
+  const opening = player.playSong(song(0), { position: 35, notify: false, remote: true });
+  player.cancelRemotePlayback();
+  audio.playResult = null;
+  await player.playSong({ ...song(1), id: 0 }, { autoplay: false, notify: false });
+  oldLyric.resolve(response('[00:30]旧文件不能回来'));
+  playing.resolve();
+  await opening;
+  await flush();
+  assert.equal(player.currentSong.value.audioPath, song(1).audioPath);
+  assert.equal(player.lyricText.value, '');
+  player.clearSong();
+  nextLyric.resolve(response('[00:00]清空前的词也不能回来'));
+  await flush();
+  assert.equal(player.currentSong.value, null);
+  assert.equal(player.lyricText.value, '');
+});
+
+test('没有文件路径的旧歌曲仍兼容按ID读取歌词', async t => {
+  const { player, requests } = await fixture(t);
+  await player.playSong({ id: 0, songName: '旧API歌曲' }, { autoplay: false, notify: false });
+  await flush();
+  assert.equal(player.lyricText.value, '[00:00]歌词 /api/lyric/0');
+  assert.ok(requests.some(([url]) => url === '/api/lyric/0'));
 });
 
 test('旧play promise失败晚到不覆盖新歌曲状态或请求旧进度', async t => {

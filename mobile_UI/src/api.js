@@ -44,8 +44,9 @@ export function coverByPath(filePath) {
 }
 
 // 获取歌词文本
-export async function fetchLyric(id) {
-  const resp = await fetch(`/api/lyric/${id}`);
+export async function fetchLyric(id, audioPath) {
+  const byPath = typeof audioPath === 'string' && !!audioPath.trim();
+  const resp = await fetch(byPath ? `/api/lyric-by-path?path=${encodeURIComponent(audioPath)}` : `/api/lyric/${id}`);
   if (!resp.ok) {
     console.warn(`[lyric] 获取歌词失败: id=${id} status=${resp.status}`);
     return '';
