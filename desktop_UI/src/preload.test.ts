@@ -3,6 +3,25 @@ import { runInNewContext } from 'node:vm';
 import { describe,expect,it,vi } from 'vitest';
 
 describe('React IPC 订阅生命周期',() => {
+  it('registers desktop together only while its owned subscriptions exist and removes stale callbacks', async () => {
+    const apis: Record<string, any> = {}, listeners = new Set<(...args: any[]) => void>();
+    const invoke = vi.fn(async () => ({ ok: true }));
+    runInNewContext(readFileSync(new URL('../../preload.js', import.meta.url), 'utf8'), { require: () => ({
+      contextBridge: { exposeInMainWorld: (name: string, api: any) => { apis[name] = api; } },
+      ipcRenderer: { invoke, on: (_channel: string, listener: (...args: any[]) => void) => listeners.add(listener),
+        removeListener: (_channel: string, listener: (...args: any[]) => void) => listeners.delete(listener) },
+    }) });
+    const first = vi.fn(), second = vi.fn();
+    const leaveFirst = apis.stateAPI.onTogetherCommand(first), leaveSecond = apis.stateAPI.onTogetherCommand(second);
+    expect(invoke.mock.calls).toEqual([['desktop-together-ready', true]]);
+    leaveFirst(); leaveFirst();
+    for (const listener of listeners) listener({}, { session: 'live', seq: 1, op: 'pause' });
+    expect(first).not.toHaveBeenCalled(); expect(second).toHaveBeenCalledOnce();
+    expect(invoke).toHaveBeenCalledOnce();
+    leaveSecond(); expect(listeners.size).toBe(0);
+    expect(invoke).toHaveBeenLastCalledWith('desktop-together-ready', false);
+    await Promise.resolve();
+  });
   it('passes the complete lyric snapshot with the show request while old callers can still send only a boolean', () => {
     const apis: Record<string, any> = {};
     const invoke = vi.fn();

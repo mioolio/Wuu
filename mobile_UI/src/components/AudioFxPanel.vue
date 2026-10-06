@@ -1,6 +1,6 @@
 <template>
-  <div class="settings-group">
-    <div class="group-title">音效</div>
+  <div class="settings-group audio-fx-panel">
+    <h3 class="group-title">预设</h3>
 
     <!-- 预设选择: 内置 + 自定义 + 桌面端保存的方案 -->
     <div class="fx-chips">
@@ -9,11 +9,13 @@
         :key="key"
         class="fx-chip"
         :class="{ active: activePreset === key }"
+        :aria-pressed="activePreset === key"
         @click="applyPreset(key)"
       >{{ p.name }}</button>
       <button
         class="fx-chip"
         :class="{ active: activePreset === 'custom' }"
+        :aria-pressed="activePreset === 'custom'"
         @click="applyPreset('custom')"
       >自定义</button>
       <button
@@ -21,6 +23,7 @@
         :key="'dc' + i"
         class="fx-chip"
         :class="{ active: activePreset === 'custom:' + i }"
+        :aria-pressed="activePreset === 'custom:' + i"
         @click="applyPreset('custom:' + i)"
       >{{ c.name }}</button>
     </div>
@@ -42,6 +45,9 @@
             orient="vertical"
             min="-12" max="12" step="0.5"
             :value="custom.eq[i]"
+            :aria-label="fmtHz(f) + ' 频段增益'"
+            :aria-valuetext="fmtDb(custom.eq[i]) + ' dB'"
+            @focus="selectedBand = i"
             @input="onEqInput(i, $event)"
           />
           <span class="fx-eq-label">{{ fmtHz(f) }}</span>
@@ -53,6 +59,7 @@
         <div class="fx-sub-title">频段 {{ selectedBand + 1 }} · 中心频率</div>
         <div class="fx-slider-row">
           <input type="range" min="20" max="20000" step="1"
+            aria-label="选中频段中心频率"
             :value="custom.eqFreqs[selectedBand]"
             @input="onFreqInput($event)" />
           <span class="fx-slider-val">{{ fmtHz(custom.eqFreqs[selectedBand]) }}</span>
@@ -60,6 +67,7 @@
         <div class="fx-sub-title">Q 值 (越大越窄)</div>
         <div class="fx-slider-row">
           <input type="range" min="0.1" max="6" step="0.05"
+            aria-label="选中频段 Q 值"
             :value="custom.eqQs[selectedBand]"
             @input="onQInput($event)" />
           <span class="fx-slider-val">{{ custom.eqQs[selectedBand].toFixed(2) }}</span>
@@ -68,13 +76,14 @@
 
       <!-- 效果参数 (可折叠) -->
       <div class="fx-sub">
-        <button class="fx-collapse" @click="showParams = !showParams">
+        <button class="fx-collapse" :aria-expanded="showParams" @click="showParams = !showParams">
           <span class="fx-sub-title">效果参数</span>
           <span class="fx-collapse-arrow" :class="{ open: showParams }">›</span>
         </button>
         <template v-if="showParams">
           <div v-for="def in PARAM_DEFS" :key="def.key" class="fx-slider-row">
             <input type="range"
+              :aria-label="def.name"
               :min="def.min" :max="def.max" :step="def.step"
               :value="custom.params[def.key]"
               @input="onParamInput(def.key, $event)" />
@@ -137,119 +146,30 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.fx-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  padding: 10px 0;
-}
-.fx-chip {
-  padding: 7px 12px;
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 16px;
-  color: rgba(255, 255, 255, 0.8);
-  font-size: 12px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-.fx-chip.active {
-  color: #ff4d4f;
-  border-color: #ff4d4f;
-  background: rgba(255, 77, 79, 0.12);
-}
-
-/* EQ 10 段竖直滑块 */
-.fx-eq {
-  display: flex;
-  justify-content: space-between;
-  gap: 2px;
-  padding: 10px 6px;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 10px;
-  margin-bottom: 10px;
-}
-.fx-eq-cell {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 5px;
-  flex: 1;
-  min-width: 0;
-  cursor: pointer;
-}
-.fx-eq-cell.selected .fx-eq-label { color: #ff4d4f; font-weight: 600; }
-.fx-eq-val {
-  font-size: 9px;
-  color: rgba(255, 255, 255, 0.5);
-  height: 12px;
-  line-height: 12px;
-}
-.fx-eq-label {
-  font-size: 9px;
-  color: rgba(255, 255, 255, 0.4);
-  height: 12px;
-  line-height: 12px;
-}
-.fx-eq-cell input[type="range"] {
-  -webkit-appearance: slider-vertical;
-  width: 20px;
-  height: 88px;
-  cursor: pointer;
-}
-
-/* 子区块 */
-.fx-sub {
-  padding: 10px 12px;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 10px;
-  margin-bottom: 10px;
-}
-.fx-sub-title {
-  font-size: 12px;
-  font-weight: 600;
-  color: rgba(255, 255, 255, 0.85);
-  margin: 6px 0;
-}
-.fx-collapse {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  width: 100%;
-  background: transparent;
-  border: none;
-  padding: 0;
-  cursor: pointer;
-}
+.settings-group { min-width: 0; }
+.audio-fx-panel.settings-group { padding: 0; margin: 0; border: 0; border-radius: 0; background: transparent; }
+.group-title { color: var(--text); font-size: 14px; font-weight: 600; }
+.fx-chips { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 0; }
+.fx-chip { min-height: 44px; min-width: 44px; padding: 10px 12px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px; color: var(--text-secondary); font-size: 14px; cursor: pointer; transition: background .15s, border-color .15s; }
+.fx-chip.active { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+.fx-chip:active { background: var(--bg-hover); }
+.fx-eq { display: grid; grid-template-columns: repeat(5, minmax(44px, 1fr)); gap: 16px 8px; padding: 12px 8px; margin-bottom: 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg); }
+.fx-eq-cell { display: flex; flex-direction: column; align-items: center; gap: 6px; min-width: 0; cursor: pointer; }
+.fx-eq-val, .fx-eq-label { color: var(--text-secondary); font-size: 12px; line-height: 1.4; font-variant-numeric: tabular-nums; }
+.fx-eq-cell.selected .fx-eq-label { color: var(--accent); font-weight: 650; }
+.fx-eq-cell input[type="range"] { -webkit-appearance: slider-vertical; width: 44px; height: 88px; accent-color: var(--accent); cursor: pointer; }
+.fx-sub { padding: 12px; margin-bottom: 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg); }
+.fx-sub-title { margin: 8px 0 0; color: var(--text); font-size: 14px; font-weight: 600; }
+.fx-collapse { display: flex; align-items: center; justify-content: space-between; width: 100%; min-height: 44px; padding: 0; border: 0; background: transparent; color: var(--text); text-align: left; cursor: pointer; }
 .fx-collapse .fx-sub-title { margin: 0; }
-.fx-collapse-arrow {
-  font-size: 16px;
-  color: rgba(255, 255, 255, 0.4);
-  transform: rotate(90deg);
-  transition: transform 0.2s;
-}
+.fx-collapse-arrow { font-size: 22px; color: var(--text-secondary); transform: rotate(90deg); transition: transform .18s; }
 .fx-collapse-arrow.open { transform: rotate(-90deg); }
-
-/* 横向滑块行 */
-.fx-slider-row {
-  display: grid;
-  grid-template-columns: 56px 1fr 56px;
-  align-items: center;
-  gap: 8px;
-  margin: 8px 0;
-}
-.fx-slider-row input[type="range"] {
-  width: 100%;
-  accent-color: #ff4d4f;
-}
-.fx-slider-label { font-size: 10px; color: rgba(255, 255, 255, 0.5); }
-.fx-slider-val {
-  font-size: 10px;
-  color: rgba(255, 255, 255, 0.4);
-  text-align: right;
-}
-
-.tip { padding: 6px 0 10px; }
+.fx-slider-row { display: grid; grid-template-columns: minmax(0, 1fr) 64px; align-items: center; column-gap: 8px; margin: 8px 0; }
+.fx-slider-row input[type="range"] { width: 100%; min-width: 0; min-height: 44px; margin: 0; accent-color: var(--accent); }
+.fx-slider-label { grid-column: 1 / -1; order: -1; color: var(--text); font-size: 13px; }
+.fx-slider-val { color: var(--text-secondary); font-size: 12px; text-align: right; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.tip { padding: 6px 0 0; color: var(--text-secondary); font-size: 13px; line-height: 1.6; }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (max-width: 340px) { .fx-eq { padding-inline: 4px; column-gap: 4px; } .fx-sub { padding: 10px; } }
+@media (prefers-reduced-motion: reduce) { .fx-chip, .fx-collapse-arrow { transition: none; } }
 </style>

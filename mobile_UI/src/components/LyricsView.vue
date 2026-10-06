@@ -6,7 +6,7 @@ import { usePlayer } from '../composables/usePlayer.js';
 import { parseLyrics, readLyricTime, activeLyricIndex, isCurrentLyric, lyricCharProgress, lyricLineProgress } from '../services/lyrics.js';
 import { useLyricPreferences } from '../composables/useLyricPreferences.js';
 
-const { lyricText, currentTime, duration, isPlaying, seek, seekTo, getAudioEl } = usePlayer();
+const { currentSong, lyricText, currentTime, duration, isPlaying, seek, seekTo, getAudioEl } = usePlayer();
 const lines = ref([]);
 const curIdx = ref(-1);
 const listRef = ref(null);
@@ -159,6 +159,8 @@ function onLineClick(line) {
   manualUntil = 0;
   syncPosition(true);
 }
+function onLineKey(line) { touchMoved = false; onLineClick(line); }
+function resumeFollow() { manualUntil = 0; pendingFollow = false; syncPosition(true); }
 function onWheel() { manualUntil = performance.now() + 6000; pendingFollow = true; }
 function onScrollKey(event) {
   if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key)) onWheel();
@@ -191,6 +193,14 @@ function onTouchCancel() { touchActive = false; touchMoved = false; }
 
 <template>
   <section class="lyrics-shell" :style="{ '--lyric-size': lyricSize + 'px', '--current-lyric-size': currentLyricSize + 'px' }" aria-label="歌词播放器">
+  <div class="lyrics-header">
+    <button class="lyrics-back" aria-label="返回播放器" @click="emit('swipe-left')">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15.4 5.4-1.4-1.4-8 8 8 8 1.4-1.4L8.8 12l6.6-6.6z"/></svg>
+      <span>返回</span>
+    </button>
+    <h2 class="lyrics-title" :title="currentSong?.songName || '歌词'">{{ currentSong?.songName || '歌词' }}</h2>
+    <button class="lyrics-follow" aria-label="回到当前歌词" :disabled="curIdx < 0" @click="resumeFollow">当前</button>
+  </div>
   <div
     class="lyrics-view"
     tabindex="0"
@@ -215,7 +225,13 @@ function onTouchCancel() { touchActive = false; touchMoved = false; }
         :key="i"
         class="lyric-line"
         :class="lineClass(i)"
+        :role="Number.isFinite(line.time) ? 'button' : undefined"
+        :tabindex="Number.isFinite(line.time) ? 0 : undefined"
+        :aria-label="Number.isFinite(line.time) ? '跳到歌词 ' + line.text : undefined"
+        :aria-current="isCurrent(i) ? 'true' : undefined"
         @click="onLineClick(line)"
+        @keydown.enter.stop.prevent="onLineKey(line)"
+        @keydown.space.stop.prevent="onLineKey(line)"
       >
         <!-- 当前行 + 有逐字数据: 每个字独立 span, 逐字填充 -->
         <span v-if="isCurrent(i) && line.chars" class="lyric-text char-fill">
@@ -248,22 +264,35 @@ function onTouchCancel() { touchActive = false; touchMoved = false; }
 <style scoped>
 .lyrics-shell {
   --lyric-sung: var(--accent);
-  --lyric-wait: #fff;
+  --lyric-wait: var(--text);
   display: flex;
   flex-direction: column;
   flex: 1;
   min-width: 0;
   min-height: 0;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
 }
+.lyrics-header { display: flex; align-items: center; gap: 8px; padding: 8px 12px; flex-shrink: 0; }
+.lyrics-back, .lyrics-follow { display: inline-flex; align-items: center; justify-content: center; gap: 4px; min-width: 44px; min-height: 44px; padding: 8px; border: 0; border-radius: 10px; background: transparent; color: var(--text-secondary); font-size: 13px; cursor: pointer; transition: background-color 120ms ease; }
+.lyrics-back svg { width: 18px; height: 18px; fill: currentColor; }
+.lyrics-back:active, .lyrics-follow:active { background: var(--bg-hover); }
+.lyrics-back:focus-visible, .lyrics-follow:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.lyrics-follow { color: var(--accent); }
+.lyrics-follow:disabled { opacity: .4; cursor: default; }
+.lyrics-title { flex: 1; min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; font-size: 14px; line-height: 1.4; font-weight: 500; color: var(--text-secondary); }
 .lyrics-view {
   flex: 1;
   min-height: 0;
   min-width: 0;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
-  padding: calc(60px + env(safe-area-inset-top)) 22px 60px;
+  padding: 24px 16px 48px;
   scroll-behavior: auto;
   position: relative;
+  overscroll-behavior-y: contain;
+  touch-action: pan-y;
 }
 .lyrics-view:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 
@@ -279,24 +308,27 @@ function onTouchCancel() { touchActive = false; touchMoved = false; }
 .lyric-list {
   display: flex;
   flex-direction: column;
-  gap: 22px;
+  gap: 18px;
   min-height: 100%;
-  padding-right: 4px;
+  max-width: 640px;
+  margin-inline: auto;
 }
 
 .lyric-line {
   flex-shrink: 0;
   position: relative;
   font-size: var(--lyric-size, 22px);
-  line-height: 1.6;
+  line-height: 1.5;
   text-align: left;
-  padding: 8px 14px;
+  padding: 8px 4px;
+  min-height: 44px;
   transition: color 0.2s ease;
   cursor: pointer;
   display: flex;
   align-items: center;
   font-weight: 400;
 }
+.lyric-line:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
 
 .lyric-line.sung {
   color: var(--lyric-sung);
@@ -315,6 +347,7 @@ function onTouchCancel() { touchActive = false; touchMoved = false; }
   color: var(--lyric-wait);
   font-size: var(--current-lyric-size, 28px);
   font-weight: 700;
+  line-height: 1.45;
 }
 .lyric-text { flex: 1; min-width: 0; max-height: none; white-space: normal; overflow: visible; overflow-wrap: anywhere; text-wrap: balance; }
 
@@ -326,5 +359,6 @@ function onTouchCancel() { touchActive = false; touchMoved = false; }
 @media (prefers-reduced-motion: reduce) {
   .lyrics-view { scroll-behavior: auto; }
   .lyric-line { transition: none; transform: none; }
+  .lyrics-back, .lyrics-follow { transition: none; }
 }
 </style>

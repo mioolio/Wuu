@@ -1,7 +1,7 @@
 <!-- =========== 我的歌单组件 =========== -->
 <!-- 展示用户歌单列表, 点击进入歌单详情播放 -->
 <script setup>
-import { ref, nextTick, onMounted } from 'vue';
+import { ref, nextTick, onMounted, onBeforeUnmount, watch } from 'vue';
 import { fetchCollections, createCollection, coverUrl, coverByPath } from '../api.js';
 
 const emit = defineEmits(['play', 'playAll']);
@@ -10,6 +10,7 @@ const collections = ref([]);
 const loading = ref(true);
 const loadError = ref('');
 const activeCollection = ref(null);  // null=列表视图, 非null=歌单详情
+let collectionRequest = 0;
 
 // ===== 创建歌单 =====
 const showCreate = ref(false);
@@ -17,8 +18,11 @@ const newName = ref('');
 const creating = ref(false);
 const createError = ref('');
 const nameInput = ref(null);
+const createDialog = ref(null);
+let returnFocus = null;
 
-function openCreate() {
+function openCreate(event) {
+  returnFocus = event?.currentTarget || document.activeElement;
   newName.value = '';
   createError.value = '';
   showCreate.value = true;
@@ -26,6 +30,23 @@ function openCreate() {
   nextTick(() => {
     if (nameInput.value) nameInput.value.focus();
   });
+}
+watch(showCreate, visible => {
+  if (visible) document.addEventListener('keydown', trapCreateFocus);
+  else {
+    document.removeEventListener('keydown', trapCreateFocus);
+    nextTick(() => { if (returnFocus?.isConnected) returnFocus.focus(); });
+  }
+});
+function trapCreateFocus(event) {
+  if (!showCreate.value || event.defaultPrevented) return;
+  if (event.key === 'Escape') { event.preventDefault(); showCreate.value = false; return; }
+  if (event.key !== 'Tab') return;
+  const items = [...(createDialog.value?.querySelectorAll('input,button:not(:disabled)') || [])];
+  const target = event.shiftKey ? items.at(-1) : items[0];
+  if (!createDialog.value?.contains(document.activeElement) || event.shiftKey && document.activeElement === items[0] || !event.shiftKey && document.activeElement === items.at(-1)) {
+    event.preventDefault(); target?.focus();
+  }
 }
 
 async function confirmCreate() {
@@ -49,20 +70,23 @@ async function confirmCreate() {
 }
 
 async function loadCollections() {
+  const request = ++collectionRequest;
   loading.value = true;
   loadError.value = '';
   try {
     const data = await fetchCollections();
+    if (request !== collectionRequest) return;
     const list = data.collections || [];
     // "我喜欢"固定置顶, 其余按创建时间排序
     collections.value = [
       ...list.filter(c => c.id === 'mobile-liked' || c.name === '我喜欢'),
       ...list.filter(c => c.id !== 'mobile-liked' && c.name !== '我喜欢'),
     ];
+    if (activeCollection.value) activeCollection.value = collections.value.find(col => col.id === activeCollection.value.id) || null;
   } catch (e) {
-    loadError.value = e.message;
+    if (request === collectionRequest) loadError.value = e.message;
   } finally {
-    loading.value = false;
+    if (request === collectionRequest) loading.value = false;
   }
 }
 
@@ -95,7 +119,9 @@ function playAll(songs) {
 
 onMounted(() => {
   loadCollections();
+  window.addEventListener('wuu-collections-updated', loadCollections);
 });
+onBeforeUnmount(() => { collectionRequest++; window.removeEventListener('wuu-collections-updated', loadCollections); document.removeEventListener('keydown', trapCreateFocus); });
 </script>
 
 <template>
@@ -103,7 +129,7 @@ onMounted(() => {
     <!-- 歌单详情视图 -->
     <template v-if="activeCollection">
       <header class="header">
-        <button class="back-btn" @click="backToList">
+        <button class="back-btn" aria-label="返回歌单列表" @click="backToList">
           <svg viewBox="0 0 24 24"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
         </button>
         <div class="header-info">
@@ -120,10 +146,11 @@ onMounted(() => {
       </header>
 
       <div class="song-list">
-        <div
+        <button
           v-for="(song, i) in activeCollection.songs"
           :key="i"
           class="song-item"
+          type="button"
           @click="playSong(song)"
         >
           <img
@@ -133,12 +160,12 @@ onMounted(() => {
             loading="lazy"
             alt=""
           />
-          <div v-else class="song-cover song-cover-placeholder">♪</div>
+          <div v-else class="song-cover song-cover-placeholder"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z"/></svg></div>
           <div class="song-info">
             <div class="song-name">{{ song.songName || '未知歌曲' }}</div>
             <div class="song-artist">{{ song.artist || '未知艺人' }}</div>
           </div>
-        </div>
+        </button>
         <div v-if="!activeCollection.songs || activeCollection.songs.length === 0" class="empty-hint">
           歌单为空
         </div>
@@ -149,7 +176,7 @@ onMounted(() => {
     <template v-else>
       <header class="header">
         <h1>我的歌单</h1>
-        <button class="add-btn" title="新建歌单" @click="openCreate">
+        <button class="add-btn" title="新建歌单" aria-label="新建歌单" @click="openCreate">
           <svg viewBox="0 0 24 24"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
         </button>
       </header>
@@ -171,10 +198,11 @@ onMounted(() => {
       </div>
 
       <div v-else class="collection-list">
-        <div
+        <button
           v-for="col in collections"
           :key="col.id"
           class="collection-item"
+          type="button"
           @click="openCollection(col)"
         >
           <div class="collection-cover">
@@ -194,7 +222,7 @@ onMounted(() => {
             <div class="collection-count">{{ col.songCount }} 首</div>
           </div>
           <svg class="arrow" viewBox="0 0 24 24"><path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg>
-        </div>
+        </button>
       </div>
     </template>
 
@@ -202,8 +230,8 @@ onMounted(() => {
     <Teleport to="body">
       <Transition name="fade">
         <div v-if="showCreate" class="create-mask" @click.self="showCreate = false">
-          <div class="create-dialog">
-            <div class="create-title">新建歌单</div>
+          <div ref="createDialog" class="create-dialog" role="dialog" aria-modal="true" aria-labelledby="create-collection-title">
+            <div id="create-collection-title" class="create-title">新建歌单</div>
             <input
               ref="nameInput"
               v-model="newName"
@@ -211,9 +239,12 @@ onMounted(() => {
               type="text"
               maxlength="50"
               placeholder="输入歌单名称"
+              aria-label="歌单名称"
+              :aria-invalid="!!createError"
+              :aria-describedby="createError ? 'create-collection-error' : undefined"
               @keyup.enter="confirmCreate"
             />
-            <div v-if="createError" class="create-error">{{ createError }}</div>
+            <div v-if="createError" id="create-collection-error" class="create-error" role="alert">{{ createError }}</div>
             <div class="create-actions">
               <button class="create-btn cancel" @click="showCreate = false">取消</button>
               <button class="create-btn confirm" :disabled="creating" @click="confirmCreate">
@@ -228,328 +259,49 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.collections-view {
-  flex: 1;
-  overflow-y: auto;
-  -webkit-overflow-scrolling: touch;
-}
-
-.header {
-  padding: 60px 20px 16px;
-  padding-top: calc(60px + env(safe-area-inset-top));
-  background: var(--bg-card);
-  position: sticky;
-  top: 0;
-  z-index: 10;
-  border-bottom: 1px solid var(--border);
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-.header h1 {
-  font-size: 24px;
-  font-weight: 700;
-  color: var(--text);
-  margin: 0;
-  flex: 1;
-}
-.add-btn {
-  width: 36px;
-  height: 36px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: transparent;
-  border: none;
-  color: var(--accent);
-  cursor: pointer;
-  padding: 0;
-  flex-shrink: 0;
-}
-.add-btn svg {
-  width: 26px;
-  height: 26px;
-  fill: currentColor;
-}
-
-/* 创建歌单弹层 */
-.create-mask {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.5);
-  z-index: 1000;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0 32px;
-}
-.create-dialog {
-  width: 100%;
-  max-width: 340px;
-  background: var(--bg-card-elevated);
-  border-radius: 14px;
-  padding: 20px;
-}
-.create-title {
-  font-size: 17px;
-  font-weight: 600;
-  color: var(--text);
-  margin-bottom: 16px;
-  text-align: center;
-}
-.create-input {
-  width: 100%;
-  box-sizing: border-box;
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--bg);
-  color: var(--text);
-  font-size: 14px;
-  outline: none;
-}
-.create-input:focus {
-  border-color: var(--accent);
-}
-.create-error {
-  font-size: 12px;
-  color: #ff6b6b;
-  margin-top: 8px;
-}
-.create-actions {
-  display: flex;
-  gap: 12px;
-  margin-top: 18px;
-}
-.create-btn {
-  flex: 1;
-  padding: 9px 0;
-  border-radius: 8px;
-  font-size: 14px;
-  cursor: pointer;
-  border: 1px solid var(--border);
-  background: transparent;
-  color: var(--text-secondary);
-}
-.create-btn.confirm {
-  border-color: var(--accent);
-  background: var(--accent);
-  color: #fff;
-}
-.create-btn:disabled {
-  opacity: 0.6;
-}
-
-/* 弹层过渡 */
-.fade-enter-active,
-.fade-leave-active {
-  transition: opacity 0.2s ease;
-}
-.fade-enter-from,
-.fade-leave-to {
-  opacity: 0;
-}
-.header-info {
-  flex: 1;
-  min-width: 0;
-}
-.header-info h1 {
-  font-size: 20px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.subtitle {
-  font-size: 13px;
-  color: var(--text-secondary);
-  margin: 4px 0 0;
-}
-.back-btn {
-  width: 36px;
-  height: 36px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: transparent;
-  border: none;
-  color: var(--text);
-  cursor: pointer;
-  padding: 0;
-  flex-shrink: 0;
-}
-.back-btn svg {
-  width: 24px;
-  height: 24px;
-  fill: currentColor;
-}
-.play-all-btn {
-  padding: 6px 16px;
-  border: 1px solid var(--accent);
-  background: transparent;
-  color: var(--accent);
-  border-radius: 20px;
-  font-size: 13px;
-  cursor: pointer;
-  flex-shrink: 0;
-}
-
-.status-box {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 60px 20px;
-  color: var(--text-secondary);
-  gap: 16px;
-}
-.error-text {
-  color: #ff6b6b;
-  text-align: center;
-}
-.retry-btn {
-  padding: 8px 24px;
-  border: 1px solid var(--accent);
-  background: transparent;
-  color: var(--accent);
-  border-radius: 8px;
-  font-size: 14px;
-  cursor: pointer;
-}
-.hint {
-  font-size: 13px;
-  opacity: 0.6;
-}
-.spinner {
-  width: 32px;
-  height: 32px;
-  border: 3px solid var(--border);
-  border-top-color: var(--accent);
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-}
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
-
-/* 歌单列表 */
-.collection-list {
-  padding: 8px 0;
-}
-.collection-item {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 20px;
-  cursor: pointer;
-  transition: background 0.15s;
-}
-.collection-item:active {
-  background: var(--bg-hover);
-}
-.collection-cover {
-  width: 56px;
-  height: 56px;
-  border-radius: 10px;
-  overflow: hidden;
-  flex-shrink: 0;
-  background: var(--bg-card-elevated);
-}
-.cover-img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  display: block;
-}
-.cover-placeholder {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.cover-placeholder svg {
-  width: 28px;
-  height: 28px;
-  fill: var(--text-secondary);
-  opacity: 0.4;
-}
-.collection-info {
-  flex: 1;
-  min-width: 0;
-}
-.collection-name {
-  font-size: 16px;
-  color: var(--text);
-  font-weight: 500;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.collection-count {
-  font-size: 13px;
-  color: var(--text-secondary);
-  margin-top: 3px;
-}
-.arrow {
-  width: 20px;
-  height: 20px;
-  fill: var(--text-secondary);
-  opacity: 0.4;
-  flex-shrink: 0;
-}
-
-/* 歌单详情歌曲列表 */
-.song-list {
-  padding: 8px 0;
-}
-.song-item {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 20px;
-  cursor: pointer;
-  transition: background 0.15s;
-}
-.song-item:active {
-  background: var(--bg-hover);
-}
-.song-cover {
-  width: 48px;
-  height: 48px;
-  border-radius: 8px;
-  object-fit: cover;
-  flex-shrink: 0;
-  background: var(--bg-card-elevated);
-}
-.song-cover-placeholder {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 22px;
-  color: var(--text-secondary);
-}
-.song-info {
-  flex: 1;
-  min-width: 0;
-}
-.song-name {
-  font-size: 15px;
-  color: var(--text);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.song-artist {
-  font-size: 12px;
-  color: var(--text-secondary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  margin-top: 2px;
-}
-.empty-hint {
-  text-align: center;
-  padding: 60px 20px;
-  color: var(--text-secondary);
-  font-size: 14px;
-}
+.collections-view { flex: 1; min-width: 0; min-height: 0; overflow-y: auto; background: var(--bg); -webkit-overflow-scrolling: touch; }
+.header { display: flex; align-items: center; gap: 8px; padding: 20px 16px 16px; position: sticky; top: 0; z-index: 10; border-bottom: 1px solid var(--border); background: var(--bg); }
+.header h1 { flex: 1; min-width: 0; margin: 0; font-size: 25px; font-weight: 720; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.header-info { flex: 1; min-width: 0; }
+.header-info h1 { font-size: 20px; }
+.subtitle { margin: 4px 0 0; font-size: 13px; color: var(--text-secondary); }
+.add-btn, .back-btn { display: grid; place-items: center; flex-shrink: 0; width: 44px; height: 44px; padding: 0; border: 0; border-radius: 12px; background: transparent; color: var(--text); cursor: pointer; }
+.add-btn { border: 1px solid var(--border); color: var(--accent); background: var(--accent-soft); }
+.add-btn svg, .back-btn svg { width: 24px; height: 24px; fill: currentColor; }
+.play-all-btn, .retry-btn { min-height: 44px; padding: 8px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--accent-soft); color: var(--accent); font-size: 14px; cursor: pointer; white-space: nowrap; flex-shrink: 0; }
+.status-box { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 48px 20px; color: var(--text-secondary); text-align: center; }
+.error-text, .create-error { color: var(--danger); }
+.hint { font-size: 13px; line-height: 1.5; color: var(--text-secondary); }
+.spinner { width: 32px; height: 32px; border: 3px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.collection-list, .song-list { padding: 8px 12px 16px; }
+.collection-item, .song-item { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 76px; padding: 12px 8px; border: 0; border-radius: 10px; background: transparent; color: var(--text); font: inherit; line-height: 1.4; text-align: left; cursor: pointer; transition: background .15s; }
+.collection-item:active, .song-item:active, .add-btn:active, .back-btn:active { background: var(--bg-hover); }
+.collection-cover { flex-shrink: 0; width: 52px; height: 52px; border-radius: 10px; overflow: hidden; background: var(--bg-card-elevated); }
+.cover-img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.cover-placeholder { display: grid; place-items: center; color: var(--text-secondary); }
+.cover-placeholder svg { width: 26px; height: 26px; fill: currentColor; }
+.collection-info, .song-info { flex: 1; min-width: 0; }
+.collection-name, .song-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-size: 16px; font-weight: 600; }
+.collection-count, .song-artist { margin-top: 4px; color: var(--text-secondary); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.arrow { flex-shrink: 0; width: 20px; height: 20px; fill: var(--text-secondary); }
+.song-item { min-height: 72px; padding-block: 10px; }
+.song-cover { flex-shrink: 0; width: 48px; height: 48px; border-radius: 8px; object-fit: cover; background: var(--bg-card-elevated); }
+.song-cover-placeholder { display: grid; place-items: center; color: var(--text-secondary); }
+.song-cover-placeholder svg { width: 24px; height: 24px; fill: currentColor; }
+.empty-hint { padding: 48px 20px; color: var(--text-secondary); text-align: center; font-size: 14px; }
+.create-mask { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 16px; box-sizing: border-box; background: var(--overlay); }
+.create-dialog { width: 100%; max-width: 360px; max-height: calc(100dvh - 32px); box-sizing: border-box; overflow-y: auto; padding: 20px; border: 1px solid var(--border); border-radius: 16px; background: var(--bg-card-elevated); color: var(--text); box-shadow: var(--shadow); }
+.create-title { margin-bottom: 16px; font-size: 18px; font-weight: 650; text-align: left; }
+.create-input { width: 100%; min-height: 48px; box-sizing: border-box; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); color: var(--text); font-size: 16px; }
+.create-input::placeholder { color: var(--text-secondary); }
+.create-error { margin-top: 8px; font-size: 13px; }
+.create-actions { display: flex; gap: 12px; margin-top: 20px; }
+.create-btn { flex: 1; min-height: 44px; padding: 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-card); color: var(--text); font-size: 14px; cursor: pointer; }
+.create-btn.confirm { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.create-btn:disabled { opacity: .6; cursor: default; }
+.collections-view button:focus-visible, .create-btn:focus-visible, .create-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.fade-enter-active, .fade-leave-active { transition: opacity .18s ease; }
+.fade-enter-from, .fade-leave-to { opacity: 0; }
+@media (prefers-reduced-motion: reduce) { .collection-item, .song-item, .fade-enter-active, .fade-leave-active { transition: none; } .spinner { animation: none; } }
 </style>

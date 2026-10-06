@@ -10,6 +10,7 @@ const currentSong = ref(null);       // 当前歌曲对象
 const isPlaying = ref(false);
 const currentTime = ref(0);
 const duration = ref(0);
+const playbackRate = ref(1);
 const isLoading = ref(false);
 
 // ===== 循环模式: 0=单曲循环, 1=列表循环, 2=随机 =====
@@ -39,6 +40,8 @@ let pendingHistory = null;
 let seekRevision = 0;
 let pendingSeek = null;
 let removeAudioListeners = null;
+let playbackIntent = false;
+let remoteSongRequest = -1;
 
 // ===== 一起听广播 hook =====
 // useListenTogether 注册: 本地播放操作 → WS 广播给其他端
@@ -50,11 +53,28 @@ function _notifyOp(op, payload) {
 
 // 远端操作应用期间标志: 跳过本地进度恢复等与同步冲突的逻辑
 let _remoteApplying = false;
-// 远端应用后的宽限窗口: 'play'/'pause' 事件异步触发时仍视为远端引起, 不回声广播
-let _remoteApplyUntil = 0;
-function setRemoteApplying(v) {
-  _remoteApplying = !!v;
-  if (v) _remoteApplyUntil = Date.now() + 800;
+function setRemoteApplying(v) { _remoteApplying = !!v; }
+function normalizeRate(value) {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.max(.5, Math.min(2, value)) : 1;
+}
+function setPlaybackRate(value, options = {}) {
+  playbackRate.value = normalizeRate(value);
+  if (audioEl) {
+    audioEl.preservesPitch = true;
+    audioEl.defaultPlaybackRate = playbackRate.value;
+    audioEl.playbackRate = playbackRate.value;
+  }
+  updateMediaPositionState();
+  if (options.notify !== false) _notifyOp('rate', { playbackRate: playbackRate.value });
+}
+function cancelRemotePlayback() {
+  playbackIntent = !!audioEl && !audioEl.paused;
+  if (remoteSongRequest === songRequest) {
+    songRequest++; navigationRequest++; pendingHistory = null;
+    if (pendingSeek) pendingSeek.request = songRequest;
+  }
+  remoteSongRequest = -1;
+  isLoading.value = false;
 }
 
 // ===== 一起听状态查询 (useListenTogether 注册, 避免循环依赖) =====
@@ -138,13 +158,13 @@ function init(audio) {
   on('play', () => {
     isPlaying.value = true;
     updateMediaPlaybackState();
-    if (currentSong.value && !hasReportedPlay) {
+    if (currentSong.value && !currentSong.value.preview && !hasReportedPlay) {
       hasReportedPlay = true;
-      reportPlayCount(currentSong.value.id);
+      reportPlayCount(currentSong.value.id, currentSong.value.audioPath);
     }
     startProgressTimer();
     // 一起听: 补发"非受控"播放变化 (系统自动播放等不经过 resume() 的场景)
-    if (!_remoteApplying && Date.now() > _remoteApplyUntil && _lastSyncedPaused !== false) {
+    if (!_remoteApplying && _lastSyncedPaused !== false) {
       _lastSyncedPaused = false;
       _notifyOp('play', {});
     }
@@ -157,7 +177,7 @@ function init(audio) {
     // 暂停时同步进度 (定格当前位置), 确保系统通知栏保留控件并显示正确进度
     updateMediaPositionState();
     // 一起听: 补发"非受控"暂停 (锁屏/耳机拔插/来电中断直接暂停 audio 元素)
-    if (!_remoteApplying && Date.now() > _remoteApplyUntil && _lastSyncedPaused !== true) {
+    if (!_remoteApplying && _lastSyncedPaused !== true) {
       _lastSyncedPaused = true;
       _notifyOp('pause', { position: playbackPosition() });
     }
@@ -172,7 +192,13 @@ function init(audio) {
   on('timeupdate', syncPosition);
   on('seeking', syncPosition);
   on('seeked', syncPosition);
+  on('ratechange', () => {
+    const rate = normalizeRate(audioEl.playbackRate);
+    if (playbackRate.value !== rate) { playbackRate.value = rate; _notifyOp('rate', { playbackRate: rate }); }
+    updateMediaPositionState();
+  });
   on('loadedmetadata', () => {
+    setPlaybackRate(playbackRate.value, { notify: false });
     duration.value = Number.isFinite(audioEl.duration) ? audioEl.duration : 0;
     applyPendingSeek();
     syncPosition();
@@ -203,17 +229,9 @@ async function startDesktopSync() {
   _syncDone = true;
   const initialRequest = songRequest;
 
-  // 一起听开启时房间状态优先: 等待 WS welcome 应用 host 的歌曲与进度 (最长 3s)。
-  // 否则"桌面启动同步"与"一起听房间同步"会同时设置歌曲互相覆盖 (两个同步打架)
-  const listen = _listenSync();
-  if (listen && listen.enabled) {
-    const deadline = Date.now() + 3000;
-    while (Date.now() < deadline && !currentSong.value) {
-      await new Promise((r) => setTimeout(r, 200));
-    }
-    if (currentSong.value) return;  // 房间已提供歌曲, 跳过桌面同步
-    // 房间无状态 (空房/连接失败): 回退桌面同步
-  }
+  // Explicit room membership owns its welcome/reconnect snapshot. Ordinary
+  // merged startup remains a one-time paused song selection, without polling.
+  if (_listenSync()?.enabled) return;
 
   // 检查同步模式
   try {
@@ -225,11 +243,12 @@ async function startDesktopSync() {
   try {
     const state = await fetchDesktopState();
     // 用户已经主动选歌时，迟到的启动请求不能覆盖它。
-    if (songRequest !== initialRequest) return;
-    if (!state || !state.songInfo || state.index < 0) return;
+    if (songRequest !== initialRequest || _listenSync()?.enabled) return;
+    if (!state || !state.songInfo || (state.index < 0 && !state.songInfo.preview)) return;
 
     const song = {
-      id: state.index,
+      id: state.songInfo.preview ? `preview:${state.audioPath}` : state.index,
+      preview: !!state.songInfo.preview, lyric: state.songInfo.lyric || '',
       songName: state.songInfo.songName || '',
       artist: state.songInfo.artist || '',
       album: state.songInfo.album || '',
@@ -242,7 +261,7 @@ async function startDesktopSync() {
     playMode.value = state.playMode != null ? state.playMode : 1;
     // 首次进入保留浏览器的点击播放行为，但先对齐桌面的歌词和进度。
     const syncRequest = songRequest + 1;
-    await playSong(song, { position: state.currentTime, autoplay: false, restoreProgress: false, notify: false });
+    await playSong(song, { position: state.currentTime, autoplay: false, restoreProgress: false, notify: false, playbackRate: state.playbackRate });
     if (songRequest === syncRequest && !duration.value && Number.isFinite(state.duration)) duration.value = Math.max(0, state.duration);
   } catch (e) {
     console.warn('[sync] 桌面状态同步失败:', e.message);
@@ -376,7 +395,7 @@ function updateLikeState() {
 
 // ===== 切换点赞 =====
 async function handleToggleLike() {
-  if (!currentSong.value) return;
+  if (!currentSong.value || currentSong.value.preview) return;
   const index = currentSong.value.id;
   try {
     const data = await toggleLike(index);
@@ -438,7 +457,7 @@ function updateDislikeState() {
 
 // 切换不推荐 (与喜欢互斥: 服务端标记不推荐时已从歌单移除, 本地同步清理喜欢态)
 async function handleToggleDislike() {
-  if (!currentSong.value) return;
+  if (!currentSong.value || currentSong.value.preview) return;
   const index = currentSong.value.id;
   try {
     const data = await toggleDislike(index);
@@ -464,12 +483,12 @@ async function handleToggleDislike() {
 function startProgressTimer() {
   stopProgressTimer();
   progressTimer = setInterval(() => {
-    if (isPlaying.value && currentSong.value && audioEl) {
+    if (isPlaying.value && currentSong.value && !currentSong.value.preview && audioEl) {
       const t = Math.floor(playbackPosition());
       // 每 5 秒上报一次, 或进度变化超过 5 秒
       if (Math.abs(t - lastReportedTime) >= 5) {
         lastReportedTime = t;
-        reportProgress(currentSong.value.id, t);
+        reportProgress(currentSong.value.id, t, currentSong.value.audioPath);
       }
     }
   }, 3000);
@@ -489,11 +508,13 @@ async function playSong(song, options = {}, historyIndex = null) {
   // 远端触发的切歌若回声广播会导致房间内 song 操作互相反弹
   const suppressNotify = options.notify === false || _remoteApplying;
   const request = ++songRequest;
+  remoteSongRequest = options.remote ? request : -1;
   navigationRequest++;
   pendingHistory = { request, index: historyIndex };
   const audio = audioEl;
   const stillCurrent = () => request === songRequest && audio === audioEl;
   const autoplay = options.autoplay !== false;
+  playbackIntent = autoplay;
   isLoading.value = true;
   currentSong.value = song;
   hasReportedPlay = false;
@@ -513,8 +534,10 @@ async function playSong(song, options = {}, historyIndex = null) {
   // 更新点赞状态
   updateLikeState();
 
-  audio.playbackRate = 1;
+  if (options.playbackRate != null) playbackRate.value = normalizeRate(options.playbackRate);
+  setPlaybackRate(playbackRate.value, { notify: false });
   isPlaying.value = false;
+  _lastSyncedPaused = !autoplay;
   audio.src = song.audioPath
     ? streamByPath(song.audioPath)
     : streamUrl(song.id);
@@ -526,10 +549,11 @@ async function playSong(song, options = {}, historyIndex = null) {
     clearTimeout(_pendingAdvanceTimer);
     _pendingAdvanceTimer = null;
   }
-  if (Number.isFinite(options.position)) seekTo(options.position);
+  if (Number.isFinite(options.position)) seekTo(options.position, { notify: false });
   const restoreRevision = seekRevision;
   // 歌词不必等待音频开始播放（移动浏览器可能禁止自动播放）。
-  loadLyric(song.id, request);
+  if (song.preview) lyricText.value = typeof song.lyric === 'string' ? song.lyric : '';
+  else loadLyric(song.id, request);
   updateMediaMetadata();
   refreshLikedSet();
   let started = false;
@@ -537,6 +561,7 @@ async function playSong(song, options = {}, historyIndex = null) {
     if (autoplay) {
       await audio.play();
       started = true;
+      if (!playbackIntent && audio === audioEl) audio.pause();
     }
     else audio.pause();
   } catch (e) {
@@ -554,18 +579,18 @@ async function playSong(song, options = {}, historyIndex = null) {
   if (started && !audio.paused) recordPlayedSong();
 
   // 尝试恢复上次播放进度 (一起听远端切歌时跳过, 进度由对端同步)
-  if (!suppressNotify && options.restoreProgress !== false && !Number.isFinite(options.position)) {
+  if (!song.preview && !suppressNotify && options.restoreProgress !== false && !Number.isFinite(options.position)) {
     try {
       const savedProgress = await fetchProgress(song.id);
       if (!stillCurrent()) return;
       // 用户在请求期间跳转过时，保留用户的新位置。
       if (seekRevision === restoreRevision && savedProgress > 5 && savedProgress < (audio.duration || 9999) - 5) {
-        seekTo(savedProgress);
+        seekTo(savedProgress, { notify: false });
         lastReportedTime = Math.floor(savedProgress);
       }
     } catch (e) { /* 忽略进度恢复失败 */ }
   }
-  if (!stillCurrent()) return;
+  if (!stillCurrent()) return false;
 
   // 一起听: 广播切歌 (含完整歌曲对象+当前进度, 对端可直接对齐);
   // 远端应用触发的切歌不回声广播
@@ -579,6 +604,8 @@ async function playSong(song, options = {}, historyIndex = null) {
 
   // 启动进度上报
   if (!audio.paused) startProgressTimer();
+  if (remoteSongRequest === request) remoteSongRequest = -1;
+  return !audio.paused;
 }
 
 // ===== 随机播放一首 (推荐页用) =====
@@ -595,7 +622,8 @@ async function playRandom() {
 }
 
 // ===== 播放控制 =====
-function pause() {
+function pause(options = {}) {
+  playbackIntent = false;
   _lastSyncedPaused = true;
   stopProgressTimer();
   // 加载中音频元素仍可能处于0秒，保留已经同步到界面的目标进度。
@@ -609,41 +637,56 @@ function pause() {
   // 暂停时定格进度, 确保系统通知栏保留媒体控件并显示正确位置
   updateMediaPositionState();
   // 暂停时上报当前进度
-  if (currentSong.value && audioEl) {
-    reportProgress(currentSong.value.id, Math.floor(position));
+  if (currentSong.value && !currentSong.value.preview && audioEl) {
+    reportProgress(currentSong.value.id, Math.floor(position), currentSong.value.audioPath);
   }
   // 一起听: 广播暂停 (标记同步态, 'pause' 事件不重复广播)
   _lastSyncedPaused = true;
-  _notifyOp('pause', { position });
+  if (options.notify !== false) _notifyOp('pause', { position });
 }
 
-async function resume() {
+async function resume(options = {}) {
+  playbackIntent = true;
   const audio = audioEl;
   const request = songRequest;
-  const suppressNotify = _remoteApplying;
+  if (options.remote) remoteSongRequest = request;
+  const suppressNotify = options.notify === false || _remoteApplying;
   _lastSyncedPaused = false;
   if (audioEl && audioEl.paused) {
-    // 恢复正常速率 (清除进度校准的微调)
-    audioEl.playbackRate = 1;
+    setPlaybackRate(playbackRate.value, { notify: false });
     try {
       await audio.play();
+      if (!playbackIntent && audio === audioEl) audio.pause();
     } catch (_) {
       if (audio === audioEl && request === songRequest) {
         isPlaying.value = false;
         _lastSyncedPaused = true;
         updateMediaPlaybackState();
       }
-      return;
+      return false;
     }
   }
-  if (!audio || audio !== audioEl || request !== songRequest || audio.paused) return;
+  if (!audio || audio !== audioEl || request !== songRequest || audio.paused) return false;
   recordPlayedSong();
   // 立即更新 MediaSession 状态
   isPlaying.value = !audio.paused;
   updateMediaPlaybackState();
   // 一起听: 广播播放 (标记同步态, 'play' 事件不重复广播)
   _lastSyncedPaused = false;
-  if (!suppressNotify) _notifyOp('play', {});
+  if (!suppressNotify) _notifyOp('play', { position: playbackPosition() });
+  if (remoteSongRequest === request) remoteSongRequest = -1;
+  return true;
+}
+
+function clearSong() {
+  playbackIntent = false; songRequest++; navigationRequest++;
+  remoteSongRequest = -1; pendingSeek = null; pendingHistory = null;
+  stopProgressTimer();
+  _lastSyncedPaused = true;
+  if (audioEl) { audioEl.pause(); audioEl.removeAttribute?.('src'); audioEl.load?.(); }
+  currentSong.value = null; currentTime.value = 0; duration.value = 0;
+  lyricText.value = ''; isPlaying.value = false; isLoading.value = false;
+  updateMediaPlaybackState();
 }
 
 function togglePlay() {
@@ -781,27 +824,21 @@ async function prev() {
 // ===== 播放结束处理 =====
 function handleEnded() {
   // 上报最终进度
-  if (currentSong.value && audioEl) {
-    reportProgress(currentSong.value.id, Math.floor(audioEl.currentTime));
+  if (currentSong.value && !currentSong.value.preview && audioEl) {
+    reportProgress(currentSong.value.id, Math.floor(audioEl.currentTime), currentSong.value.audioPath);
   }
   stopProgressTimer();
   // 一起听开启期间: 只有 host 自动切歌, 非主持端等待 host 广播后跟随
   // (两台设备几乎同时播完时各自切歌, 会因强制同步互相覆盖、乱跳或无法播放)
   const listen = _listenSync();
-  if (listen && listen.enabled) {
+  if (listen?.enabled && listen.connected && listen.desktopConnected) {
     if (listen.isHost) {
       next();
       return;
     }
     _pendingHostAdvance = true;
-    // 超时兜底: host 5s 内没有广播 (房间已解散/host 失联), 本地自行切歌
-    if (_pendingAdvanceTimer) clearTimeout(_pendingAdvanceTimer);
-    _pendingAdvanceTimer = setTimeout(() => {
-      _pendingAdvanceTimer = null;
-      if (!_pendingHostAdvance) return;
-      _pendingHostAdvance = false;
-      if (currentSong.value && audioEl && audioEl.ended) next();
-    }, 5000);
+    // A connected desktop advances the real queue. The phone never starts a
+    // competing local queue because a fixed timeout elapsed.
     return;
   }
   next();
@@ -835,7 +872,7 @@ function applyPendingSeek() {
 }
 
 // 元数据到达前也保存目标时间；不依赖固定延时，对慢连接同样有效。
-function seekTo(position) {
+function seekTo(position, options = {}) {
   if (!audioEl || !Number.isFinite(position)) return;
   seekRevision++;
   const target = Math.max(0, position);
@@ -843,11 +880,12 @@ function seekTo(position) {
   currentTime.value = target;
   applyPendingSeek();
   updateMediaPositionState();
+  if (options.notify !== false) _notifyOp('seek', { position: target, isPlaying: !audioEl.paused });
 }
 
 function seek(percent) {
   if (!audioEl || !duration.value || !Number.isFinite(percent)) return;
-  seekTo((Math.min(100, Math.max(0, percent)) / 100) * duration.value);
+  seekTo((Math.min(100, Math.max(0, percent)) / 100) * duration.value, { notify: false });
   // 同步 MediaSession 位置
   updateMediaPositionState();
   // 一起听: 广播进度跳转 (带 songId, 对端歌不同时忽略, 防止跨歌同步时间)
@@ -875,13 +913,28 @@ const progressPercent = computed(() => {
 });
 
 // ===== 歌词加载 =====
-async function loadLyric(id, request = songRequest) {
-  lyricText.value = '';
+async function loadLyric(id, request = songRequest, preserve = false) {
+  if (!preserve) lyricText.value = '';
   try {
     const text = await fetchLyric(id);
     if (request === songRequest && currentSong.value?.id === id) lyricText.value = text;
   } catch (e) {
     console.warn('歌词加载失败:', e);
+  }
+}
+
+function updateRemoteSongInfo(song) {
+  const current = currentSong.value;
+  if (!current || songKey(current) !== songKey(song)) return;
+  const changedId = current.id !== song.id;
+  if (Object.keys(song).some(key => current[key] !== song[key])) currentSong.value = { ...current, ...song };
+  if (song.preview) lyricText.value = typeof song.lyric === 'string' ? song.lyric : '';
+  else if (changedId) {
+    // Path identity survives a library reorder. Old index-based requests may
+    // no longer identify this song; refresh them without replacing its media.
+    seekRevision++;
+    void refreshLikedSet(); void refreshDislikedSet();
+    void loadLyric(song.id, songRequest, true);
   }
 }
 
@@ -892,6 +945,7 @@ export function usePlayer() {
     isPlaying,
     currentTime,
     duration,
+    playbackRate,
     isLoading,
     playMode,
     playModeName,
@@ -923,6 +977,10 @@ export function usePlayer() {
     refreshDislikedSet,
     setOpNotifier,
     setRemoteApplying,
+    setPlaybackRate,
+    cancelRemotePlayback,
+    clearSong,
+    updateRemoteSongInfo,
     setListenStatusProvider,
     flushPendingAdvance,
     startDesktopSync,

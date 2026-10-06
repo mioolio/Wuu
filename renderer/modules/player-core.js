@@ -1,28 +1,42 @@
 // =========== 桌面端播放状态同步 (推送到主进程, 供移动端查询) ===========
 let _lastSyncTime = 0;   // 上次同步时间戳 (用于节流)
+let _classicPlayRequest = 0;
+let _togetherRequest = 0;
+let _togetherAcknowledged = 0;
+let _togetherSession = '';
+let _togetherGeneration = 0;
+let _togetherSeek = null;
 const SYNC_THROTTLE_MS = 3000;  // 同步节流: 至少间隔 3 秒
 
-function syncDesktopState() {
+function syncDesktopState(force = false) {
   try {
     const now = Date.now();
-    if (now - _lastSyncTime < SYNC_THROTTLE_MS) return;
+    if (!force && now - _lastSyncTime < SYNC_THROTTLE_MS) return;
     _lastSyncTime = now;
     const s = songs[curIdx];
-    const songInfo = s ? {
+    const preview = typeof fmPreviewMode !== 'undefined' && fmPreviewMode ? fmPreviewSong : null;
+    const songInfo = preview ? { preview: true, songName: preview.name || '', artist: preview.artist || '',
+      album: preview.album || '', lyricist: preview.lyricist || '', composer: preview.composer || '',
+      audioPath: audio.src || '', hasCover: !!preview.cover, coverPath: preview.cover || '',
+      lyric: typeof fmPreviewLrcText !== 'undefined' ? fmPreviewLrcText || '' : '' } : s ? {
       songName: s.songName || '',
       artist: s.artist || '',
       album: s.album || '',
+      lyricist: s.lyricist || '', composer: s.composer || '',
       hasCover: !!s.coverPath,
       coverPath: s.coverPath || '',
       audioPath: s.audioPath || '',
     } : null;
     if (window.stateAPI && typeof window.stateAPI.updateDesktopState === 'function') {
       window.stateAPI.updateDesktopState({
-        index: curIdx,
+        index: preview ? -1 : curIdx,
         playMode: playMode,
         isPlaying: isPlaying,
-        currentTime: audio.currentTime || 0,
+        currentTime: _togetherSeek?.position ?? audio.currentTime ?? 0,
         duration: getDuration() || 0,
+        playbackRate: audio.playbackRate,
+        togetherSeq: _togetherAcknowledged,
+        togetherSession: _togetherSession,
         songInfo,
       });
     }
@@ -210,12 +224,17 @@ function dbgAudio(evt) { /* no-op */ }
 
 audio.addEventListener('loadedmetadata', () => {
   applyPlaybackRate();
+  if (_togetherSeek && _togetherSeek.request === _classicPlayRequest) {
+    audio.currentTime = Math.min(getDuration() || Infinity, _togetherSeek.position);
+    _togetherSeek = null;
+  }
   seekInProgress = false;
   lastSeekTarget = -1;
   const dur = getDuration();
   tEnd.textContent = fmt(dur);
 });
 audio.addEventListener('ratechange', () => {
+  _lastSyncTime = 0; syncDesktopState();
   if (desktopLyricOn) window.desktopLyric.send({ type: 'time', t: audio.currentTime, playing: isPlaying, playbackRate: audio.playbackRate });
 });
 audio.addEventListener('timeupdate', onTick);
@@ -226,7 +245,7 @@ audio.addEventListener('play', () => {
   startDesktopLyricRAF();
   lastTickWall = performance.now();
   if (coverEl) coverEl.classList.add('playing');
-  syncDesktopState();
+  syncDesktopState(true);
 });
 audio.addEventListener('pause', () => {
   dbgAudio('pause');
@@ -237,7 +256,7 @@ audio.addEventListener('pause', () => {
   stopDesktopLyricRAF();
   saveCurrentProgress();
   if (coverEl) coverEl.classList.remove('playing');
-  syncDesktopState();
+  syncDesktopState(true);
 });
 audio.addEventListener('ended', () => {
   dbgAudio('ended');
@@ -375,7 +394,12 @@ function flushDuration() {
 // updateContext: 是否用 currentView 更新 playContext
 //   - true: 用户从列表/排行榜手动点歌, playContext = currentView
 //   - false: 自动续播(onEnd) / 上一首下一首按钮, 保持当前 playContext
-async function play(idx, autoResume = true, updateContext = true, countPlay = true) {
+async function play(idx, autoResume = true, updateContext = true, countPlay = true, together = null) {
+  if (!together && _togetherRequest > _togetherAcknowledged) {
+    _togetherAcknowledged = _togetherRequest; _togetherGeneration++;
+  }
+  const request = ++_classicPlayRequest;
+  _togetherSeek = null;
   // 首次播放时初始化 WebAudio 增益链 (延迟初始化避开浏览器自动播放策略)
   initWebAudio();
   // 取消可能进行中的暂停渐变 (避免切歌时音量被留在 0)
@@ -463,6 +487,7 @@ async function play(idx, autoResume = true, updateContext = true, countPlay = tr
     });
   }
 
+  if (request !== _classicPlayRequest) return;
   // 替换显示
   lrc = newLrc;
   lrcRaw = newLrcRaw;
@@ -517,15 +542,18 @@ async function play(idx, autoResume = true, updateContext = true, countPlay = tr
   const srcChanged = audio.src !== src;
   if (srcChanged) audio.src = src;
 
-  const savedT = autoResume && progress[s.audioPath] ? progress[s.audioPath] : 0;
+  const savedT = Number.isFinite(together?.position) ? together.position
+    : autoResume && progress[s.audioPath] ? progress[s.audioPath] : 0;
   let playbackReady;
   const playbackStarted = new Promise(resolve => { playbackReady = resolve; });
   const doPlay = () => {
+    if (request !== _classicPlayRequest) { playbackReady(); return; }
     const dur = getDuration();
     if (savedT > 0 && dur && isFinite(dur) && savedT < dur) {
       audio.currentTime = savedT;
     }
-    audio.play().then(playbackReady, playbackReady);
+    if (together?.autoplay === false) { audio.pause(); playbackReady(); }
+    else audio.play().then(playbackReady, playbackReady);
   };
   if (srcChanged && savedT > 0) {
     let played = false;
@@ -553,6 +581,53 @@ async function play(idx, autoResume = true, updateContext = true, countPlay = tr
   updCur(); scrollCur();
   // Callers restoring a paused interface can pause after the deferred resume.
   await playbackStarted;
+}
+
+// Only this active renderer subscribes; preload removes the subscription on
+// teardown. The server verifies its sender against the real main window.
+async function applyTogetherCommand(command) {
+  if (!command || typeof command.session !== 'string' || !Number.isSafeInteger(command.seq)) return;
+  if (command.session !== _togetherSession) {
+    if (command.op === 'cancel') return;
+    _togetherSession = command.session; _togetherRequest = 0; _togetherAcknowledged = 0; _togetherGeneration++;
+  }
+  if (command.op === 'cancel') {
+    if (command.seq === _togetherRequest) { _togetherGeneration++; _classicPlayRequest++; _togetherSeek = null; }
+    return;
+  }
+  if (command.seq <= _togetherRequest) return;
+  const request = _togetherRequest = command.seq;
+  const generation = ++_togetherGeneration;
+  const p = command.payload || {};
+  try {
+    if (command.op === 'song') {
+      const index = songs.findIndex(song => song.audioPath === p.audioPath);
+      if (index < 0) return;
+      playContext = 'home';
+      if (playMode === 2) { const pos = shuffleQueue.indexOf(index); if (pos >= 0) shufflePos = pos; }
+      if (Number.isFinite(p.playbackRate)) { appSettings.playbackRate = p.playbackRate; applyPlaybackRate(); saveUserData(); }
+      await play(index, false, false, !!p.isPlaying, { position: p.position, autoplay: p.isPlaying !== false });
+    } else if (command.op === 'rate') {
+      appSettings.playbackRate = p.playbackRate; applyPlaybackRate(); saveUserData();
+    }
+    else {
+      if (command.op === 'pause') { cancelFade(); audio.pause(); }
+      if (Number.isFinite(p.position)) {
+        if (audio.readyState < 1) _togetherSeek = { request: _classicPlayRequest, position: p.position };
+        else audio.currentTime = Math.min(getDuration() || Infinity, p.position);
+        syncLrc(p.position);
+      }
+      if (command.op === 'play') await audio.play().catch(() => {});
+    }
+  } finally {
+    if (_togetherRequest === request && generation === _togetherGeneration) {
+      _togetherAcknowledged = request; _lastSyncTime = 0; syncDesktopState();
+    }
+  }
+}
+if (window.stateAPI?.onTogetherCommand) {
+  const disposeTogether = window.stateAPI.onTogetherCommand(command => { void applyTogetherCommand(command).catch(() => {}); });
+  window.addEventListener('beforeunload', disposeTogether, { once: true });
 }
 
 function onEnd() {

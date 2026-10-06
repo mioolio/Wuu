@@ -228,7 +228,7 @@ interface PlainLyricLine {time: number; text: string} // 绝对秒
 
 ## 9. 移动播放与一起听
 
-[mobile_UI/src/composables/usePlayer.js](../mobile_UI/src/composables/usePlayer.js) 管理手机音频、历史、歌词、桌面同步和 MediaSession。HTTP 状态同步与一起听 WS 分别处理不同场景：桌面状态来自 `/api/state`；一起听是移动网页之间的单房间操作广播。
+[mobile_UI/src/composables/usePlayer.js](../mobile_UI/src/composables/usePlayer.js) 管理手机音频、历史、歌词、桌面同步和 MediaSession。HTTP `/api/state` 只用于首次暂停选歌；设置中显式开启的一起听通过 WS 和主进程 IPC 连接实际桌面播放器，桌面负责自然结束切歌。
 
 手机首次同步将目标进度保存到音频元数据就绪后再 seek，首次进入仍由用户操作触发播放。歌词文本到达、暂停和跳转立即校准；活动行与逐字填充使用同一时钟，隐藏、暂停、卸载时停止逐帧更新。每次切歌隔离歌词、音源及历史进度请求，手工跳转优先于迟到恢复。历史按路径定位当前数组，避免删除后索引复用。
 
@@ -250,16 +250,19 @@ MediaSession 提供元数据、封面、play/pause、上一首/下一首、seekt
 
 | 方向 | 消息 | 处理 |
 | --- | --- | --- |
-| 客户端 → 服务 | `op`：`song/play/pause/seek/state` 和 payload | 服务分配递增 seq、ts、from，转发给其他成员 |
-| 服务 → 新成员 | `welcome {id, peers, hostId, hostSong, lastOp}` | 加入及重连用当前歌曲、进度和播放态追平 |
-| 服务 → 成员 | `op {seq, op, payload, ts, from}` | 客户端丢弃过期 seq，避免乱序回退 |
-| 服务 → 成员 | `peers` / `peer-left` | 更新人数与 host；退出后剩余成员暂停 |
+| 客户端 → 服务 | `op`：`song/play/pause/seek/rate` 和 payload | 验证当前歌曲、库内音源及参数后，经 `desktop-together-command` 控制桌面；手机上一首 / 下一首完成选曲后发送 `song` |
+| 客户端 → 服务 | `get-state` | 请求重新对齐电脑 |
+| 服务 → 新成员 | `welcome {id, seq, peers, hostId:0, desktopConnected, hostSong}` | 加入及重连用桌面当前歌曲、进度、播放态和倍速追平 |
+| 服务 → 成员 | `op {seq, op:'state', from:0, payload, ts}` | 桌面实际状态；客户端丢弃过期 seq |
+| 服务 → 成员 | `peers {count, hostId:0, desktopConnected}` | 更新在线设备与桌面连接状态；退出不暂停其他设备 |
 
-host 是在线 ID 最小者；两方均可切歌，但仅 host 周期 `state` 校准和自然播完后自动切下一首，减少竞争。[mergeTogetherState](../server/together-state.js) 将控制合并到 welcome 快照，并拒绝不匹配当前歌曲的定位更新。房间清空即清理歌曲和最近操作；连接层每 30 秒发送 ping，但当前代码没有基于 pong 超时的完整僵尸连接回收。
+固定 `hostId:0` 表示桌面。`desktop-together-ready` 只接受当前主窗口的 sender，新版与经典版分别注册命令监听；其他 Electron 窗口不能发布主持状态。手机切歌路径先与服务歌库匹配，桌面再按自己的歌库确认。桌面返回实际音频状态和 `togetherSeq`，服务在最新指令完成前抑制换源过程的暂停 / 零进度中间状态。指令和确认带服务 `session`，服务重启后可接受新的低序号；退出取消该手机在途请求。连接层用 ping / pong 回收失联设备。
 
-[useListenTogether.js](../mobile_UI/src/composables/useListenTogether.js) 重连退避为 `min(15000,1000*2^attempt)` 毫秒，重新连接后重置已应用序号。远端操作标志与约 800ms 媒体事件抑制窗避免回声。播放中每 5 秒发送 state，接收端只采用 host 校准，以远端进度加 0.15 秒固定估计作为目标：偏差绝对值 `>0.4` 秒直接 seek，`>0.12` 秒用 `1.02/0.98` 播放速率微调，否则回到 1。未测 RTT，也没有服务器时钟同步。非 host 自然结束后等待 5 秒仍未切歌时可本地继续。
+`stream-by-path` 和 `cover-by-path` 对本地文件验证服务歌库中的精确路径，允许库内合法导入的外目录音源，拒绝任意文件。桌面当前 HTTP(S) 试听使用主持状态提供的虚拟歌曲标识、地址和歌词；服务只代理当前桌面实际媒体 / 封面地址并转发 Range，手机不能指定另一条远程 URL。试听不写本地歌库统计、进度或收藏；手机同路径快照更新最新索引和署名而不重开音源，统计 / 进度上报提供路径，路径无效时不回退旧索引。
 
-实际还广播 `like` 收藏操作，服务端目前没有完整 op 白名单。房间全局唯一、状态仅在内存，没有账户认证、多房间 ID 或跨重启恢复。
+[useListenTogether.js](../mobile_UI/src/composables/useListenTogether.js) 重连退避为 `min(15000,1000*2^attempt)` 毫秒，重新连接后重置已应用序号。手机按实际桌面快照对齐：播放位置按经过时间乘以真实倍速外推，暂停与重新加入直接定位，播放中的偏差超过 0.4 秒时 seek。保留 0.5×–2× 的基准倍速，不再用 0.98 / 1.02 覆盖它；元数据就绪后恢复速度和目标进度。自动播放被拒绝时显示加入按钮，用户手势解锁，不能把暂停的手机描述为已同步播放。关闭或断线取消迟到的远端应用；桌面不可用时手机继续本地播放。
+
+收藏的 `like` 操作仍广播给同房手机。播放操作采用白名单；房间全局唯一、状态仅在内存，没有账户认证或多房间 ID。手机外观、歌词字号与音效偏好各自保存在浏览器，外观默认跟随系统并实时响应变化，不随一起听覆盖。
 
 这里同步控制和播放位置，各端仍独立加载与解码媒体；不是音频帧广播，也不是样本级同步。
 
@@ -372,13 +375,15 @@ npm run build:mobile
 
 | 验证入口 | 真实覆盖范围 |
 | --- | --- |
-| `npm test` | 桌面 Vitest、移动 Node tests、启动扫描测试、WS 房间状态脚本，按顺序执行 |
+| `npm test` | 桌面 Vitest、移动 Node tests、启动扫描、WS 房间与经典试听竞态测试，按顺序执行 |
 | `npm run typecheck` / `build:desktop` | TypeScript 严格检查及 Vite 资源生成 |
 | `test:scanner` / `test:startup` | 基础歌库快速返回、迟到标签/用户数据、早期操作与播放不中断 |
 | `test:previous` | 真音频随机历史、回退再前进、顺序首尾、暂停与进度 |
 | `test:desktop` / `test:visual` | Electron fixture 播放、页面、菜单、窗口尺寸及截图 |
 | `test:player-polish` / `test:motion` / `test:reading` / `test:detail` | 封面加载/颜色、过渡中间帧、字号、歌词跳转、浮层焦点及键盘控件 |
 | `test:mobile` / `test:mobile-ui` / `test:together` | 手机歌词/进度请求隔离、手机 UI、welcome 状态合并与房间控制 |
+| `test:mobile-appearance` | 生产手机界面的系统配色、保存偏好、窄屏布局、对比度和弹窗操作 |
+| `test:together-ui` / `test:classic-preview` | 真实双端媒体、HTTP / WS / IPC 联动；经典试听歌词与音源请求竞态 |
 | `node scripts/discovery-desktop.cjs` | 发现排重、网络失败保留、并发试听、显式保存 |
 
 fixture 写入位于忽略的 `.test-artifacts/`。单元/fixture 通过只证明其覆盖的行为，不代表真实平台登录、会员音质、第三方 URL 长期可用、原生签名二进制兼容或所有移动系统已实测。

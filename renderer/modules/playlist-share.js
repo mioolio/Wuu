@@ -836,6 +836,17 @@ function initPlaylistShare() {
       return;
     }
     var reqId = ++_plPreviewReqId;
+    // Claim the shared media request before buffering so a former local or
+    // remote loader cannot later replace this newly selected preview.
+    if (typeof _togetherRequest === 'number' && _togetherRequest > _togetherAcknowledged) {
+      _togetherAcknowledged = _togetherRequest; _togetherGeneration++;
+    }
+    var localRequest = typeof _classicPlayRequest === 'number' ? ++_classicPlayRequest : null;
+    if (typeof _togetherSeek !== 'undefined') _togetherSeek = null;
+    var stillSelected = function () {
+      return (localRequest === null || _classicPlayRequest === localRequest) &&
+        reqId === _plPreviewReqId && fmPreviewMode && fmPreviewSong === preview;
+    };
     if (btn) { btn.disabled = true; btn.textContent = '...'; }
     // 清除其他歌曲的 playing 状态
     plImportList.querySelectorAll('.pl-item-play.playing').forEach(b => b.classList.remove('playing'));
@@ -861,6 +872,7 @@ function initPlaylistShare() {
         composer: song.composer || '',
         _originSong: song,           // 保留原始对象, 保存到歌库时用
       };
+      var preview = fmPreviewSong;
       // 清空旧歌词
       lrc = [];
       lrcRaw = false;
@@ -895,14 +907,14 @@ function initPlaylistShare() {
       audio.src = song.audioUrl;
       audio.currentTime = 0;
       await audio.play();
-      if (reqId !== _plPreviewReqId) return;
+      if (!stillSelected()) return;
       if (btn) { btn.textContent = '▶'; btn.disabled = false; btn.classList.add('playing'); }
       // 异步加载远程歌词 (失败不影响试听)
       loadPlLyricToMain(song.lyricUrl);
       // 更新保存按钮
       if (typeof updateFmSaveButton === 'function') updateFmSaveButton();
     } catch (e) {
-      if (reqId !== _plPreviewReqId) return;
+      if (!stillSelected()) return;
       if (btn) { btn.textContent = '▶'; btn.disabled = false; }
       if (typeof showToast === 'function') showToast('试听失败: ' + e.message, 'error');
       // 试听失败, 退出试听模式
@@ -914,18 +926,32 @@ function initPlaylistShare() {
 
   // 加载远程歌单歌词到主播放器 (复用 fmPreviewLrc 缓存, 保存到歌库时直接用)
   function loadPlLyricToMain(lyricUrl) {
+    var preview = fmPreviewSong;
+    var request = _plPreviewReqId;
+    var localRequest = typeof _classicPlayRequest === 'number' ? _classicPlayRequest : null;
+    var source = audio.src;
+    var stillCurrent = function () {
+      return request === _plPreviewReqId && (localRequest === null || _classicPlayRequest === localRequest) &&
+        fmPreviewMode && fmPreviewSong === preview &&
+        preview && preview.source === 'playlist' && audio.src === source;
+    };
+    if (!stillCurrent()) return;
     if (!lyricUrl) {
+      fmPreviewLrcText = '';
       lrc = [{ time: 0, text: '纯音乐，请欣赏' }];
       lrcRaw = false;
       if (typeof renderLrc === 'function') renderLrc();
+      if (typeof sendLyricDataToDesktop === 'function') sendLyricDataToDesktop();
+      if (typeof syncDesktopState === 'function') syncDesktopState(true);
       return;
     }
-    fetch(lyricUrl)
+    return fetch(lyricUrl)
       .then(function (r) {
         if (!r.ok) throw new Error('HTTP ' + r.status);
         return r.text();
       })
       .then(function (text) {
+        if (!stillCurrent()) return;
         fmPreviewLrcText = text || '';
         var parsed = [];
         var isRaw = false;
@@ -952,12 +978,17 @@ function initPlaylistShare() {
         if (typeof renderLrc === 'function') renderLrc();
         if (typeof syncLrc === 'function') syncLrc(audio.currentTime || 0);
         if (typeof sendLyricDataToDesktop === 'function') sendLyricDataToDesktop();
+        if (typeof syncDesktopState === 'function') syncDesktopState(true);
       })
       .catch(function () {
+        if (!stillCurrent()) return;
         // 歌词加载失败, 显示纯音乐提示, 不影响试听
+        fmPreviewLrcText = '';
         lrc = [{ time: 0, text: '纯音乐，请欣赏' }];
         lrcRaw = false;
         if (typeof renderLrc === 'function') renderLrc();
+        if (typeof sendLyricDataToDesktop === 'function') sendLyricDataToDesktop();
+        if (typeof syncDesktopState === 'function') syncDesktopState(true);
       });
   }
 

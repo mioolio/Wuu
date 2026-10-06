@@ -133,12 +133,12 @@ export async function likeToCollection(index, collectionId, add = true) {
 }
 
 // 上报播放次数
-export async function reportPlayCount(index) {
+export async function reportPlayCount(index, audioPath) {
   try {
     await fetch('/api/play-count', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ index }),
+      body: JSON.stringify({ index, audioPath }),
     });
   } catch (e) {
     console.warn('[sync] 上报播放次数失败:', e.message);
@@ -146,12 +146,12 @@ export async function reportPlayCount(index) {
 }
 
 // 上报播放进度
-export async function reportProgress(index, time) {
+export async function reportProgress(index, time, audioPath) {
   try {
     await fetch('/api/progress', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ index, time }),
+      body: JSON.stringify({ index, time, audioPath }),
     });
   } catch (e) {
     console.warn('[sync] 上报播放进度失败:', e.message);

@@ -24,7 +24,7 @@ let service: (typeof import('./player'))['playerService'];
 let store: (typeof import('../store'))['useAppStore'];
 let media: FakeMedia;
 const reportFailed = vi.fn(async () => {});
-const synchronize = vi.fn(async () => {});
+const synchronize = vi.fn(async (_patch: any) => {});
 const extractColor = vi.fn(async (_path: string): Promise<unknown> => null);
 const extractColorURL = vi.fn(async (_url: string): Promise<unknown> => null);
 const desktopSend = vi.fn();
@@ -33,6 +33,8 @@ const getSongs = vi.fn(async (): Promise<Song[]> => songs);
 const getUserData = vi.fn(async (): Promise<any> => ({}));
 let durationListener: (payload: unknown) => void;
 let metadataListener: (payload: unknown) => void;
+let togetherListener: (payload: unknown) => void;
+const onTogetherCommand = vi.fn(listener => { togetherListener = listener; return () => {}; });
 const onDurationUpdate = vi.fn(listener => { durationListener = listener; return () => {}; });
 const onSongMetadataUpdate = vi.fn(listener => { metadataListener = listener; return () => {}; });
 function deferred<T>() {
@@ -64,7 +66,7 @@ beforeAll(async () => {
   const fakeWindow = Object.assign(new EventTarget(), {
     musicAPI: { getSongs, getUserData, getLyrics: async () => '', saveUserData: async () => {}, onDurationUpdate, onSongMetadataUpdate, extractCoverColor: extractColor, extractCoverColorFromURL: extractColorURL },
     desktopLyric: { onClosed: () => () => {}, onLockChanged: () => () => {}, onBoundsSaved: () => () => {}, send: desktopSend, toggle: async () => {}, lock: async () => {} },
-    stateAPI: { updateDesktopState: synchronize }, repairAPI: { reportPlayFailed: reportFailed },
+    stateAPI: { updateDesktopState: synchronize, onTogetherCommand }, repairAPI: { reportPlayFailed: reportFailed },
     MediaMetadata: FakeMediaMetadata,
   });
   vi.stubGlobal('window', fakeWindow);
@@ -673,5 +675,80 @@ describe('playable startup before delayed user preferences', () => {
     expect(media.src).toContain('two.aac'); expect(media.currentTime).toBe(42); expect(media.paused).toBe(false);
     expect(store.getState().player.lyricText).toBe('');
     request.mockRestore(); vi.stubGlobal('location',undefined);
+  });
+});
+
+
+describe('actual desktop listens to validated together commands', () => {
+  it('a newer phone seek before metadata replaces the paused song initial position', async () => {
+    const originalLoad = media.load.bind(media);
+    media.load = () => { media.currentTime = 0; media.readyState = 0; media.duration = NaN; };
+    togetherListener({ session: 'slow-metadata', seq: 1, op: 'song', payload: { audioPath: songs[1].audioPath, position: 35, isPlaying: false } });
+    await flush();
+    togetherListener({ session: 'slow-metadata', seq: 2, op: 'seek', payload: { position: 20 } }); await flush();
+    media.readyState = 4; media.duration = 120; media.dispatchEvent(new Event('loadedmetadata'));
+    expect(media.currentTime).toBe(20); expect(media.paused).toBe(true);
+    expect(store.getState().player.time).toBe(20);
+    media.load = originalLoad;
+  });
+  it('a phone library selection resets an old collection queue and keeps actual previous-song history', async () => {
+    store.setState({ view: 'liked', activeCollectionId: 'one', collections: [{ id: 'one', name: 'One only', songs: [songs[0].audioPath], createdAt: 1 }] });
+    await service.playSong(songs[0], [songs[0]]);
+    togetherListener({ session: 'phone-library', seq: 1, op: 'song', payload: { audioPath: songs[1].audioPath, position: 10, isPlaying: true } });
+    await flush(); expect(service.getQueue().map(song => song.audioPath)).toEqual(songs.map(song => song.audioPath));
+    service.next(); await flush(); expect(store.getState().player.song?.audioPath).toBe(songs[2].audioPath);
+    store.getState().setSettings({ playMode: 2 }); service.next(-1); await flush();
+    expect(store.getState().player.song?.audioPath).toBe(songs[1].audioPath);
+  });
+  it('binds before playback and applies a paused song with exact progress/rate without waiting for lyrics', async () => {
+    const text = deferred<string>();
+    const getLyrics = vi.fn(() => text.promise);
+    (window as any).musicAPI.getLyrics = getLyrics;
+    const song = { ...songs[1], lrcPath: 'C:/two.lrc' };
+    store.setState({ songs: [songs[0], song, songs[2]] });
+    togetherListener({ session: 'paused-song', seq: 1, op: 'song', payload: {
+      audioPath: song.audioPath, position: 35, isPlaying: false, playbackRate: 2,
+    } });
+    await flush();
+    expect(store.getState().player.song?.audioPath).toBe(song.audioPath);
+    expect(media.paused).toBe(true); expect(media.currentTime).toBe(35);
+    expect(media.playbackRate).toBe(2); expect(media.defaultPlaybackRate).toBe(2);
+    expect(synchronize).toHaveBeenLastCalledWith(expect.objectContaining({
+      currentTime: 35, isPlaying: false, playbackRate: 2, togetherSeq: 1, togetherSession: 'paused-song',
+    }));
+    text.resolve('[00:00]current'); await flush();
+    (window as any).musicAPI.getLyrics = async () => '';
+  });
+  it('phone pause/play/seek/rate controls real media and saved settings; missing songs cannot load arbitrary paths', async () => {
+    await service.playSong(songs[0]);
+    const send = async (seq: number, op: string, payload: object) => {
+      togetherListener({ session: 'controls', seq, op, payload }); await flush();
+    };
+    await send(1, 'pause', { position: 20 }); expect(media.paused).toBe(true); expect(media.currentTime).toBe(20);
+    await send(2, 'play', { position: 24 }); expect(media.paused).toBe(false);
+    await send(3, 'seek', { position: 40 }); expect(media.currentTime).toBe(40);
+    const source = media.src;
+    await send(4, 'rate', { playbackRate: .5 });
+    expect(media.playbackRate).toBe(.5); expect(store.getState().settings.playbackRate).toBe(.5);
+    expect(media.currentTime).toBe(40); expect(media.src).toBe(source);
+    await send(5, 'song', { audioPath: 'C:/private.wav', position: 80, isPlaying: true });
+    expect(media.src).toBe(source); expect(store.getState().player.song?.audioPath).toBe(songs[0].audioPath);
+    expect(synchronize).toHaveBeenLastCalledWith(expect.objectContaining({ togetherSeq: 5, playbackRate: .5 }));
+  });
+  it('a new server session accepts low sequences while old/cancelled completions cannot acknowledge it', async () => {
+    await service.playSong(songs[0]);
+    const playing = deferred<void>();
+    const originalPlay = media.play.bind(media);
+    media.play = async () => { await playing.promise; await originalPlay(); };
+    togetherListener({ session: 'old-server', seq: 90, op: 'play', payload: {} });
+    await flush();
+    togetherListener({ session: 'old-server', seq: 90, op: 'cancel' });
+    togetherListener({ session: 'new-server', seq: 1, op: 'rate', payload: { playbackRate: 2 } });
+    await flush(); synchronize.mockClear(); playing.resolve(); await flush();
+    expect(media.playbackRate).toBe(2);
+    expect(synchronize.mock.calls.every(([patch]) => patch.togetherSession !== 'old-server')).toBe(true);
+    media.play = originalPlay;
+    togetherListener({ session: 'new-server', seq: 2, op: 'pause', payload: { position: 18 } }); await flush();
+    expect(synchronize).toHaveBeenLastCalledWith(expect.objectContaining({ togetherSeq: 2, togetherSession: 'new-server', isPlaying: false }));
   });
 });

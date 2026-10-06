@@ -6,11 +6,13 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const { Worker } = require('worker_threads');
+const { Readable } = require('stream');
 const { WebSocketServer } = require('ws');
 const { configDir, ensureConfigDir, readUserData, writeUserData } = require('../core/storage');
 const { dbgLog, dbgErr } = require('../core/logger');
 const { incrementPlayCount } = require('./play-count');
-const { mergeTogetherState } = require('./together-state');
+const { normalizeTogetherRate } = require('./together-state');
+const { getMainWindow } = require('../core/state');
 
 const DEFAULT_PORT = 30967;
 let _server = null;
@@ -34,6 +36,7 @@ let _desktopState = {
   isPlaying: false,      // 是否在播放
   currentTime: 0,        // 当前播放进度 (秒)
   duration: 0,           // 歌曲总时长 (秒)
+  playbackRate: 1,
   songInfo: null,        // 当前歌曲信息 { songName, artist, hasCover, ... }
   updatedAt: 0,          // 更新时间戳
 };
@@ -44,8 +47,10 @@ function updateDesktopState(patch) {
   // 同步 songInfo 中的 audioPath 到顶层字段, 方便 /api/state 返回
   if (_desktopState.songInfo && _desktopState.songInfo.audioPath) {
     _desktopState.audioPath = _desktopState.songInfo.audioPath;
-  }
+  } else _desktopState.audioPath = null;
+  _desktopState.playbackRate = normalizeTogetherRate(_desktopState.playbackRate);
   _desktopState.updatedAt = Date.now();
+  _publishDesktopTogether(patch);
 }
 
 // 移动端 UI 静态文件目录 (Vue 构建产物)
@@ -148,6 +153,28 @@ function audioPathToIndex(audioPath) {
   if (!audioPath || !isCacheValid() || !_pathIndexMap) return -1;
   const i = _pathIndexMap.get(audioPath);
   return i === undefined ? -1 : i;
+}
+function reportAudioPath(body) {
+  // Old clients may still report an index. A provided path never falls back
+  // to that index, which could refer to another song after a library refresh.
+  return typeof body.audioPath === 'string'
+    ? (audioPathToIndex(body.audioPath) >= 0 ? body.audioPath : null)
+    : indexToAudioPath(body.index);
+}
+
+async function proxyDesktopPreview(req, res, address) {
+  const controller = new AbortController();
+  res.once('close', () => { if (!res.writableEnded) controller.abort(); });
+  const upstream = await fetch(address, { signal: controller.signal,
+    headers: req.headers.range ? { Range: req.headers.range } : {} });
+  if (!upstream.ok || !upstream.body) { res.writeHead(upstream.status); res.end(); return; }
+  const headers = {};
+  for (const name of ['content-type', 'content-length', 'content-range', 'accept-ranges']) {
+    const value = upstream.headers.get(name); if (value) headers[name] = value;
+  }
+  res.writeHead(upstream.status, headers);
+  const stream = Readable.fromWeb(upstream.body);
+  stream.on('error', () => res.destroy()); stream.pipe(res);
 }
 
 // 通过索引数组获取脱敏歌曲信息
@@ -302,138 +329,190 @@ function ensureSharedDir() {
 }
 
 // =========== 一起听 (WebSocket 房间) ===========
-// 全局单房间: 所有开启一起听的移动端在同一房间实时同步, 双方都能控制
-// 协议 (JSON):
-//   客户端→服务器: { type: 'op', op: 'play'|'pause'|'seek'|'song'|'state', payload }
-//   服务器→客户端:
-//     { type: 'welcome', id, peers, hostId, hostSong, lastOp }  加入成功 + 房间状态(迟到者追平)
-//     { type: 'op', seq, op, payload, ts, from }    操作广播 (from ≠ 自己 id 时应用)
-//     { type: 'peers', count, hostId }                      在线人数变化
-//     { type: 'peer-left', id, count, hostId }              有成员退出 (对端据此暂停)
-// 仲裁: 服务器为每个操作分配单调递增 seq + 时间戳, 客户端丢弃过期 seq 避免乱序回退
-// host: 房间内 id 最小者 (即最先加入的人)。歌曲自然播完时只有 host 自动切歌,
-//       其他成员等待 host 的 song 广播, 避免双人同时切歌产生竞争 (乱跳/无法播放)
-// hostSong: 房间当前歌曲上下文 (双方切歌; 仅 host 心跳校准), 合并后续控制,
-//       新成员加入(含手动开启一起听)时通过 welcome 立即拉取对齐, 保证一致性
+// The actual desktop renderer is the clock/automatic-advance owner. Phones
+// participate only while their explicit listen-together socket is connected.
 let _wss = null;
-let _togetherClients = new Map();  // ws → { id }
+let _togetherClients = new Map();
 let _togetherNextId = 1;
 let _togetherSeq = 0;
-let _togetherLastOp = null;  // 最近一次广播的操作 (迟到者加入时同步用)
-let _togetherHostSong = null;  // 房间当前歌曲上下文 (加入即拉取)
+let _togetherSession = require('crypto').randomUUID();
 let _togetherPingTimer = null;
+let _desktopTogetherSender = null;
+let _togetherPending = null;
 
-// 房间 host = 在线成员中 id 最小者 (0 表示房间为空)
-function _togetherHostId() {
-  let min = 0;
-  for (const [, meta] of _togetherClients) {
-    if (!min || meta.id < min) min = meta.id;
-  }
-  return min;
+function _desktopConnected() {
+  const win = getMainWindow();
+  return !!(win && !win.isDestroyed() && _desktopTogetherSender === win.webContents &&
+    !_desktopTogetherSender.isDestroyed());
 }
-
+function _isDesktopSender(sender) {
+  const win = getMainWindow();
+  return !!(win && !win.isDestroyed() && sender === win.webContents);
+}
+function _desktopTogetherSnapshot() {
+  const info = _desktopState.songInfo;
+  const cachedIndex = audioPathToIndex(info?.audioPath);
+  const song = info?.audioPath && (info.preview || _desktopState.index >= 0)
+    ? { ...info, id: info.preview ? `preview:${info.audioPath}` : cachedIndex >= 0 ? cachedIndex : _desktopState.index } : null;
+  const rate = normalizeTogetherRate(_desktopState.playbackRate);
+  const elapsed = _desktopState.isPlaying ? Math.max(0, (Date.now() - _desktopState.updatedAt) / 1000) * rate : 0;
+  const position = Math.max(0, Number(_desktopState.currentTime) || 0) + elapsed;
+  return { song, songId: song?.id ?? null, audioPath: song?.audioPath ?? null,
+    position: _desktopState.duration > 0 ? Math.min(_desktopState.duration, position) : position,
+    duration: _desktopState.duration || 0, isPlaying: !!song && !!_desktopState.isPlaying,
+    playbackRate: rate, desktopConnected: _desktopConnected() };
+}
 function _broadcastTogether(msg, excludeWs) {
   const text = JSON.stringify(msg);
   for (const [client] of _togetherClients) {
-    if (client === excludeWs) continue;
-    if (client.readyState === 1) {
-      try { client.send(text); } catch (e) {}
+    if (client !== excludeWs && client.readyState === 1) {
+      try { client.send(text); } catch (_) {}
     }
   }
 }
-
 function _notifyPeers() {
-  _broadcastTogether({ type: 'peers', count: _togetherClients.size, hostId: _togetherHostId() });
+  const desktopConnected = _desktopConnected();
+  _broadcastTogether({ type: 'peers', count: _togetherClients.size + (desktopConnected ? 1 : 0),
+    hostId: 0, desktopConnected });
 }
-
+function _sendDesktopSnapshot(ws) {
+  const entry = { type: 'op', op: 'state', seq: ++_togetherSeq, from: 0,
+    ts: Date.now(), payload: _desktopTogetherSnapshot() };
+  if (ws) { if (ws.readyState === 1) ws.send(JSON.stringify(entry)); }
+  else _broadcastTogether(entry);
+}
+function _publishDesktopTogether(patch = {}) {
+  if (!_desktopConnected()) return;
+  // Source loading emits intermediate pause/zero-time states. Only the actual
+  // renderer's completion for the newest command releases that room update.
+  if (_togetherPending) {
+    if (!(patch.togetherSession === _togetherSession && Number.isSafeInteger(patch.togetherSeq) && patch.togetherSeq >= _togetherPending.seq)) return;
+    _togetherPending = null;
+  }
+  if (_togetherClients.size) _sendDesktopSnapshot();
+}
+function _setDesktopTogetherSender(sender, ready) {
+  if (!_isDesktopSender(sender)) return false;
+  if (!ready) {
+    if (_desktopTogetherSender !== sender) return false;
+    _desktopTogetherSender = null;
+    _togetherPending = null;
+  } else {
+    const changed = _desktopTogetherSender !== sender;
+    _desktopTogetherSender = sender;
+    if (changed) sender.once('destroyed', () => {
+      if (_desktopTogetherSender !== sender) return;
+      _desktopTogetherSender = null; _togetherPending = null;
+      _notifyPeers();
+    });
+  }
+  _notifyPeers();
+  if (ready && _togetherClients.size) _sendDesktopSnapshot();
+  return true;
+}
+function _validTogetherCommand(op, raw) {
+  const p = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  if (!['song', 'play', 'pause', 'seek', 'rate'].includes(op)) return null;
+  let song;
+  if (op === 'song') {
+    // Resolve against the server library; never send a client-provided path to
+    // Electron's media loader. The desktop validates against its library too.
+    const rows = getRawSongsSync();
+    if (!rows || !p.song || typeof p.song !== 'object') return null;
+    song = rows.find(row => row.audioPath === p.song.audioPath);
+    if (!song || (p.song.id != null && rows[p.song.id]?.audioPath !== song.audioPath)) return null;
+  } else {
+    const pendingPath = _togetherPending?.op === 'song' ? _togetherPending.payload.audioPath : null;
+    const rows = pendingPath ? getRawSongsSync() : null;
+    const pendingIndex = rows?.findIndex(row => row.audioPath === pendingPath) ?? -1;
+    const current = pendingIndex >= 0 ? { ...rows[pendingIndex], id: pendingIndex } : _desktopTogetherSnapshot().song;
+    if (!current && op !== 'rate') return null;
+    if (p.audioPath != null && p.audioPath !== current?.audioPath) return null;
+    if (p.songId != null && p.songId !== current?.id) return null;
+  }
+  if ((op === 'seek' || op === 'song') && p.position != null &&
+      !(typeof p.position === 'number' && Number.isFinite(p.position) && p.position >= 0)) return null;
+  if (op === 'seek' && !(typeof p.position === 'number' && Number.isFinite(p.position) && p.position >= 0)) return null;
+  if (op === 'rate' && !(typeof p.playbackRate === 'number' && Number.isFinite(p.playbackRate) &&
+      p.playbackRate >= .5 && p.playbackRate <= 2)) return null;
+  return { ...(song ? { audioPath: song.audioPath } : {}),
+    ...(Number.isFinite(p.position) ? { position: p.position } : {}),
+    ...(typeof p.isPlaying === 'boolean' ? { isPlaying: p.isPlaying } : {}),
+    ...(Number.isFinite(p.playbackRate) ? { playbackRate: normalizeTogetherRate(p.playbackRate) } : {}) };
+}
 function _handleTogetherMessage(ws, raw) {
   let msg;
-  try { msg = JSON.parse(raw); } catch (e) { return; }
+  try { msg = JSON.parse(raw); } catch (_) { return; }
   const meta = _togetherClients.get(ws);
   if (!meta) return;
-
-  if (msg.type === 'op') {
-    const entry = {
-      type: 'op',
-      seq: ++_togetherSeq,
-      op: String(msg.op || ''),
-      payload: msg.payload || {},
-      ts: Date.now(),
-      from: meta.id,
-    };
-    _togetherLastOp = entry;
-    // 双方切歌立即更新上下文, 仅 host 心跳校准; 当前歌曲控制进入欢迎快照。
-    _togetherHostSong = mergeTogetherState(_togetherHostSong, entry, meta.id === _togetherHostId());
-    // 广播给其他端 (发起者已本地应用, 无需回发)
-    _broadcastTogether(entry, ws);
+  if (msg.type === 'get-state') { _sendDesktopSnapshot(ws); return; }
+  if (msg.type !== 'op') return;
+  if (msg.op === 'like') {
+    _broadcastTogether({ type: 'op', op: 'like', seq: ++_togetherSeq, from: meta.id,
+      payload: msg.payload || {} }, ws);
+    return;
   }
+  if (!_desktopConnected()) return;
+  const payload = _validTogetherCommand(msg.op, msg.payload);
+  if (!payload) { _sendDesktopSnapshot(ws); return; }
+  let op = msg.op, commandPayload = payload;
+  // Play/pause/seek issued while a selected song is loading refine that song
+  // request. They must not operate on the desktop's previous source or allow
+  // the older asynchronous load to play after a newer pause.
+  if (_togetherPending?.op === 'song' && ['play', 'pause', 'seek', 'rate'].includes(op)) {
+    commandPayload = { ..._togetherPending.payload, ...payload,
+      ...(op === 'play' || op === 'pause' ? { isPlaying: op === 'play' } : {}) };
+    op = 'song';
+  }
+  const command = { session: _togetherSession, seq: ++_togetherSeq, op, payload: commandPayload };
+  _togetherPending = { ...command, client: ws };
+  _desktopTogetherSender.send('desktop-together-command', command);
 }
-
 function _ensureTogetherWss() {
   if (_wss) return;
   _wss = new WebSocketServer({ noServer: true });
-
   _wss.on('connection', (ws, req) => {
     const id = _togetherNextId++;
-    _togetherClients.set(ws, { id });
+    _togetherClients.set(ws, { id, alive: true });
     dbgLog(`[SERVER] 一起听客户端 #${id} 加入 (IP: ${getClientIP(req)})`);
     if (_accessLogEnabled) logAccess(req, '一起听', '客户端加入');
-
-    // 欢迎: 分配 id + 在线数 + host + 房间当前状态 (迟到者立即追平进度)
-    // hostSong 优先: 新成员直接对齐 host 的歌曲+进度+播放态
-    ws.send(JSON.stringify({
-      type: 'welcome',
-      id,
-      peers: _togetherClients.size,
-      hostId: _togetherHostId(),
-      hostSong: _togetherHostSong,
-      lastOp: _togetherLastOp,
-    }));
+    ws.send(JSON.stringify({ type: 'welcome', id, seq: _togetherSeq, hostId: 0,
+      peers: _togetherClients.size + (_desktopConnected() ? 1 : 0),
+      desktopConnected: _desktopConnected(), hostSong: _desktopTogetherSnapshot() }));
     _notifyPeers();
-
-    ws.on('message', (data) => _handleTogetherMessage(ws, data.toString()));
+    ws.on('message', data => _handleTogetherMessage(ws, data.toString()));
+    ws.on('pong', () => { const meta = _togetherClients.get(ws); if (meta) meta.alive = true; });
     ws.on('close', () => {
       _togetherClients.delete(ws);
-      dbgLog(`[SERVER] 一起听客户端 #${id} 离开`);
-      // 房间清空后清除残留状态, 避免下一位加入者拉到过期的歌曲/操作
-      if (_togetherClients.size === 0) {
-        _togetherLastOp = null;
-        _togetherHostSong = null;
-      } else if (_togetherHostSong) {
-        // 与客户端收到 peer-left 后暂停的行为一致。
-        _togetherHostSong = { ..._togetherHostSong, isPlaying: false };
+      // Leaving never pauses the desktop or another phone. In-flight requests
+      // from the departed phone lose authority; late completions cannot rejoin.
+      if (_togetherPending?.client === ws) {
+        if (_desktopConnected()) _desktopTogetherSender.send('desktop-together-command',
+          { op: 'cancel', session: _togetherSession, seq: _togetherPending.seq });
+        _togetherPending = null;
       }
-      // 显式通知退出事件: 剩余成员据此暂停播放; hostId 变化触发继任 host 逻辑
-      _broadcastTogether({
-        type: 'peer-left',
-        id,
-        count: _togetherClients.size,
-        hostId: _togetherHostId(),
-      });
       _notifyPeers();
     });
-    ws.on('error', () => {});  // 防止未处理错误导致进程退出
+    ws.on('error', () => {});
   });
-
-  // 连接级心跳: 30s ping 清理僵尸连接
   _togetherPingTimer = setInterval(() => {
-    for (const [client] of _togetherClients) {
-      if (client.readyState === 1) {
-        try { client.ping(); } catch (e) {}
-      }
+    for (const [client, meta] of _togetherClients) {
+      if (!meta.alive) { client.terminate(); continue; }
+      meta.alive = false;
+      if (client.readyState === 1) { try { client.ping(); } catch (_) {} }
     }
   }, 30000);
 }
-
 function _stopTogether() {
   if (_togetherPingTimer) { clearInterval(_togetherPingTimer); _togetherPingTimer = null; }
-  for (const [client] of _togetherClients) {
-    try { client.terminate(); } catch (e) {}
-  }
+  if (_togetherPending && _desktopConnected()) _desktopTogetherSender.send('desktop-together-command',
+    { op: 'cancel', session: _togetherSession, seq: _togetherPending.seq });
+  _togetherPending = null;
+  _togetherSession = require('crypto').randomUUID();
+  _togetherSeq = 0;
+  for (const [client] of _togetherClients) { try { client.terminate(); } catch (_) {} }
   _togetherClients.clear();
-  if (_wss) { try { _wss.close(); } catch (e) {} _wss = null; }
-  _togetherLastOp = null;
-  _togetherHostSong = null;
+  if (_wss) { try { _wss.close(); } catch (_) {} _wss = null; }
 }
 
 // 提取客户端真实IP (处理代理头)
@@ -922,16 +1001,19 @@ function startServer(port, bindIP, whitelist, rateLimit, accessLogEnabled) {
     if (pathname === '/api/stream-by-path' && req.method === 'GET') {
       try {
         const audioPath = url.searchParams.get('path');
+        if (/^https?:\/\//i.test(audioPath || '')) {
+          if (!_desktopState.songInfo?.preview || audioPath !== _desktopState.audioPath) {
+            res.writeHead(403); res.end(); return;
+          }
+          await proxyDesktopPreview(req, res, audioPath); return;
+        }
+        const songs = await getRawSongsAsync();
+        if (!audioPath || !songs.some(song => song.audioPath === audioPath)) {
+          res.writeHead(403); res.end(); return;
+        }
         if (!audioPath || !fs.existsSync(audioPath)) {
           res.writeHead(404, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ ok: false, message: '音频文件不存在' }));
-          return;
-        }
-        // 安全: 只允许从 output 目录读取
-        const outputDir = path.join(__dirname, '..', 'output');
-        if (!audioPath.startsWith(outputDir)) {
-          res.writeHead(403, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ ok: false, message: '禁止访问' }));
           return;
         }
         const stat = fs.statSync(audioPath);
@@ -994,13 +1076,21 @@ function startServer(port, bindIP, whitelist, rateLimit, accessLogEnabled) {
     if (pathname === '/api/cover-by-path' && req.method === 'GET') {
       try {
         const coverPath = url.searchParams.get('path');
+        if (/^https?:\/\//i.test(coverPath || '')) {
+          if (!_desktopState.songInfo?.preview || coverPath !== _desktopState.songInfo.coverPath) {
+            res.writeHead(403); res.end(); return;
+          }
+          await proxyDesktopPreview(req, res, coverPath); return;
+        }
+        const songs = await getRawSongsAsync();
+        const knownCover = songs.some(song => song.coverPath === coverPath) || coverPath === _desktopState.songInfo?.coverPath;
         if (!coverPath || !fs.existsSync(coverPath)) {
           res.writeHead(404); res.end(); return;
         }
         // 安全: 只允许从 output 目录或 config 目录读取
         const outputDir = path.join(__dirname, '..', 'output');
         const configDir = path.join(__dirname, '..', 'config');
-        if (!coverPath.startsWith(outputDir) && !coverPath.startsWith(configDir)) {
+        if (!knownCover && !coverPath.startsWith(outputDir) && !coverPath.startsWith(configDir)) {
           res.writeHead(403); res.end(); return;
         }
         const ext = path.extname(coverPath).toLowerCase();
@@ -1051,6 +1141,7 @@ function startServer(port, bindIP, whitelist, rateLimit, accessLogEnabled) {
           audioPath: _desktopState.songInfo ? (_desktopState.songInfo.audioPath || _desktopState.audioPath) : _desktopState.audioPath,
           currentTime: _desktopState.currentTime,
           duration: _desktopState.duration,
+          playbackRate: _desktopState.playbackRate,
           songInfo: _desktopState.songInfo,
           updatedAt: _desktopState.updatedAt,
         };
@@ -1317,7 +1408,7 @@ function startServer(port, bindIP, whitelist, rateLimit, accessLogEnabled) {
     if (pathname === '/api/play-count' && req.method === 'POST') {
       try {
         const body = await parseBody(req);
-        const audioPath = indexToAudioPath(body.index);
+        const audioPath = reportAudioPath(body);
         if (!audioPath) {
           res.writeHead(404, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ ok: false, message: '歌曲不存在' }));
@@ -1339,7 +1430,7 @@ function startServer(port, bindIP, whitelist, rateLimit, accessLogEnabled) {
     if (pathname === '/api/progress' && req.method === 'POST') {
       try {
         const body = await parseBody(req);
-        const audioPath = indexToAudioPath(body.index);
+        const audioPath = reportAudioPath(body);
         if (!audioPath) {
           res.writeHead(404, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ ok: false, message: '歌曲不存在' }));
@@ -1478,7 +1569,9 @@ ipcMain.handle('server-clear-access-logs', async () => {
 });
 
 // IPC: 桌面端渲染进程推送播放状态更新
+ipcMain.handle('desktop-together-ready', async (event, ready = true) => ({ ok: _setDesktopTogetherSender(event.sender, !!ready) }));
 ipcMain.handle('desktop-state-update', async (event, patch) => {
+  if (!_isDesktopSender(event.sender)) return { ok: false };
   updateDesktopState(patch);
   return { ok: true };
 });

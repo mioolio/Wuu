@@ -184,7 +184,7 @@ test('元数据未到时暂停广播和保存仍使用待对齐的35秒', async 
   assert.equal(player.currentTime.value, 35);
   assert.deepEqual(operations.at(-1), ['pause', { position: 35 }]);
   const saved = requests.find(([url]) => url === '/api/progress');
-  assert.deepEqual(JSON.parse(saved[1].body), { index: 0, time: 35 });
+  assert.deepEqual(JSON.parse(saved[1].body), { index: 0, time: 35, audioPath: song(0).audioPath });
   // 系统直接暂停（耳机/锁屏）同样不能广播加载期元素的0秒。
   await player.resume();
   operations.length = 0;
@@ -506,4 +506,43 @@ test('play事件后解码失败的promise也不会被写入成功听歌历史', 
   assert.equal(player.currentSong.value.id, 0);
   await player.next();
   assert.equal(player.currentSong.value.id, 2);
+});
+
+
+test('真实同步倍速在选歌、metadata和暂停恢复后保持，先到的新暂停挡住旧play promise', async t => {
+  const { player, audio } = await fixture(t);
+  let release; audio.playResult = new Promise(resolve => { release = resolve; });
+  const pending = player.playSong(song(0), { playbackRate: 2, position: 35, notify: false, remote: true });
+  player.pause({ notify: false }); release(); await pending; audio.metadata();
+  assert.equal(audio.paused, true); assert.equal(audio.playbackRate, 2); assert.equal(audio.currentTime, 35);
+  assert.equal(audio.defaultPlaybackRate, 2); assert.equal(audio.preservesPitch, true);
+  audio.playResult = null; await player.resume({ notify: false });
+  assert.equal(audio.playbackRate, 2); assert.equal(audio.paused, false);
+  player.setPlaybackRate(.5, { notify: false });
+  await player.playSong(song(1), { autoplay: false, restoreProgress: false }); audio.metadata();
+  assert.equal(audio.playbackRate, .5); assert.equal(player.playbackRate.value, .5);
+});
+
+test('真实电脑负责连听的自然切歌；desktop清空后手机不残留旧歌歌词或播放请求', async t => {
+  const { player, audio, requests } = await fixture(t, url => libraryResponse(url, [song(0), song(1), song(2)]));
+  player.setListenStatusProvider(() => ({ enabled: true, connected: true, desktopConnected: true, isHost: false }));
+  await player.playSong(song(0), { restoreProgress: false }); audio.metadata();
+  audio.dispatchEvent(new Event('ended')); await flush();
+  assert.equal(player.currentSong.value.id, 0, '等待真实desktop切歌，无固定5秒手机竞态队列');
+  assert.equal(requests.some(([url]) => url.startsWith('/api/random')), false);
+  player.clearSong(); await flush();
+  assert.equal(player.currentSong.value, null); assert.equal(player.lyricText.value, '');
+  assert.equal(player.currentTime.value, 0); assert.equal(player.isPlaying.value, false);
+});
+
+
+test('桌面真实preview使用当前可信URL和真实歌词，不请求伪造歌库index或写次数/进度', async t => {
+  const { player, audio, requests } = await fixture(t);
+  const preview = { id: 'preview:http://127.0.0.1:1234/current.wav', preview: true,
+    songName: 'Real preview', audioPath: 'http://127.0.0.1:1234/current.wav', lyric: '[00:30]Real phrase' };
+  await player.playSong(preview, { position: 35, playbackRate: 2, notify: false, remote: true }); audio.metadata();
+  assert.equal(audio.source, '/api/stream-by-path?path=http%3A%2F%2F127.0.0.1%3A1234%2Fcurrent.wav');
+  assert.equal(player.lyricText.value, preview.lyric); assert.equal(audio.currentTime, 35);
+  player.pause(); await player.handleToggleLike(); await player.handleToggleDislike(); await flush();
+  assert.equal(requests.some(([url]) => /^\/api\/(?:lyric|progress|play-count|like$|dislike$)/.test(url)), false);
 });

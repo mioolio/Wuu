@@ -7,7 +7,6 @@
 let _fmPreviewReqId = 0;
 async function playFmPreview(song, itemEl, skipSources) {
   skipSources = skipSources || [];
-  const reqId = ++_fmPreviewReqId;
   const btn = itemEl ? itemEl.querySelector('.fm-result-play') : null;
   if (btn) { btn.disabled = true; btn.innerHTML = '...'; }
 
@@ -21,6 +20,23 @@ async function playFmPreview(song, itemEl, skipSources) {
     if (btn) { btn.innerHTML = ICON_PREVIEW; btn.disabled = false; }
     return;
   }
+  const reqId = ++_fmPreviewReqId;
+  // Invalidate the former song's lyrics before stream resolution/buffering,
+  // rather than waiting until the next audio.play() promise completes.
+  _fmLrcReqId++;
+  const previousPreview = fmPreviewSong;
+  const previousMode = fmPreviewMode;
+  // A preview is a new media choice, just like local play(): release any
+  // pending remote command and invalidate the former local loader too.
+  if (typeof _togetherRequest === 'number' && _togetherRequest > _togetherAcknowledged) {
+    _togetherAcknowledged = _togetherRequest; _togetherGeneration++;
+  }
+  const localRequest = typeof _classicPlayRequest === 'number' ? ++_classicPlayRequest : null;
+  if (typeof _togetherSeek !== 'undefined') _togetherSeek = null;
+  let selected = false;
+  const stillSelected = () => (localRequest === null || _classicPlayRequest === localRequest) &&
+    (selected ? fmPreviewMode && fmPreviewSong === song
+      : fmPreviewMode === previousMode && fmPreviewSong === previousPreview);
 
   // 如果主播放器正在播放本地歌曲, 先暂停并保存进度
   if (!fmPreviewMode && typeof isPlaying !== 'undefined' && isPlaying) {
@@ -35,13 +51,14 @@ async function playFmPreview(song, itemEl, skipSources) {
 
   try {
     const urlRes = await window.freeMusicAPI.streamUrl(song);
-    if (reqId !== _fmPreviewReqId) return;  // 竞态: 已被新调用取代
+    if (reqId !== _fmPreviewReqId || !stillSelected()) return;
     if (!urlRes.ok) throw new Error(urlRes.message);
     const url = urlRes.data;
 
     // 进入试听模式
     fmPreviewMode = true;
     fmPreviewSong = song;
+    selected = true;
     fmPreviewSong._skipSources = skipSources;
     fmPreviewSong._originItemEl = itemEl;
     _fmCurrentSong = song;
@@ -92,7 +109,7 @@ async function playFmPreview(song, itemEl, skipSources) {
     audio.src = url;
     audio.currentTime = 0;
     await audio.play();
-    if (reqId !== _fmPreviewReqId) return;  // 竞态: play() 期间已被新调用取代
+    if (reqId !== _fmPreviewReqId || !stillSelected()) return;
     if (btn) { btn.innerHTML = ICON_PREVIEW; btn.disabled = false; }
     _fmTryingFallback = false;  // 播放成功, 重置守卫
     _fmSwitchingSource = false;  // 播放成功, 重置换源标志
@@ -104,7 +121,7 @@ async function playFmPreview(song, itemEl, skipSources) {
     updateFmSaveButton();
   } catch (e) {
     // 竞态: 已被新调用取代, 不触发换源
-    if (reqId !== _fmPreviewReqId) return;
+    if (reqId !== _fmPreviewReqId || !stillSelected()) return;
     console.error('[FREE-MUSIC] 试听失败:', e.message, '|', song.source, song.id);
     // 尝试自动换源: 优先从搜索结果中找同名同歌手的其他源
     const alt = findFmAlternativeSong(song, skipSources);
@@ -127,7 +144,7 @@ async function playFmPreview(song, itemEl, skipSources) {
           window.freeMusicAPI.switchSource(song),
           new Promise((_, reject) => setTimeout(() => reject(new Error('换源超时')), 20000)),
         ]);
-        if (reqId !== _fmPreviewReqId) return;
+        if (reqId !== _fmPreviewReqId || !stillSelected()) return;
         if (swRes.ok && swRes.data && swRes.data.source !== song.source && !skipSources.includes(swRes.data.source)) {
           const newSkip = [...skipSources, song.source];
           // 立即更新 UI, 让用户看到换源后的新信息
@@ -135,7 +152,7 @@ async function playFmPreview(song, itemEl, skipSources) {
           return playFmPreview(swRes.data, null, newSkip);
         }
       } catch (swErr) {
-        if (reqId !== _fmPreviewReqId) return;
+        if (reqId !== _fmPreviewReqId || !stillSelected()) return;
       }
     }
     if (btn) { btn.innerHTML = '✗'; btn.title = e.message; }
@@ -194,6 +211,7 @@ function playFmPreviewNext(dir) {
 
 // 销毁临时歌词数据 (内存回收 + 清理 DOM, 避免切歌时残留上一首歌词)
 function destroyFmPreviewLrc() {
+  _fmLrcReqId++;
   fmPreviewLrc = [];
   fmPreviewLrcRaw = false;
   fmPreviewLrcText = '';
@@ -234,7 +252,15 @@ function findFmAlternativeSong(currentSong, skipSources) {
 // 使用请求 ID 竞态保护, 避免快速切歌时旧请求覆盖新请求
 let _fmLrcReqId = 0;
 async function loadFmLyricToMain(song) {
+  const preview = fmPreviewSong;
+  if (!fmPreviewMode || preview !== song) return;
   const reqId = ++_fmLrcReqId;
+  const previewRequest = _fmPreviewReqId;
+  const localRequest = typeof _classicPlayRequest === 'number' ? _classicPlayRequest : null;
+  const source = audio.src;
+  const stillCurrent = () => reqId === _fmLrcReqId && previewRequest === _fmPreviewReqId &&
+    (localRequest === null || _classicPlayRequest === localRequest) &&
+    fmPreviewMode && fmPreviewSong === preview && audio.src === source;
   fmPreviewLrc = [];
   fmPreviewLrcRaw = false;
   fmPreviewLrcText = '';
@@ -246,7 +272,7 @@ async function loadFmLyricToMain(song) {
   try {
     const res = await window.freeMusicAPI.lyric(song);
     // 竞态检查: 如果期间已切到其他歌曲, 丢弃本次结果
-    if (reqId !== _fmLrcReqId) return;
+    if (!stillCurrent()) return;
     if (!res.ok || !res.data) {
       lrc = [{ time: 0, text: '纯音乐，请欣赏' }];
       lrcRaw = false;
@@ -254,6 +280,7 @@ async function loadFmLyricToMain(song) {
       updateFmSaveButton();
       // 同步桌面歌词 (纯音乐也需更新, 避免上一首残留)
       if (typeof sendLyricDataToDesktop === 'function') sendLyricDataToDesktop();
+      if (typeof syncDesktopState === 'function') syncDesktopState(true);
       return;
     }
     fmPreviewLrcText = res.data;
@@ -279,7 +306,7 @@ async function loadFmLyricToMain(song) {
       }
     }
     // 再次竞态检查 (解析耗时)
-    if (reqId !== _fmLrcReqId) return;
+    if (!stillCurrent()) return;
     // 同步到主播放器歌词变量 (复用渲染逻辑)
     lrc = fmPreviewLrc.length ? fmPreviewLrc : [{ time: 0, text: '纯音乐，请欣赏' }];
     lrcRaw = fmPreviewLrcRaw;
@@ -291,14 +318,16 @@ async function loadFmLyricToMain(song) {
     updateFmSaveButton();
     // 同步桌面歌词 (试听歌词加载完成, 推送到桌面歌词窗口)
     if (typeof sendLyricDataToDesktop === 'function') sendLyricDataToDesktop();
+    if (typeof syncDesktopState === 'function') syncDesktopState(true);
   } catch (e) {
-    if (reqId !== _fmLrcReqId) return;
+    if (!stillCurrent()) return;
     lrc = [{ time: 0, text: '纯音乐，请欣赏' }];
     lrcRaw = false;
     renderLrc();
     updateFmSaveButton();
     // 同步桌面歌词 (错误时也需更新, 避免上一首残留)
     if (typeof sendLyricDataToDesktop === 'function') sendLyricDataToDesktop();
+    if (typeof syncDesktopState === 'function') syncDesktopState(true);
     console.error('[FREE-MUSIC] 歌词获取失败:', e.message);
   }
 }

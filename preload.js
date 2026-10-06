@@ -7,6 +7,7 @@ function listen(channel, callback) {
   ipcRenderer.on(channel, listener);
   return () => ipcRenderer.removeListener(channel, listener);
 }
+let togetherSubscriptions = 0;
 
 contextBridge.exposeInMainWorld('musicAPI', {
   getSongs: () => ipcRenderer.invoke('get-songs'),
@@ -92,6 +93,18 @@ contextBridge.exposeInMainWorld('lyricReceiver', {
 // ===== 桌面端播放状态同步 API (供 renderer 推送状态到主进程) =====
 contextBridge.exposeInMainWorld('stateAPI', {
   updateDesktopState: (patch) => ipcRenderer.invoke('desktop-state-update', patch),
+  onTogetherCommand: (callback) => {
+    const listener = (_event, command) => callback(command);
+    ipcRenderer.on('desktop-together-command', listener);
+    if (++togetherSubscriptions === 1) ipcRenderer.invoke('desktop-together-ready', true).catch(() => {});
+    let disposed = false;
+    return () => {
+      if (disposed) return;
+      disposed = true;
+      ipcRenderer.removeListener('desktop-together-command', listener);
+      if (--togetherSubscriptions === 0) ipcRenderer.invoke('desktop-together-ready', false).catch(() => {});
+    };
+  },
 });
 contextBridge.exposeInMainWorld('freeMusicAPI', {
   // 检查免责声明是否已接受

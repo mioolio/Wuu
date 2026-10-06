@@ -75,7 +75,7 @@ async function touchGesture(locator, direction) {
     const lyricView = () => page.locator('.lyrics-view');
     const currentLine = () => page.locator('.lyrics-view .lyric-line.cur .lyric-text, .lyrics-view .lyric-line.active .lyric-text');
     const settingsTab = () => page.locator('.bottom-nav').getByRole('button', { name: '设置', exact: true });
-    const recommendTab = () => page.locator('.bottom-nav').getByRole('button', { name: '推荐', exact: true });
+    const recommendTab = () => page.locator('.bottom-nav').getByRole('button', { name: '播放', exact: true });
     const fontRange = () => page.getByRole('slider', { name: '当前歌词字号', exact: true });
     const ordinaryRange = () => page.getByRole('slider', { name: '普通歌词字号', exact: true });
     const fontSize = async () => Number(await page.locator('#mobile-current-lyric-size').inputValue());
@@ -89,6 +89,7 @@ async function touchGesture(locator, direction) {
     };
     const audio = () => page.locator('audio').evaluate(element => ({ time: element.currentTime, duration: element.duration,
       paused: element.paused, readyState: element.readyState, source: element.currentSrc || element.src }));
+    const waitingInk = () => page.evaluate(() => getComputedStyle(document.body).color);
     const capture = async name => {
       const file = path.join(artifacts, name + '.png');
       await page.screenshot({ path: file }); report.screenshots.push(file);
@@ -112,14 +113,10 @@ async function touchGesture(locator, direction) {
     };
     const openLyrics = async () => { await cover().waitFor({ state: 'visible' }); await touchGesture(cover(), 'left'); await lyricView().waitFor({ state: 'visible' }); };
     const closeLyrics = async () => { await touchGesture(lyricView(), 'right'); await cover().waitFor({ state: 'visible' }); };
-    const seekCoverTo = seconds => cover().locator('.p-track').evaluate((element, seconds) => {
-      const box = element.getBoundingClientRect(), x = box.left + box.width * seconds / 90, y = box.top + box.height / 2;
-      const point = { identifier: 2, target: element, clientX: x, clientY: y, pageX: x, pageY: y };
-      for (const type of ['touchstart', 'touchend']) {
-        const event = new Event(type, { bubbles: true, cancelable: true });
-        Object.defineProperties(event, { touches: { value: type === 'touchend' ? [] : [point] }, changedTouches: { value: [point] } });
-        element.dispatchEvent(event);
-      }
+    const seekCoverTo = seconds => cover().getByRole('slider', { name: '播放进度', exact: true }).evaluate((element, seconds) => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(element, String(seconds / 90 * 100));
+      element.dispatchEvent(new Event('input', { bubbles: true }));
+      element.dispatchEvent(new Event('change', { bubbles: true }));
     }, seconds);
     const styles = () => lyricView().evaluate(element => {
       const describe = selector => {
@@ -133,11 +130,12 @@ async function touchGesture(locator, direction) {
     });
     const requireColors = async message => {
       const value = await styles();
+      const waiting = await waitingInk();
       assert.ok(value.past && value.current && value.future, message + ': timed rows expose all three states');
-      assert.equal(value.future.color, 'rgb(255, 255, 255)', message + ': future lyrics are white');
-      assert.equal(value.future.opacity, 1, message + ': future white remains readable');
+      assert.equal(value.future.color, waiting, message + ': future lyrics use readable theme text');
+      assert.equal(value.future.opacity, 1, message + ': future text remains fully readable');
       assert.notEqual(value.past.color, value.future.color, message + ': past lyrics use the sung color');
-      assert.ok(value.current.gradient.includes(value.past.color) && value.current.gradient.includes(value.future.color), message + ': the current fill uses sung color and white');
+      assert.ok(value.current.gradient.includes(value.past.color) && value.current.gradient.includes(value.future.color), message + ': the current fill uses sung color and readable theme text');
       assert.ok(value.current.fontSize > value.future.fontSize && value.current.weight >= 600, message + ': the current line stands out');
       assert.equal(value.current.background, 'rgba(0, 0, 0, 0)', message + ': the current lyric has no selection background');
       assert.equal(value.current.shadow, 'none', message + ': the current lyric has no selection shadow');
@@ -223,8 +221,8 @@ async function touchGesture(locator, direction) {
     await waitUntil(async () => Math.abs((await audio()).time - 10) < .2, 'Backward lyric selection seeks the actual audio');
     await requireLine('海岸·10秒歌词', 'Backward seeking restores the earlier current line');
     await requireColors('backward seek lyric colors');
-    assert.equal(await lyricView().locator('.lyric-line').filter({ hasText: '海岸·50秒歌词' }).evaluate(row => getComputedStyle(row).color), 'rgb(255, 255, 255)', 'A previously played future row returns to white after seeking backward');
-    report.checks.push('backward seeking restores white future lyrics and colored past lyrics');
+    assert.equal(await lyricView().locator('.lyric-line').filter({ hasText: '海岸·50秒歌词' }).evaluate(row => getComputedStyle(row).color), await waitingInk(), 'A previously played future row returns to the readable theme color after seeking backward');
+    report.checks.push('backward seeking restores readable future lyrics and colored past lyrics');
     await lyricView().locator('.lyric-line').filter({ has: page.locator('.lyric-text', { hasText: /^海岸·50秒歌词$/ }) }).click();
     await requireLine('海岸·50秒歌词', 'Return to the paused 50 second position');
 
@@ -275,7 +273,7 @@ async function touchGesture(locator, direction) {
     await closeLyrics();
     if (!(await audio()).paused) await cover().locator('.play-btn').click();
 
-    const listTab = page.locator('.bottom-nav').getByRole('button', { name: '歌单', exact: true });
+    const listTab = page.locator('.bottom-nav').getByRole('button', { name: '音乐库', exact: true });
     const olderLyricResponse = page.waitForResponse(response => response.url().endsWith('/api/lyric/1'));
     await listTab.click();
     await page.locator('.song-list-view .song-item').filter({ hasText: '延迟返回的旧歌' }).click();
@@ -399,8 +397,9 @@ async function touchGesture(locator, direction) {
     assert.ok(report.rawBoundaryFrames.every(frame => frame.current === 2), 'Completing RAW duration never leaves the gap without a current group');
     const rawRows = await lyricView().locator('.lyric-line').evaluateAll(rows => rows.map(row => ({ state: row.className, size: parseFloat(getComputedStyle(row).fontSize), color: getComputedStyle(row).color,
       words: [...row.querySelectorAll('.char')].map(char => getComputedStyle(char).color) })));
-    assert.ok(rawRows.slice(0, 2).every(row => row.state.includes('cur') && row.size === 60 && row.words.length && row.words.every(color => color !== 'rgb(255, 255, 255)')), 'The fully sung RAW companions stay enlarged and colored throughout the gap');
-    assert.ok(rawRows[2].state.includes('unsung') && rawRows[2].size === beforeOrdinary && rawRows[2].color === 'rgb(255, 255, 255)');
+    const rawWaiting = await waitingInk();
+    assert.ok(rawRows.slice(0, 2).every(row => row.state.includes('cur') && row.size === 60 && row.words.length && row.words.every(color => color !== rawWaiting)), 'The fully sung RAW companions stay enlarged and colored throughout the gap');
+    assert.ok(rawRows[2].state.includes('unsung') && rawRows[2].size === beforeOrdinary && rawRows[2].color === rawWaiting);
     await capture('08-raw-gap-current-font');
     await closeLyrics(); if (!(await audio()).paused) await cover().locator('.play-btn').click();
     await seekCoverTo(48.5);
@@ -430,9 +429,9 @@ async function touchGesture(locator, direction) {
     await waitUntil(async () => Math.abs((await audio()).time - 30) < .2 && await lyricView().locator('.lyric-line.cur').count() === 2, 'Paused backward RAW seeking restores both current companion lines');
     assert.ok((await lyricView().locator('.lyric-line.cur').evaluateAll(rows => rows.map(row => parseFloat(getComputedStyle(row).fontSize)))).every(size => size === 60));
     const rewoundWords = await lyricView().locator('.lyric-line.cur .char').evaluateAll(words => words.map(word => getComputedStyle(word).color));
-    assert.ok(rewoundWords.length && rewoundWords.every(color => color === 'rgb(255, 255, 255)'), 'Backward RAW seeking also restores unsung word fill');
+    assert.ok(rewoundWords.length && rewoundWords.every(color => color === rawWaiting), 'Backward RAW seeking also restores unsung word fill');
     await capture('10-raw-seek-restores-current-font');
-    report.checks.push('RAW companions retain enlarged colored focus through silent gaps, shrink only when the next timestamp starts and restore white fill on backward seek');
+    report.checks.push('RAW companions retain enlarged colored focus through silent gaps, shrink only when the next timestamp starts and restore readable unsung fill on backward seek');
 
     // Observe the native ended event without suppressing normal automatic next
     // song behavior. The final group still owns focus until the song changes.
@@ -459,7 +458,7 @@ async function touchGesture(locator, direction) {
     assert.equal(report.finalFocus.current.length, 1);
     assert.equal(report.finalFocus.current[0].text, 'RAW下一句');
     assert.equal(report.finalFocus.current[0].size, 60);
-    assert.ok(report.finalFocus.current[0].words.length && report.finalFocus.current[0].words.every(color => color !== 'rgb(255, 255, 255)'));
+    assert.ok(report.finalFocus.current[0].words.length && report.finalFocus.current[0].words.every(color => color !== rawWaiting));
     report.checks.push('the final fully sung lyric stays enlarged through native track end until automatic song change');
 
     report.fixture = await app.evaluate(() => ({ origin: global.__wuuMobileFixture.origin, requests: global.__wuuMobileFixture.requests }));

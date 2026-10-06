@@ -77,7 +77,7 @@ onBeforeUnmount(() => {
     <!-- 顶部标题栏 -->
     <header class="header">
       <div class="title-row">
-        <h1>Wuu 音乐</h1>
+        <h1>音乐库</h1>
         <p class="subtitle" v-if="!loading && !loadError">
           {{ songs.length }} / {{ total }} 首
         </p>
@@ -90,9 +90,10 @@ onBeforeUnmount(() => {
           type="text"
           :value="query"
           placeholder="搜索歌曲 / 歌手"
+          aria-label="搜索歌曲或歌手"
           @input="onSearchInput"
         />
-        <button v-if="query" class="clear-btn" @click="clearSearch">
+        <button v-if="query" class="clear-btn" aria-label="清除搜索" @click="clearSearch">
           <svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
         </button>
       </div>
@@ -121,11 +122,13 @@ onBeforeUnmount(() => {
 
     <!-- 歌曲列表 -->
     <div v-else class="list" :class="{ 'has-mini-player': currentId >= 0 }">
-      <div
+      <button
         v-for="song in songs"
         :key="song.id"
         class="song-item"
         :class="{ active: song.id === currentId }"
+        type="button"
+        :aria-current="song.id === currentId ? 'true' : undefined"
         @click="$emit('play', song)"
       >
         <img
@@ -135,15 +138,15 @@ onBeforeUnmount(() => {
           loading="lazy"
           alt=""
         />
-        <div v-else class="song-cover song-cover-placeholder">♪</div>
+        <div v-else class="song-cover song-cover-placeholder"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z"/></svg></div>
         <div class="song-info">
           <div class="song-name">{{ song.songName || '未知歌曲' }}</div>
           <div class="song-artist">{{ song.artist || '未知艺人' }}</div>
         </div>
         <div class="song-status">
-          <span v-if="song.id === currentId && isPlaying" class="playing-icon">▶</span>
+          <svg v-if="song.id === currentId && isPlaying" class="playing-icon" role="img" aria-label="正在播放" viewBox="0 0 24 24"><path d="M5 6h3v12H5zm5-3h3v18h-3zm5 5h3v8h-3z"/></svg>
         </div>
-      </div>
+      </button>
       <!-- 加载更多提示 -->
       <div v-if="loadingMore" class="load-more">
         <div class="spinner-small"></div>
@@ -162,14 +165,16 @@ onBeforeUnmount(() => {
 <style scoped>
 .song-list-view {
   flex: 1;
+  min-width: 0;
+  min-height: 0;
   overflow-y: auto;
+  background: var(--bg);
   -webkit-overflow-scrolling: touch;
 }
 
 .header {
-  padding: 60px 20px 16px;
-  padding-top: calc(60px + env(safe-area-inset-top));
-  background: var(--bg-card);
+  padding: 20px 16px 16px;
+  background: var(--bg);
   position: sticky;
   top: 0;
   z-index: 10;
@@ -179,10 +184,11 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: baseline;
   gap: 10px;
+  justify-content: space-between;
 }
 .header h1 {
-  font-size: 24px;
-  font-weight: 700;
+  font-size: 25px;
+  font-weight: 720;
   color: var(--text);
   margin: 0;
 }
@@ -200,9 +206,12 @@ onBeforeUnmount(() => {
   gap: 8px;
   background: var(--bg-card-elevated);
   border: 1px solid var(--border);
-  border-radius: 20px;
-  padding: 8px 14px;
+  border-radius: 12px;
+  padding: 0 4px 0 14px;
+  min-height: 48px;
+  background: var(--bg-card);
 }
+.search-box:focus-within { border-color: var(--accent); }
 .search-icon {
   width: 18px;
   height: 18px;
@@ -216,15 +225,16 @@ onBeforeUnmount(() => {
   border: none;
   outline: none;
   color: var(--text);
-  font-size: 14px;
+  font-size: 16px;
+  min-height: 46px;
 }
 .search-input::placeholder {
   color: var(--text-secondary);
-  opacity: 0.7;
 }
 .clear-btn {
-  width: 20px;
-  height: 20px;
+  width: 44px;
+  height: 44px;
+  border-radius: 8px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -252,10 +262,11 @@ onBeforeUnmount(() => {
   gap: 16px;
 }
 .error-text {
-  color: #ff6b6b;
+  color: var(--danger);
   text-align: center;
 }
 .retry-btn {
+  min-height: 44px;
   padding: 8px 24px;
   border: 1px solid var(--accent);
   background: transparent;
@@ -285,7 +296,7 @@ onBeforeUnmount(() => {
 }
 
 .list {
-  padding: 8px 0;
+  padding: 8px 12px 16px;
 }
 .list.has-mini-player {
   padding-bottom: 60px;
@@ -307,13 +318,24 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 10px 20px;
+  width: 100%;
+  min-height: 72px;
+  padding: 10px 8px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  font: inherit;
+  line-height: 1.4;
   cursor: pointer;
   transition: background 0.15s;
 }
 .song-item:active {
   background: var(--bg-hover);
 }
+.song-item.active { background: var(--accent-soft); }
+.song-item:focus-visible, .clear-btn:focus-visible, .retry-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .song-item.active .song-name {
   color: var(--accent);
 }
@@ -333,6 +355,7 @@ onBeforeUnmount(() => {
   font-size: 22px;
   color: var(--text-secondary);
 }
+.song-cover-placeholder svg { width: 24px; height: 24px; fill: currentColor; }
 
 .song-info {
   flex: 1;
@@ -344,9 +367,10 @@ onBeforeUnmount(() => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  font-weight: 600;
 }
 .song-artist {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--text-secondary);
   white-space: nowrap;
   overflow: hidden;
@@ -363,11 +387,12 @@ onBeforeUnmount(() => {
 }
 .playing-icon {
   color: var(--accent);
-  font-size: 12px;
-  animation: pulse 1.5s ease-in-out infinite;
+  fill: currentColor;
+  width: 20px;
+  height: 20px;
 }
-@keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
+@media (prefers-reduced-motion: reduce) {
+  .song-item { transition: none; }
+  .spinner, .spinner-small { animation: none; }
 }
 </style>
