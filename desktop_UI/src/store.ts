@@ -7,6 +7,8 @@ import type { Collection, PlayerState, Settings, Song, SongStats, View } from '.
 
 export const defaultSettings: Settings = {
   interfaceMode: 'modern',
+  experimentalAppleUI: false,
+  appleControlsPosition: 'left',
   sidebarCollapsed: true, sidebarWidth: SIDEBAR_DEFAULT_WIDTH,
   playMode: 1, volume: 1, playbackRate: 1, fadePause: true, glassOpacity: 0.72, discCover: false, colorIntensity: 0.85,
   lyricDone: 0.9, lyricWait: 0.55, lyricSize: 20, currentLyricSize: 28, themeFollowCover: false,
@@ -212,6 +214,8 @@ export const useAppStore = create<AppState>((set, get) => ({
           genreOverrides: Object.fromEntries(Object.entries(userData?.genreOverrides || {}).filter(([,value]) => Array.isArray(value)).map(([path,value]) => [path,[...new Set((value as unknown[]).filter((genre): genre is string => typeof genre === 'string').map(genre => genre.trim()).filter(Boolean))]])),
           settings: { ...defaultSettings, ...userData?.settings,
             interfaceMode: userData?.settings?.interfaceMode === 'classic' ? 'classic' : 'modern',
+            experimentalAppleUI: userData?.settings?.experimentalAppleUI === true,
+            appleControlsPosition: userData?.settings?.appleControlsPosition === 'right' ? 'right' : 'left',
             sidebarCollapsed: typeof userData?.settings?.sidebarCollapsed === 'boolean' ? userData.settings.sidebarCollapsed : true,
             sidebarWidth: normalizeSidebarWidth(userData?.settings?.sidebarWidth),
             glassOpacity: finiteSetting(userData?.settings?.glassOpacity, defaultSettings.glassOpacity, .12, 1),
@@ -260,6 +264,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   setSettings: patch => {
     applyUserDataChange(state => {
       const settings = { ...state.settings, ...patch };
+      if ('experimentalAppleUI' in patch) settings.experimentalAppleUI = patch.experimentalAppleUI === true;
+      if ('appleControlsPosition' in patch) settings.appleControlsPosition = patch.appleControlsPosition === 'right' ? 'right' : 'left';
       if ('playbackRate' in patch) settings.playbackRate = normalizePlaybackRate(patch.playbackRate, normalizePlaybackRate(state.settings.playbackRate));
       if ('lyricSize' in patch || 'currentLyricSize' in patch) {
         const previousSize = finiteSetting(state.settings.lyricSize, defaultSettings.lyricSize, 12, 36);
@@ -269,7 +275,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
       return { settings };
     });
-    scheduleSave();
+    if (('experimentalAppleUI' in patch || 'appleControlsPosition' in patch) && get().hydrated) void persistNow();
+    else scheduleSave();
   },
   createCollection: name => {
     const id = crypto.randomUUID();

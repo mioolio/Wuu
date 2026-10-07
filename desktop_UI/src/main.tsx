@@ -2,6 +2,7 @@ import { Component, type ErrorInfo, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
 import './design-system.css';
+import './apple-ui.css';
 import App from './App';
 import DesktopLyrics from './components/DesktopLyrics';
 import { errorMessage } from './api';

@@ -1,0 +1,227 @@
+/* Experimental desktop chrome. Music palettes and lyric focus remain shared. */
+.interface-modern.apple-ui {
+  --apple-chrome: color-mix(in srgb, var(--shell-chrome) 88%, #626268);
+  --apple-content: color-mix(in srgb, var(--shell-surface) 94%, #55555c);
+  --apple-raised: color-mix(in srgb, var(--apple-content) 88%, #75757c);
+  --apple-line: rgb(255 255 255 / 9%);
+  --apple-selection: color-mix(in srgb, var(--accent) 16%, transparent);
+  --apple-hover: rgb(255 255 255 / 6%);
+  --apple-control-shadow: 0 1px 2px rgb(0 0 0 / 18%);
+  --border: var(--apple-line);
+  --hover: var(--apple-hover);
+  --canvas: var(--apple-content);
+  --surface-2: var(--apple-raised);
+  --card: rgb(from var(--apple-raised) r g b / calc(.12 + var(--glass-opacity, .72) * .66));
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", sans-serif;
+  border-color: rgb(255 255 255 / 12%);
+  border-radius: 12px;
+}
+
+.interface-modern.apple-ui .titlebar {
+  height: 44px;
+  min-height: 44px;
+  flex: 0 0 44px;
+  justify-content: flex-start;
+  align-items: center;
+  gap: 14px;
+  padding: 0 6px;
+  background: rgb(from var(--apple-chrome) r g b / var(--glass-opacity, .72));
+  border-bottom-color: var(--apple-line);
+  -webkit-app-region: drag;
+}
+
+.interface-modern.apple-ui .titlebar-brand {
+  padding-left: 0;
+  gap: 7px;
+  -webkit-app-region: drag;
+}
+
+.interface-modern.apple-ui .brand-wordmark {
+  font-size: 20px;
+  font-weight: 650;
+  letter-spacing: -.8px;
+}
+
+.interface-modern.apple-ui .brand-mark { height: 18px; gap: 2px; }
+.interface-modern.apple-ui .brand-mark i { width: 3px; height: 13px; }
+.interface-modern.apple-ui .brand-mark i:nth-child(2) { height: 18px; }
+.interface-modern.apple-ui .brand-mark i:nth-child(3) { height: 14px; }
+.interface-modern.apple-ui .brand-mark i:nth-child(4) { height: 10px; }
+.interface-modern.apple-ui .titlebar-spacer { min-width: 28px; -webkit-app-region: drag; }
+
+/* DOM order and keyboard navigation follow the selected side's convention. */
+.interface-modern.apple-ui .titlebar[data-controls-position="right"] .titlebar-brand {
+  padding-left: 12px;
+}
+
+.interface-modern.apple-ui .titlebar[data-controls-position="right"] .window-controls {
+  margin-left: auto;
+}
+
+/* The coloured circles are visual; the full native buttons stay clickable. */
+.interface-modern.apple-ui .window-controls {
+  flex: 0 0 auto;
+  height: 100%;
+  padding: 0;
+  gap: 0;
+  align-items: center;
+  -webkit-app-region: drag;
+}
+
+.interface-modern.apple-ui .window-controls button {
+  position: relative;
+  isolation: isolate;
+  flex: 0 0 28px;
+  width: 28px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #382821;
+  box-shadow: none;
+  scale: 1;
+  transform: none;
+  transition: none;
+  -webkit-app-region: no-drag;
+}
+
+.interface-modern.apple-ui .window-controls button::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 12px;
+  height: 12px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: var(--apple-light);
+  box-shadow: inset 0 0 0 1px rgb(0 0 0 / 16%);
+  pointer-events: none;
+}
+
+.interface-modern.apple-ui .window-controls .window-close { --apple-light: #ff5f57; }
+.interface-modern.apple-ui .window-controls .window-minimize { --apple-light: #febc2e; }
+.interface-modern.apple-ui .window-controls .window-maximize { --apple-light: #28c840; }
+
+.interface-modern.apple-ui .window-controls button svg {
+  position: relative;
+  z-index: 1;
+  width: 8px;
+  height: 8px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.interface-modern.apple-ui .window-controls:hover button svg,
+.interface-modern.apple-ui .window-controls button:focus-visible svg { opacity: 1; }
+
+.interface-modern.apple-ui .window-controls button:is(:hover, :focus-visible, :active):not(:disabled) {
+  background: transparent;
+  border: 0;
+  color: #382821;
+  box-shadow: none;
+  scale: 1;
+  transform: none;
+}
+
+.interface-modern.apple-ui .window-controls button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 0;
+}
+
+.interface-modern.apple-ui .window-controls button:active::before { filter: brightness(.88); }
+
+.interface-modern.apple-ui .main-content {
+  background-color: rgb(from var(--apple-content) r g b / var(--glass-opacity, .72));
+}
+
+.interface-modern.apple-ui .sidebar.collapsible-sidebar {
+  padding-inline: 9px;
+  background: rgb(from var(--apple-chrome) r g b / var(--glass-opacity, .72));
+  border-right-color: var(--apple-line);
+}
+
+.interface-modern.apple-ui .sidebar button {
+  border-radius: 7px;
+  font-size: 13px;
+  font-weight: 450;
+}
+
+.interface-modern.apple-ui .sidebar button.active:not(.primary) {
+  color: var(--text);
+  background: var(--apple-selection);
+  font-weight: 550;
+}
+
+.interface-modern.apple-ui .sidebar button.active::before { content: none; }
+.interface-modern.apple-ui .sidebar .nav-selection-marker { display: none; }
+.interface-modern.apple-ui .sidebar .nav-group-label { letter-spacing: .3px; font-weight: 600; }
+.interface-modern.apple-ui .sidebar .sidebar-bottom { border-top-color: var(--apple-line); }
+.interface-modern.apple-ui .sidebar .sidebar-toggle { color: var(--muted); }
+
+.interface-modern.apple-ui .player-bar.player-deck {
+  background: rgb(from var(--apple-chrome) r g b / var(--glass-opacity, .72));
+  border-top-color: var(--apple-line);
+}
+
+.interface-modern.apple-ui .search-box,
+.interface-modern.apple-ui .field :is(input, textarea, select),
+.interface-modern.apple-ui .setting-row > select {
+  border-radius: 7px;
+  border-color: rgb(255 255 255 / 12%);
+  background: rgb(from var(--apple-content) r g b / calc(.16 + var(--glass-opacity, .72) * .7));
+  box-shadow: var(--apple-control-shadow);
+}
+
+.interface-modern.apple-ui .settings-navigation > button {
+  border-radius: 7px;
+  font-weight: 450;
+}
+
+.interface-modern.apple-ui .settings-navigation > button[aria-selected="true"] {
+  color: var(--text);
+  background: var(--apple-selection);
+  font-weight: 550;
+}
+
+.interface-modern.apple-ui .settings-page .settings-group {
+  margin-bottom: 16px;
+  padding: 12px 16px 14px;
+  border: 1px solid var(--apple-line);
+  border-radius: 9px;
+  background: var(--card);
+}
+
+.interface-modern.apple-ui .settings-advanced {
+  border-color: var(--apple-line);
+  border-radius: 8px;
+}
+
+.interface-modern.apple-ui .settings-advanced > summary { border-radius: inherit; }
+.interface-modern.apple-ui .song-row { border-radius: 7px; }
+.interface-modern.apple-ui .song-row.current { background: var(--apple-selection); }
+.interface-modern.apple-ui .song-context-menu,
+.interface-modern.apple-ui .song-popover-card,
+.interface-modern.apple-ui .modal-card {
+  border-color: rgb(255 255 255 / 13%);
+  border-radius: 11px;
+  background: var(--apple-raised);
+  box-shadow: 0 12px 36px rgb(0 0 0 / 28%);
+}
+
+@media (max-width: 880px) {
+  .interface-modern.apple-ui .titlebar { gap: 14px; }
+  .interface-modern.apple-ui .settings-navigation > button { padding-inline: 10px; }
+}
+
+@media (max-height: 560px) {
+  .interface-modern.apple-ui .sidebar.collapsible-sidebar { padding-block: 4px; }
+  .interface-modern.apple-ui .sidebar .nav-group { margin-bottom: 5px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .interface-modern.apple-ui .window-controls button,
+  .interface-modern.apple-ui .window-controls button::before { transition: none; animation: none; }
+}

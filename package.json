@@ -33,6 +33,7 @@
     "test:reading": "node scripts/reading-desktop.cjs",
     "test:previous": "node scripts/previous-desktop.cjs",
     "test:titlebar": "node scripts/titlebar-desktop.cjs",
+    "test:apple": "node scripts/titlebar-desktop.cjs --apple",
     "test:startup": "node scripts/startup-desktop.cjs",
     "test:scanner": "node --test audio/library-startup.test.cjs",
     "test:detail": "node scripts/detail-desktop.cjs",

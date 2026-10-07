@@ -205,6 +205,113 @@ describe('启动、刷新和后台元数据', () => {
 afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe('现有用户数据迁移',() => {
+  it('实验性 Apple 外观默认关闭，旧用户不被自动启用', async () => {
+    const { useAppStore, defaultSettings } = await import('./store');
+    expect(defaultSettings.experimentalAppleUI).toBe(false);
+    expect(defaultSettings.appleControlsPosition).toBe('left');
+    expect(useAppStore.getState().settings.experimentalAppleUI).toBe(false);
+    await useAppStore.getState().initialize();
+    expect(useAppStore.getState().settings.experimentalAppleUI).toBe(false);
+    expect(useAppStore.getState().settings.appleControlsPosition).toBe('left');
+  });
+  it.each([
+    { value: true, expected: true }, { value: false, expected: false },
+    { value: 'true', expected: false }, { value: 1, expected: false },
+    { value: null, expected: false }, { value: [], expected: false }, { value: {}, expected: false },
+  ])('实验性外观只接受保存的布尔 true %#', async ({ value, expected }) => {
+    window.musicAPI.getUserData = vi.fn().mockResolvedValue({ ...source, settings: { ...source.settings, experimentalAppleUI: value } });
+    const { useAppStore } = await import('./store');
+    await useAppStore.getState().initialize();
+    expect(useAppStore.getState().settings.experimentalAppleUI).toBe(expected);
+  });
+  it.each([
+    { value: 'right', expected: 'right' }, { value: 'left', expected: 'left' },
+    { value: 'RIGHT', expected: 'left' }, { value: null, expected: 'left' },
+    { value: 1, expected: 'left' }, { value: {}, expected: 'left' },
+  ])('实验按钮位置只接受准确的 right 值 %#', async ({ value, expected }) => {
+    window.musicAPI.getUserData = vi.fn().mockResolvedValue({ ...source, settings: { ...source.settings, appleControlsPosition: value } });
+    const { useAppStore } = await import('./store');
+    await useAppStore.getState().initialize();
+    expect(useAppStore.getState().settings.appleControlsPosition).toBe(expected);
+  });
+  it('右侧按钮即时保存，关闭外观并重载后再开启仍记住位置', async () => {
+    const appearance = { glassOpacity: .3, themeFollowCover: true, progressColorEnabled: true, progressColor: '#123456' };
+    window.musicAPI.getUserData = vi.fn().mockResolvedValue({ ...source, settings: { ...source.settings, ...appearance, experimentalAppleUI: true } });
+    const { useAppStore } = await import('./store');
+    await useAppStore.getState().initialize();
+    useAppStore.getState().setPlayer({ song: songs[0], playing: true, time: 42 });
+    const player = useAppStore.getState().player;
+    useAppStore.getState().setSettings({ appleControlsPosition: 'right' });
+    expect(saved).toHaveBeenCalledTimes(1);
+    expect(saved.mock.calls[0][0].settings).toMatchObject({ ...appearance, experimentalAppleUI: true, appleControlsPosition: 'right' });
+    useAppStore.getState().setSettings({ experimentalAppleUI: false });
+    expect(saved).toHaveBeenCalledTimes(2);
+    expect(useAppStore.getState().player).toBe(player);
+    const stored = saved.mock.calls[1][0];
+    expect(stored.settings).toMatchObject({ ...appearance, experimentalAppleUI: false, appleControlsPosition: 'right' });
+    await flush();
+    vi.resetModules(); window.musicAPI.getUserData = vi.fn().mockResolvedValue(stored);
+    const restored = (await import('./store')).useAppStore;
+    await restored.getState().initialize();
+    expect(restored.getState().settings).toMatchObject({ experimentalAppleUI: false, appleControlsPosition: 'right' });
+    restored.getState().setSettings({ experimentalAppleUI: true });
+    expect(saved).toHaveBeenCalledTimes(3);
+    expect(saved.mock.calls[2][0].settings).toMatchObject({ ...appearance, experimentalAppleUI: true, appleControlsPosition: 'right' });
+    expect(saved.mock.calls[2][0].collections).toEqual(source.collections);
+    expect(saved.mock.calls[2][0].progress).toEqual(source.progress);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(saved).toHaveBeenCalledTimes(3);
+  });
+  it('运行时非法按钮位置恢复左侧，仅规范该偏好', async () => {
+    const { useAppStore } = await import('./store');
+    await useAppStore.getState().initialize();
+    useAppStore.getState().setSettings({ appleControlsPosition: 'right' });
+    useAppStore.getState().setSettings({ appleControlsPosition: 'RIGHT' as 'right' });
+    expect(useAppStore.getState().settings.appleControlsPosition).toBe('left');
+    expect(saved.mock.calls.at(-1)?.[0].settings).toMatchObject({ appleControlsPosition: 'left', experimentalAppleUI: false, volume: source.settings.volume });
+    await flush();
+  });
+  it('实验性外观即时保存并可恢复关闭，保留播放和所有其他外观偏好', async () => {
+    const appearance = { glassOpacity: .3, colorIntensity: .95, discCover: true, themeFollowCover: true, progressColorEnabled: true, progressColor: '#123456', progressColor2: '#abcdef' };
+    window.musicAPI.getUserData = vi.fn().mockResolvedValue({ ...source, settings: { ...source.settings, ...appearance } });
+    const { useAppStore } = await import('./store');
+    await useAppStore.getState().initialize();
+    useAppStore.getState().setPlayer({ song: songs[0], playing: true, time: 42 });
+    const player = useAppStore.getState().player;
+    useAppStore.getState().setSettings({ experimentalAppleUI: true });
+    expect(saved).toHaveBeenCalledTimes(1);
+    expect(useAppStore.getState().player).toBe(player);
+    const stored = saved.mock.calls[0][0];
+    expect(stored.settings).toMatchObject({ ...appearance, experimentalAppleUI: true });
+    expect(stored.collections).toEqual(source.collections);
+    expect(stored.stats).toEqual(source.stats);
+    await flush(); await vi.advanceTimersByTimeAsync(500);
+    expect(saved).toHaveBeenCalledTimes(1);
+    vi.resetModules(); window.musicAPI.getUserData = vi.fn().mockResolvedValue(stored);
+    const restored = (await import('./store')).useAppStore;
+    await restored.getState().initialize();
+    expect(restored.getState().settings.experimentalAppleUI).toBe(true);
+    restored.getState().setSettings({ experimentalAppleUI: false });
+    expect(saved).toHaveBeenCalledTimes(2);
+    expect(saved.mock.calls[1][0].settings).toMatchObject({ ...appearance, experimentalAppleUI: false });
+    expect(saved.mock.calls[1][0].settings.audioFx).toEqual(source.settings.audioFx);
+    expect(saved.mock.calls[1][0].progress).toEqual(source.progress);
+    await flush();
+  });
+  it('初始化期间启用实验外观不会提前覆盖用户数据，加载后保留该操作', async () => {
+    const pending = deferred<typeof source>();
+    window.musicAPI.getUserData = vi.fn().mockReturnValue(pending.promise);
+    const { useAppStore } = await import('./store');
+    const initializing = useAppStore.getState().initialize(); await flush();
+    useAppStore.getState().setSettings({ experimentalAppleUI: true });
+    await vi.advanceTimersByTimeAsync(500);
+    expect(saved).not.toHaveBeenCalled();
+    pending.resolve(structuredClone(source)); await initializing;
+    expect(useAppStore.getState().settings.experimentalAppleUI).toBe(true);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(saved).toHaveBeenCalledTimes(1);
+    expect(saved.mock.calls[0][0]).toMatchObject({ settings: { experimentalAppleUI: true, volume: source.settings.volume }, collections: source.collections, stats: source.stats });
+  });
   it.each([
     { playbackRate: undefined, expected: 1 }, { playbackRate: .5, expected: .5 }, { playbackRate: 2, expected: 2 },
     { playbackRate: 1.6, expected: 1.5 }, { playbackRate: .1, expected: .5 }, { playbackRate: 5, expected: 2 },

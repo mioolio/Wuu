@@ -3,7 +3,7 @@ import { errorMessage, getBridge, subscribe } from './api';
 import { useAppStore } from './store';
 import { notify } from './ui';
 import type { View } from './types';
-import Icon from './components/Icon';
+import WindowControls from './components/WindowControls';
 import GlobalUI from './components/GlobalUI';
 import PlayerBar from './components/PlayerBar';
 import LibraryView from './features/LibraryView';
@@ -30,6 +30,8 @@ export default function App() {
   const opacity = useAppStore(state => state.settings.glassOpacity);
   const intensity = useAppStore(state => state.settings.colorIntensity);
   const themeFollow = useAppStore(state => state.settings.themeFollowCover);
+  const appleStyle = useAppStore(state => state.settings.experimentalAppleUI);
+  const appleControlsPosition = useAppStore(state => state.settings.appleControlsPosition);
   const [visited,setVisited] = useState(new Set<View>([view]));
   const [maximized,setMaximized] = useState(false);
   const [showStartup,setShowStartup] = useState(false);
@@ -47,13 +49,17 @@ export default function App() {
     void useAppStore.getState().initialize().then(() => playerService.initialize()).catch(error => notify(errorMessage(error), 'error'));
   };
   const control = (method: string) => { void Promise.resolve(getBridge('windowAPI')[method]()).then(value => { if (method === 'toggleMaximize') setMaximized(value === true); }).catch(error => notify(errorMessage(error),'error')); };
-  return <div className={`app-shell interface-modern ${view === 'player' ? 'listening-view' : ''} ${themeFollow ? 'cover-theme' : ''}`} style={{ '--glass-opacity':opacity,'--color-intensity':intensity } as React.CSSProperties}>
+  const controlsOnLeft = appleStyle && appleControlsPosition === 'left';
+  const controlsPosition = controlsOnLeft ? 'left' : 'right';
+  const windowControls = <WindowControls appleStyle={appleStyle} position={controlsPosition} maximized={maximized} onControl={control} />;
+  return <div className={`app-shell interface-modern ${appleStyle ? 'apple-ui' : ''} ${view === 'player' ? 'listening-view' : ''} ${themeFollow ? 'cover-theme' : ''}`} style={{ '--glass-opacity':opacity,'--color-intensity':intensity } as React.CSSProperties}>
     <a className="skip-link" href="#main-content">跳到主要内容</a>
     <div className={`app-backdrop ${themeFollow || view === 'player' ? 'visible' : ''}`} aria-hidden="true" />
-    <header className="titlebar">
+    <header className="titlebar" data-window-style={appleStyle ? 'apple' : 'default'} data-controls-position={controlsPosition}>
+      {controlsOnLeft && windowControls}
       <div className="titlebar-brand" aria-label="Wuu 音乐"><span className="brand-mark" aria-hidden="true"><i /><i /><i /><i /></span><span className="brand-wordmark">wuu<span>.</span></span></div>
       <div className="titlebar-spacer" />
-      <div className="window-controls"><button aria-label="最小化" onClick={() => control('minimize')}><Icon name="minimize" size={16} /></button><button aria-label={maximized ? '还原窗口' : '最大化'} onClick={() => control('toggleMaximize')}><Icon name="maximize" size={15} /></button><button className="window-close" aria-label="关闭窗口" onClick={() => control('close')}><Icon name="close" size={16} /></button></div>
+      {!controlsOnLeft && windowControls}
     </header>
     {(error || (showStartup && loading)) && <div className="library-startup-status" role={error ? 'alert' : 'status'}>
       <span>{error ? `读取未完成：${error}` : '正在读取歌库，已载入的歌曲可以先播放。'}</span>

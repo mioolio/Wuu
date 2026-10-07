@@ -123,6 +123,10 @@ export default function SettingsView() {
           <Group title="界面版本" description="歌曲、歌单与播放记录共用，切换后恢复本地歌曲进度。">
             <div className="setting-row"><span><strong>当前使用新版界面</strong><small className="muted">旧版使用原来的导航、播放器和歌词界面，可随时返回新版。</small></span><button disabled={switching} onClick={() => void switchToClassic()}>{switching ? '正在切换…' : '切换到旧版界面'}</button></div>
           </Group>
+          <Group title="实验性外观" description="仅用于新版界面，可随时关闭。">
+            <Toggle label="Apple 风格（实验性）" description="使用红黄绿窗口按钮与轻盈的分组外观。关闭后恢复原有外观，其他外观偏好保留。" checked={settings.experimentalAppleUI} onChange={value => setSettings({ experimentalAppleUI: value })} />
+            {settings.experimentalAppleUI && <label className="setting-row"><span><strong>窗口按钮位置</strong><small className="muted">选择适合自己的窗口操作位置</small></span><select aria-label="窗口按钮位置" value={settings.appleControlsPosition} onChange={event => setSettings({ appleControlsPosition: event.target.value === 'right' ? 'right' : 'left' })}><option value="left">左侧</option><option value="right">右侧</option></select></label>}
+          </Group>
           <Group title="封面与背景">
             <Toggle label="圆盘封面" description="在播放页面使用唱片样式" checked={settings.discCover} onChange={value => setSettings({ discCover: value })} />
             <Toggle label="全局背景跟随封面" description="让整个界面随当前歌曲封面变色" checked={settings.themeFollowCover} onChange={value => setSettings({ themeFollowCover: value })} />
