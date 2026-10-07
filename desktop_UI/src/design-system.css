@@ -66,6 +66,8 @@ p { line-height: 1.75; }
 .titlebar { height: 44px; min-height: 44px; padding-left: 0; background: rgb(from var(--shell-chrome) r g b / var(--glass-opacity, .72)); border-bottom: 1px solid var(--border); }
 .titlebar-brand { width: auto; flex: 0 0 auto; padding-left: 18px; gap: 9px; color: var(--text); }
 .titlebar-spacer { flex: 1; min-width: 28px; align-self: stretch; }
+/* Register each non-interactive flex region, including the empty right side. */
+.titlebar-brand, .titlebar-spacer { -webkit-app-region: drag; }
 .library-startup-status { position: relative; z-index: 1; flex: 0 0 auto; display: flex; align-items: center; justify-content: center; gap: 12px; padding: 5px 16px; color: var(--muted); font-size: 12px; line-height: 20px; border-bottom: 1px solid var(--border); }
 .library-startup-status span { min-width: 0; overflow-wrap: anywhere; }
 .library-startup-status button { flex-shrink: 0; padding: 0 8px; min-height: 24px; background: transparent; color: var(--text); }
@@ -79,7 +81,7 @@ p { line-height: 1.75; }
 .status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); }
 .status-dot.playing { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .window-controls { align-items: center; padding: 0 8px; gap: 2px; }
-.window-controls button { width: 35px; height: 34px; min-height: 34px; border-radius: 6px; color: var(--muted); }
+.window-controls button { width: 35px; height: 34px; min-height: 34px; border-radius: 6px; color: var(--muted); -webkit-app-region: no-drag; }
 .window-controls button:hover:not(:disabled) { border: 0; background: var(--hover); }
 .window-controls .window-close:hover:not(:disabled) { background: #ba444b; color: #fff; }
 .sidebar { width: var(--sidebar-width); padding: 13px 12px 12px; gap: 0; border-right: 1px solid var(--border); background: rgb(from var(--shell-chrome) r g b / var(--glass-opacity, .72)); }
