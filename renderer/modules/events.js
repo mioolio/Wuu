@@ -70,16 +70,10 @@ btnMode.addEventListener('click', () => {
   appSettings.playMode = playMode;
   btnMode.innerHTML = MODE_ICONS[playMode];
   btnMode.title = MODE_NAMES[playMode];
-  // 切到随机模式: 定位当前歌在对应上下文 shuffleQueue 中的位置
-  // 这样第一次点"下一首"从队列当前位置继续, 而不是跳到队列头
+  // 当前歌曲只消费自身, 不丢弃未播放的随机队列前缀
   if (playMode === 2 && curIdx >= 0) {
-    if (playContext === 'liked' && shuffleQueueLiked.length > 0) {
-      const pos = shuffleQueueLiked.indexOf(curIdx);
-      if (pos >= 0) shufflePosLiked = pos;
-    } else if (playContext === 'home' && shuffleQueue.length > 0) {
-      const pos = shuffleQueue.indexOf(curIdx);
-      if (pos >= 0) shufflePos = pos;
-    }
+    selectShuffleSong(curIdx);
+    if (!audio.paused) recordShufflePlayback(curIdx);
   }
   saveUserData();
 });

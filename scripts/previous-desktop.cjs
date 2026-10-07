@@ -1,6 +1,6 @@
 // Real production renderer/media regression; run after the desktop build.
 // node scripts/previous-desktop.cjs
-// Uses only public player controls and the isolated three-song smoke fixture.
+// Uses public player controls and the isolated three-song smoke fixture.
 const { _electron: electron } = require('../desktop_UI/node_modules/playwright');
 const assert = require('assert/strict');
 const fs = require('fs');
@@ -44,7 +44,10 @@ const normalize = value => value.replace(/\\/g, '/');
     await page.evaluate(() => {
       const originalPlay = HTMLMediaElement.prototype.play;
       HTMLMediaElement.prototype.play = function (...args) {
-        if (this.id === 'react-media-player') window.__previousMedia = this;
+        if (this.id === 'react-media-player') {
+          window.__previousMedia = this;
+          window.__previousPlayCalls = (window.__previousPlayCalls || 0) + 1;
+        }
         return Reflect.apply(originalPlay, this, args);
       };
     });
@@ -91,6 +94,32 @@ const normalize = value => value.replace(/\\/g, '/');
     await setMode('随机播放');
     const first = await waitMedia();
     report.heard.push(first.path); report.media.push({ label: 'random-start', ...first });
+    // A real queue-row click passes a newly allocated queue to playSong. It
+    // must consume only that song, preserving the unplayed part of the round.
+    // Fix the RNG for this reproduction: before the fix repeated queue clicks
+    // always rebuilt the same permutation, repeating two tracks after round 1.
+    await page.evaluate(() => {
+      window.__previousRandom = Math.random;
+      Math.random = () => 0;
+    });
+    for (let step = 0; step < tracks.length * 3 - 1; step++) {
+      const previous = report.heard.at(-1);
+      const playCalls = await page.evaluate(() => window.__previousPlayCalls || 0);
+      await page.getByRole('button', { name: '打开播放队列', exact: true }).click();
+      await page.locator('.player-queue .queue-song.active').click();
+      await page.getByRole('button', { name: '关闭播放队列', exact: true }).click();
+      await page.waitForFunction(count => (window.__previousPlayCalls || 0) > count, playCalls);
+      await waitMedia(previous);
+      await page.getByRole('button', { name: '下一首', exact: true }).click();
+      const value = await waitMedia(undefined, previous);
+      report.heard.push(value.path); report.media.push({ label: `random-manual-current-${step + 1}`, ...value });
+    }
+    for (let offset = 0; offset < report.heard.length; offset += tracks.length) {
+      assert.equal(new Set(report.heard.slice(offset, offset + tracks.length)).size, tracks.length,
+        'Manual current-row clicks preserve every unplayed track in each of three random rounds');
+    }
+    await page.evaluate(() => { Math.random = window.__previousRandom; });
+    report.checks.push('reselecting the currently playing queue row completes three eligible rounds without repeats within each round');
     // Seven transitions visit more than two complete rounds of three tracks.
     // In particular, previous at indices 3 and 6 must cross the new-round pos 0.
     for (let step = 0; step < 7; step++) {
@@ -101,7 +130,7 @@ const normalize = value => value.replace(/\\/g, '/');
     }
     assert.equal(new Set(report.heard).size, 3, 'Every real queue track is heard across the shuffle rounds');
     await capture('random-rounds-before-return');
-    report.checks.push('seven real next operations cross multiple random rounds without immediately repeating the active song');
+    report.checks.push('seven further real next operations cross multiple random rounds without immediately repeating the active song');
 
     await page.getByRole('button', { name: '暂停', exact: true }).click();
     assert.equal((await sample()).paused, true);

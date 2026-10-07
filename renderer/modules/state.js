@@ -40,9 +40,10 @@ let currentMode = 'list';
 // 用户在某个视图点歌时 playContext = 该视图; 左下角头像切 UI 视图不改 playContext
 // pickNextIdx 基于 playContext 决定 playlist, 修复"liked 视图点歌后切首页看歌词, 下一首跳到大列表"的 bug
 let playContext = 'home';
+let playCollectionId = null;  // 实际点歌时的歌单, 浏览另一个歌单不改变播放范围
 
 // 随机播放洗牌队列 (playMode===2 使用)
-// home 和 liked 上下文各自独立维护一套队列, 互不干扰
+// 旧列表操作的索引投影; 实际未播放轮次在 list.js 按路径/播放范围维护
 // 不持久化, 每次启动重新洗
 let shuffleQueue = [];        // home 上下文的索引队列 (songs 的索引)
 let shufflePos = -1;          // home 上下文当前在队列中的位置

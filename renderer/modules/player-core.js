@@ -247,6 +247,13 @@ audio.addEventListener('play', () => {
   if (coverEl) coverEl.classList.add('playing');
   syncDesktopState(true);
 });
+audio.addEventListener('playing', () => {
+  // Resume can bypass play(idx); only the actual current local source belongs
+  // in navigation history. A rejected/buffering preview never records an index.
+  if (!fmPreviewMode && songs[curIdx] && audio.src === toUrl(songs[curIdx].audioPath) && typeof recordShufflePlayback === 'function') {
+    recordShufflePlayback(curIdx);
+  }
+});
 audio.addEventListener('pause', () => {
   dbgAudio('pause');
   // 诊断插桩: 暴露触发本次 pause 的完整调用栈 (拖动 bug 定位用, F12 Console 过滤 [SEEK-DIAG])
@@ -421,19 +428,11 @@ async function play(idx, autoResume = true, updateContext = true, countPlay = tr
 
   // 播放上下文: 仅用户手动点歌时更新为 currentView
   // 自动续播/上一首下一首保持当前 playContext, 修复"liked 视图点歌后切首页, 下一首跳到大列表"的 bug
-  if (updateContext) playContext = currentView;
-
-  // 随机模式: 手动点歌时把对应上下文的 shufflePos 跳到该歌在队列中的位置
-  // 这样下一首就是队列里它的下一首, 符合用户直觉
-  if (updateContext && playMode === 2) {
-    if (playContext === 'liked' && shuffleQueueLiked.length > 0) {
-      const pos = shuffleQueueLiked.indexOf(idx);
-      if (pos >= 0) shufflePosLiked = pos;
-    } else if (playContext === 'home' && shuffleQueue.length > 0) {
-      const pos = shuffleQueue.indexOf(idx);
-      if (pos >= 0) shufflePos = pos;
-    }
+  if (updateContext) {
+    playContext = currentView === 'liked' ? 'liked' : 'home';
+    playCollectionId = playContext === 'liked' ? activeCollectionId : null;
   }
+  if (typeof selectShuffleSong === 'function') selectShuffleSong(idx, updateContext);
 
   // 预加载歌词
   let newLrc = [];
@@ -604,7 +603,7 @@ async function applyTogetherCommand(command) {
       const index = songs.findIndex(song => song.audioPath === p.audioPath);
       if (index < 0) return;
       playContext = 'home';
-      if (playMode === 2) { const pos = shuffleQueue.indexOf(index); if (pos >= 0) shufflePos = pos; }
+      playCollectionId = null;
       if (Number.isFinite(p.playbackRate)) { appSettings.playbackRate = p.playbackRate; applyPlaybackRate(); saveUserData(); }
       await play(index, false, false, !!p.isPlaying, { position: p.position, autoplay: p.isPlaying !== false });
     } else if (command.op === 'rate') {

@@ -23,7 +23,7 @@ const songs: Song[] = [
 let service: (typeof import('./player'))['playerService'];
 let store: (typeof import('../store'))['useAppStore'];
 let media: FakeMedia;
-const reportFailed = vi.fn(async () => {});
+const reportFailed = vi.fn(async (_payload: { audioPath: string }) => {});
 const synchronize = vi.fn(async (_patch: any) => {});
 const extractColor = vi.fn(async (_path: string): Promise<unknown> => null);
 const extractColorURL = vi.fn(async (_url: string): Promise<unknown> => null);
@@ -402,6 +402,210 @@ describe('React player service lifecycle and context', () => {
   });
 });
 
+describe('random playback completes the eligible round', () => {
+  it('covers 100 low and high play-count songs for three rounds despite mode changes, metadata refreshes and current-row clicks', async () => {
+    const queue = Array.from({ length: 100 }, (_, index): Song => ({
+      audioPath: `C:/coverage-${index}.aac`, songName: `Song ${index}`, artist: 'Artist', realDuration: 120,
+    }));
+    store.setState({ songs: queue, stats: { [queue[0].audioPath]: { plays: 100000, duration: 900000 } } });
+    const random = vi.spyOn(Math, 'random').mockReturnValue(.73);
+    try {
+      store.getState().setSettings({ playMode: 2 });
+      await service.playSong(queue[0], queue);
+      let last = queue[0].audioPath;
+      for (let round = 0; round < 3; round++) {
+        const heard = round === 0 ? [last] : [];
+        for (let position = heard.length; position < queue.length; position++) {
+          service.next(); await flush();
+          const current = store.getState().player.song!;
+          expect(current.audioPath).not.toBe(last);
+          last = current.audioPath; heard.push(last);
+          if (position % 7 === 0) await service.playSong(current, [...service.getQueue()]);
+          if (position % 11 === 0) {
+            store.getState().setSettings({ playMode: 1 });
+            store.getState().setSettings({ playMode: 2 });
+          }
+          if (position % 17 === 0) {
+            getSongs.mockResolvedValue(queue.map(song => ({ ...song, genre: ['Updated tag'] })));
+            await store.getState().reloadSongs();
+          }
+        }
+        expect(new Set(heard)).toEqual(new Set(queue.map(song => song.audioPath)));
+      }
+      expect(store.getState().stats[queue.at(-1)!.audioPath].plays).toBe(3);
+    } finally { random.mockRestore(); }
+  });
+
+  it('keeps the unplayed local songs when a user reselects the current song in the same queue', async () => {
+    const queue = [...songs, { ...songs[0], audioPath: 'C:/four.aac', songName: 'Four' }];
+    store.setState({ songs: queue });
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0);
+    try {
+      store.getState().setSettings({ playMode: 2 });
+      await service.playSong(queue[0], queue);
+      const heard = [store.getState().player.song!.audioPath];
+      for (let step = 1; step < queue.length; step++) {
+        service.next(); await flush();
+        const current = store.getState().player.song!;
+        heard.push(current.audioPath);
+        // The real queue popover sends a new array when its current row is clicked.
+        await service.playSong(current, [...queue]);
+      }
+      expect(new Set(heard)).toEqual(new Set(queue.map(song => song.audioPath)));
+    } finally { random.mockRestore(); }
+  });
+
+  it('plays every preview slot before repeating instead of drawing independently on each next', async () => {
+    const queue: PreviewSong[] = [0, 1, 2, 3].map(index => ({
+      name: `Preview ${index}`, artist: '', url: `https://example.test/random-${index}.mp3`,
+    }));
+    const random = vi.spyOn(Math, 'random').mockReturnValue(.45);
+    try {
+      store.getState().setSettings({ playMode: 2 });
+      await service.playPreview({ ...queue[0], queue });
+      const heard = [store.getState().player.preview!.url];
+      for (let step = 1; step < queue.length; step++) {
+        service.next(); await flush();
+        heard.push(store.getState().player.preview!.url);
+      }
+      expect(new Set(heard)).toEqual(new Set(queue.map(song => song.url)));
+    } finally { random.mockRestore(); }
+  });
+
+  it('manual picks and history replay preserve the local unplayed songs instead of restarting their round', async () => {
+    const queue = Array.from({ length: 8 }, (_, index): Song => ({ ...songs[0], audioPath: `C:/manual-${index}.aac` }));
+    store.setState({ songs: queue }); store.getState().setSettings({ playMode: 2 });
+    await service.playSong(queue[0], queue);
+    const heard = [queue[0].audioPath];
+    service.next(); await flush(); heard.push(store.getState().player.song!.audioPath);
+    const manual = queue.find(song => !heard.includes(song.audioPath))!;
+    await service.playSong(manual, [...queue]); heard.push(manual.audioPath);
+    service.next(-1); await flush(); expect(store.getState().player.song!.audioPath).toBe(heard[1]);
+    service.next(); await flush(); expect(store.getState().player.song!.audioPath).toBe(manual.audioPath);
+    while (heard.length < queue.length) {
+      service.next(); await flush(); heard.push(store.getState().player.song!.audioPath);
+    }
+    expect(new Set(heard)).toEqual(new Set(queue.map(song => song.audioPath)));
+  });
+
+  it('reconciles dislikes, deleted files and added songs within the actual collection without reviving heard entries', async () => {
+    const queue = Array.from({ length: 6 }, (_, index): Song => ({ ...songs[0], audioPath: `C:/eligible-${index}.aac` }));
+    store.setState({ songs: queue, collections: [{ id: 'mix', name: 'Mix', songs: queue.map(song => song.audioPath), createdAt: 1 }], view: 'liked', activeCollectionId: 'mix' });
+    store.getState().setSettings({ playMode: 2 }); await service.playSong(queue[0]);
+    service.next(); await flush();
+    const current = store.getState().player.song!, heard = new Set([queue[0].audioPath, current.audioPath]);
+    const unseen = queue.filter(song => !heard.has(song.audioPath));
+    const added = { ...songs[0], audioPath: 'C:/added.aac' };
+    const outside = { ...songs[0], audioPath: 'C:/outside.aac' };
+    store.setState({ songs: [...queue.filter(song => song !== unseen[1]), added, outside],
+      dislikes: { [unseen[0].audioPath]: 1 }, view: 'home',
+      collections: [{ id: 'mix', name: 'Mix', songs: [...queue.map(song => song.audioPath), added.audioPath], createdAt: 1 }] });
+    const expected = [unseen[2].audioPath, unseen[3].audioPath, added.audioPath];
+    const upcoming: string[] = [];
+    for (let step = 0; step < expected.length; step++) {
+      service.next(); await flush(); upcoming.push(store.getState().player.song!.audioPath);
+    }
+    expect(new Set(upcoming)).toEqual(new Set(expected));
+    expect(service.getQueue().some(song => song.audioPath === outside.audioPath)).toBe(false);
+  });
+
+  it('deduplicates stable preview identities and keeps unplayed songs after queue arrays reorder and gain a member', async () => {
+    const make = (id: number): PreviewSong => ({ name: 'Same title', artist: 'Artist', source: 'platform',
+      original: { id, source: 'platform' }, url: `https://example.test/identity-${id}.mp3` });
+    const original = [make(0), make(1), make(2), make(3)];
+    const queue = [original[0], { ...original[0] }, ...original.slice(1)];
+    store.getState().setSettings({ playMode: 2 }); await service.playPreview({ ...queue[0], queue });
+    service.next(); await flush();
+    const current = store.getState().player.preview!;
+    const consumed = new Set([original[0].url, current.url]);
+    const added = make(4), reordered = [...queue].reverse().map(song => ({ ...song }));
+    reordered.push(added);
+    await service.playPreview({ ...reordered.find(song => song.url === current.url)!, queue: reordered });
+    const expected = [...original, added].filter(song => !consumed.has(song.url)).map(song => song.url);
+    const upcoming: string[] = [];
+    for (let step = 0; step < expected.length; step++) {
+      service.next(); await flush(); upcoming.push(store.getState().player.preview!.url);
+    }
+    expect(new Set(upcoming)).toEqual(new Set(expected));
+  });
+
+  it('resolved preview platform replacements retain original song identities across duplicate slots', async () => {
+    const make = (id: number): PreviewSong => ({ name: 'Same', artist: '', source: 'original', original: { id, source: 'original' }, url: '',
+      resolve: async () => ({ name: 'Same', artist: '', source: 'replacement', original: { id: `new-${id}`, source: 'replacement' }, url: `https://example.test/resolved-${id}.mp3` }) });
+    const original = [make(0), make(1), make(2)], queue = [original[0], { ...original[0] }, ...original.slice(1)];
+    store.getState().setSettings({ playMode: 2 }); await service.playPreview({ ...queue[0], queue });
+    const heard = [store.getState().player.preview!.url];
+    for (let step = 1; step < original.length; step++) {
+      service.next(); await vi.waitFor(() => expect(store.getState().player.preview!.url).not.toBe(heard.at(-1)));
+      heard.push(store.getState().player.preview!.url);
+    }
+    expect(new Set(heard)).toEqual(new Set(original.map((_, id) => `https://example.test/resolved-${id}.mp3`)));
+  });
+
+  it('a delayed preview resolver retains its selected identity when the same queue changes order before completion', async () => {
+    const pending = deferred<PreviewSong>();
+    const queue: PreviewSong[] = [
+      { name: 'A', artist: '', source: 'original', original: { id: 'a' }, url: 'https://example.test/a.mp3' },
+      { name: 'B', artist: '', source: 'original', original: { id: 'b' }, url: '', resolve: () => pending.promise },
+      { name: 'C', artist: '', source: 'original', original: { id: 'c' }, url: 'https://example.test/c.mp3' },
+    ];
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0);
+    try {
+      store.getState().setSettings({ playMode: 2 }); await service.playPreview({ ...queue[0], queue });
+      service.next(); await flush();
+      [queue[1], queue[2]] = [queue[2], queue[1]];
+      pending.resolve({ name: 'B', artist: '', source: 'replacement', original: { id: 'resolved-b' }, url: 'https://example.test/b.mp3' });
+      await vi.waitFor(() => expect(store.getState().player.preview!.url).toContain('/b.mp3'));
+      service.next(); await flush();
+      expect(store.getState().player.preview!.url).toBe('https://example.test/c.mp3');
+    } finally { random.mockRestore(); }
+  });
+
+  it('an in-place preview reorder relocates the current song instead of marking another slot heard', async () => {
+    const queue: PreviewSong[] = ['A', 'B', 'C'].map(name => ({ name, artist: '', url: `https://example.test/${name}.mp3` }));
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0);
+    try {
+      store.getState().setSettings({ playMode: 2 }); await service.playPreview({ ...queue[0], queue });
+      const heard = [store.getState().player.preview!.name];
+      [queue[0], queue[1]] = [queue[1], queue[0]];
+      for (let step = 1; step < queue.length; step++) {
+        service.next(); await flush(); heard.push(store.getState().player.preview!.name);
+      }
+      expect(new Set(heard)).toEqual(new Set(['A', 'B', 'C']));
+    } finally { random.mockRestore(); }
+  });
+
+  it('first playing consumes the actual preview identity if the queue reorders while play is pending', async () => {
+    const queue: PreviewSong[] = ['A', 'B', 'C'].map(name => ({ name, artist: '', url: `https://example.test/${name}.mp3` }));
+    const pending = deferred<void>(), originalPlay = media.play;
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0);
+    media.play = async function () { await pending.promise; await originalPlay.call(this); };
+    try {
+      store.getState().setSettings({ playMode: 2 });
+      const opening = service.playPreview({ ...queue[0], queue });
+      [queue[0], queue[1]] = [queue[1], queue[0]];
+      pending.resolve(); await opening; media.play = originalPlay;
+      const heard = [store.getState().player.preview!.name];
+      for (let step = 1; step < queue.length; step++) {
+        service.next(); await flush(); heard.push(store.getState().player.preview!.name);
+      }
+      expect(new Set(heard)).toEqual(new Set(['A', 'B', 'C']));
+    } finally { media.play = originalPlay; random.mockRestore(); }
+  });
+
+  it('limits failed random attempts without repeatedly selecting a damaged file or writing it to history', async () => {
+    const queue = Array.from({ length: 8 }, (_, index): Song => ({ ...songs[0], audioPath: `C:/failed-${index}.aac` }));
+    store.setState({ songs: queue }); store.getState().setSettings({ playMode: 2 });
+    for (const song of queue) media.failedPaths.add(song.audioPath);
+    await service.playSong(queue[0], queue);
+    await vi.waitFor(() => expect(reportFailed).toHaveBeenCalledTimes(5));
+    const attempted = reportFailed.mock.calls.map(([song]) => song.audioPath);
+    expect(new Set(attempted).size).toBe(5); expect(media.paused).toBe(true);
+    service.next(-1); await flush();
+    expect(reportFailed).toHaveBeenCalledTimes(5);
+  });
+});
+
 describe('previous track follows playback rather than a replaced shuffle plan', () => {
   it('rewinds and advances the actual local path order across multiple shuffle rounds', async () => {
     const random = vi.spyOn(Math, 'random').mockReturnValue(0);
@@ -507,11 +711,14 @@ describe('previous track follows playback rather than a replaced shuffle plan', 
     try {
       store.getState().setSettings({ playMode: 2 }); media.failedPaths.add('one.aac');
       await service.playSong(songs[0]);
-      await vi.waitFor(() => expect(store.getState().player.song?.audioPath).toBe(songs[2].audioPath));
+      await vi.waitFor(() => expect(store.getState().player.song?.audioPath).not.toBe(songs[0].audioPath));
+      const successful = store.getState().player.song!;
+      expect(media.paused).toBe(false);
       service.next(-1); await flush();
-      expect(store.getState().player.song?.audioPath).toBe(songs[2].audioPath);
-      await service.playSong(songs[1]); service.next(-1); await flush();
-      expect(store.getState().player.song?.audioPath).toBe(songs[2].audioPath);
+      expect(store.getState().player.song?.audioPath).toBe(successful.audioPath);
+      await service.playSong(songs.find(song => song.audioPath !== successful.audioPath && song !== songs[0])!);
+      service.next(-1); await flush();
+      expect(store.getState().player.song?.audioPath).toBe(successful.audioPath);
     } finally { random.mockRestore(); }
   });
 

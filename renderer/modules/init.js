@@ -206,15 +206,6 @@
     if (lastIdx >= 0) {
       // playContext: 上次那首歌若在 likedSet, 视为 liked 上下文继续; 否则 home
       const ctx = likedSet.has(lastSession.audioPath) ? 'liked' : 'home';
-      // 随机模式: 以上次那首歌为对应队列起点, 洗牌后把它调到队首
-      if (playMode === 2) {
-        const queue = ctx === 'liked' ? shuffleQueueLiked : shuffleQueue;
-        const pos = queue.indexOf(lastIdx);
-        if (pos >= 0) {
-          [queue[0], queue[pos]] = [queue[pos], queue[0]];
-          if (ctx === 'liked') shufflePosLiked = 0; else shufflePos = 0;
-        }
-      }
       // updateContext=false: 不让 play() 用 currentView 覆盖刚设好的 playContext
       playContext = ctx;
       await play(lastIdx, true, false, interfaceParams.get('interfaceSwitch') !== '1');

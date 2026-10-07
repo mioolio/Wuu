@@ -4,7 +4,8 @@ import { notify } from '../ui';
 import type { PreviewSong, Song } from '../types';
 import { AudioEffects, normalizeFxSettings } from './audioFx';
 import { parseLyrics, type LyricsData } from './lyrics';
-import { isVideo, positive, preferredDuration, safeSeekTime, shuffled } from './playbackUtils';
+import { isVideo, positive, preferredDuration, safeSeekTime } from './playbackUtils';
+import { ShuffleRound } from './shuffleRound';
 import { createCoverPalette, createShellPalette, normalizeCoverColor } from './coverPalette';
 import { recordListening, recordPlay } from './listeningHistory';
 export { isVideo, preferredDuration, safeSeekTime, shuffled } from './playbackUtils';
@@ -24,8 +25,10 @@ class PlayerService {
   private queuePaths: string[] | null = null;
   private collectionId: string | null = null;
   private likedContext = false;
-  private shufflePaths: string[] = [];
-  private shufflePos = -1;
+  private songShuffle = new ShuffleRound<string>();
+  private previewShuffle = new ShuffleRound<string>();
+  private previewKeys = new WeakMap<PreviewSong, string>();
+  private previewKeySequence = 0;
   // A shuffle order is a plan, not playback history: it is replaced each round.
   private songHistory: string[] = [];
   private songHistoryPosition = -1;
@@ -116,7 +119,7 @@ class PlayerService {
         if (state.settings !== previous.settings) {
           this.sendSettings();
           if (state.settings.simulateLrcProgress !== previous.settings.simulateLrcProgress) this.sendLyricData();
-          if (state.settings.playMode !== previous.settings.playMode) { this.resetShuffle(); this.syncDesktop(true); }
+          if (state.settings.playMode !== previous.settings.playMode) this.syncDesktop(true);
           if (state.settings.themeFollowCover !== previous.settings.themeFollowCover || state.settings.colorIntensity !== previous.settings.colorIntensity) this.applyCoverTheme();
         }
       }));
@@ -201,7 +204,6 @@ class PlayerService {
     this.queuePaths = queue ? [...new Set(queue.map(item => item.audioPath))] : null;
     this.collectionId = state.view === 'liked' ? state.activeCollectionId : null;
     this.likedContext = state.view === 'liked';
-    this.resetShuffle(song.audioPath);
     await this.openSong(song, restore);
   }
 
@@ -264,7 +266,6 @@ class PlayerService {
         // A phone's library selection starts the desktop library queue, rather
         // than inheriting an unrelated collection that happened to be open.
         this.queuePaths = null; this.collectionId = null; this.likedContext = false;
-        this.resetShuffle(song.audioPath);
         if (Number.isFinite(payload.playbackRate)) useAppStore.getState().setSettings({ playbackRate: normalizePlaybackRate(payload.playbackRate) });
         await this.openSong(song, false, !!payload.isPlaying, {
           position: payload.position, autoplay: payload.isPlaying !== false, onStarted: finish,
@@ -304,7 +305,11 @@ class PlayerService {
         const resolved = await preview.resolve();
         if (pendingVersion !== this.version) return;
         const ready = { ...resolved, queue: preview.queue || resolved.queue };
-        if (ready.queue) this.previewPositions.set(ready, this.previewIndex(preview, ready.queue));
+        if (ready.queue) {
+          const position = this.previewIndex(preview, ready.queue);
+          this.previewPositions.set(ready, position);
+          if (position >= 0) this.previewKeys.set(ready, this.previewKey(ready.queue[position]));
+        }
         return await this.playPreview(ready);
       } catch (error) {
         if (pendingVersion !== this.version) return;
@@ -317,7 +322,11 @@ class PlayerService {
     this.media.pause(); this.lastWall = 0; this.lastPosition = 0; this.requestedTime = 0;
     this.sourcePath = preview.url;
     this.previewQueue = preview.queue || null;
-    this.previewPosition = preview.queue ? this.previewPositions.get(preview) ?? this.previewIndex(preview, preview.queue) : -1;
+    const savedPosition = this.previewPositions.get(preview);
+    this.previewPosition = preview.queue
+      ? savedPosition != null && preview.queue[savedPosition] && this.previewKey(preview.queue[savedPosition]) === this.previewKey(preview)
+        ? savedPosition : this.previewIndex(preview, preview.queue)
+      : -1;
     if (this.previewPosition >= 0) this.previewPositions.set(preview, this.previewPosition);
     useAppStore.getState().setPlayer({ song: null, index: -1, preview, playing: false, time: 0, duration: 0, loading: true, error: '', lyricText: preview.lyric || '' });
     this.media.src = mediaUrl(preview.url); this.media.load();
@@ -372,6 +381,7 @@ class PlayerService {
     this.lyrics = { raw: false, lines: [] };
     this.songHistory = []; this.songHistoryPosition = -1;
     this.previewHistory = []; this.previewHistoryPosition = -1;
+    this.songShuffle.clear(); this.previewShuffle.clear();
     useAppStore.getState().setPlayer({ song: null, preview: null, index: -1, time: 0, duration: 0, playing: false, loading: false, lyricText: '', error: '' });
     this.coverColor = null; this.coverColorReady = true; this.applyCoverTheme();
     this.send(this.lyricSnapshot());
@@ -394,16 +404,17 @@ class PlayerService {
   remapSongPath(oldPath: string, newPath: string): void {
     if (oldPath === newPath) return;
     if (this.queuePaths) this.queuePaths = [...new Set(this.queuePaths.map(path => path === oldPath ? newPath : path))];
-    this.shufflePaths = [...new Set(this.shufflePaths.map(path => path === oldPath ? newPath : path))];
+    this.songShuffle.replace(oldPath, newPath);
     this.songHistory = this.songHistory.map(path => path === oldPath ? newPath : path);
   }
 
-  private rememberSong(path: string): void {
-    if (this.songHistory[this.songHistoryPosition] === path) return;
+  private rememberSong(path: string): boolean {
+    if (this.songHistory[this.songHistoryPosition] === path) return false;
     this.songHistory.splice(this.songHistoryPosition + 1);
     this.songHistory.push(path);
     if (this.songHistory.length > 250) this.songHistory.shift();
     this.songHistoryPosition = this.songHistory.length - 1;
+    return true;
   }
 
   private historySong(direction: number): Song | undefined {
@@ -418,14 +429,15 @@ class PlayerService {
     return undefined;
   }
 
-  private rememberPreview(preview: PreviewSong): void {
+  private rememberPreview(preview: PreviewSong): boolean {
     const current = this.previewHistory[this.previewHistoryPosition];
     if (current === preview || (current?.url === preview.url && current?.source === preview.source && current?.queue === preview.queue &&
-        (!preview.queue || this.previewPositions.get(current) === this.previewPosition))) return;
+        (!preview.queue || this.previewPositions.get(current) === this.previewPosition))) return false;
     this.previewHistory.splice(this.previewHistoryPosition + 1);
     this.previewHistory.push(preview);
     if (this.previewHistory.length > 250) this.previewHistory.shift();
     this.previewHistoryPosition = this.previewHistory.length - 1;
+    return true;
   }
 
   private historyPreview(direction: number): PreviewSong | undefined {
@@ -433,15 +445,6 @@ class PlayerService {
     if (position < 0 || position >= this.previewHistory.length) return undefined;
     this.previewHistoryPosition = position;
     return this.previewHistory[position];
-  }
-
-  private resetShuffle(currentPath = useAppStore.getState().player.song?.audioPath): void {
-    this.shufflePaths = shuffled(this.playlist().map(song => song.audioPath));
-    if (currentPath) {
-      const position = this.shufflePaths.indexOf(currentPath);
-      if (position >= 0) [this.shufflePaths[0], this.shufflePaths[position]] = [this.shufflePaths[position], this.shufflePaths[0]];
-    }
-    this.shufflePos = currentPath && this.shufflePaths[0] === currentPath ? 0 : -1;
   }
 
   next(direction = 1): void {
@@ -456,16 +459,8 @@ class PlayerService {
       // At the start of history there is no previously played random track.
       if (direction < 0) return;
       if (!playlist.length) { this.media.pause(); notify('播放队列中没有可推荐的歌曲'); return; }
-      const valid = new Set(playlist.map(song => song.audioPath));
-      if (this.shufflePaths.length !== valid.size || this.shufflePaths.some(path => !valid.has(path)) || this.shufflePaths[this.shufflePos] !== currentPath) this.resetShuffle(currentPath);
-      if (direction > 0) {
-        this.shufflePos++;
-        if (this.shufflePos >= this.shufflePaths.length) {
-          this.shufflePaths = shuffled([...valid]); this.shufflePos = 0;
-          if (this.shufflePaths.length > 1 && this.shufflePaths[0] === currentPath) [this.shufflePaths[0], this.shufflePaths[1]] = [this.shufflePaths[1], this.shufflePaths[0]];
-        }
-      }
-      target = playlist.find(song => song.audioPath === this.shufflePaths[this.shufflePos]);
+      const path = this.songShuffle.next(playlist.map(song => song.audioPath), currentPath);
+      target = playlist.find(song => song.audioPath === path);
     } else {
       if (!playlist.length) { this.media.pause(); notify('播放队列中没有可推荐的歌曲'); return; }
       const position = playlist.findIndex(song => song.audioPath === currentPath);
@@ -483,16 +478,30 @@ class PlayerService {
     const preview = useAppStore.getState().player.preview;
     const queue = preview?.queue;
     if (!preview || !queue?.length) { this.media.pause(); return; }
-    const position = this.previewQueue === queue && this.previewPosition >= 0 ? this.previewPosition : this.previewIndex(preview, queue);
-    const nextPosition = position < 0 ? (direction < 0 ? queue.length - 1 : 0) : useAppStore.getState().settings.playMode === 2 && queue.length > 1 ? (position + 1 + Math.floor(Math.random() * (queue.length - 1))) % queue.length : (position + (direction < 0 ? -1 : 1) + queue.length) % queue.length;
+    const cached = queue[this.previewPosition];
+    const position = this.previewQueue === queue && cached && this.previewKey(cached) === this.previewKey(preview)
+      ? this.previewPosition : this.previewIndex(preview, queue);
+    let nextPosition: number;
+    if (useAppStore.getState().settings.playMode === 2) {
+      const keys = queue.map(item => this.previewKey(item));
+      const key = this.previewShuffle.next(keys, position >= 0 ? keys[position] : undefined);
+      nextPosition = keys.indexOf(key!);
+      if (nextPosition < 0) return;
+    } else nextPosition = position < 0 ? (direction < 0 ? queue.length - 1 : 0) : (position + (direction < 0 ? -1 : 1) + queue.length) % queue.length;
     const pendingVersion = ++this.version;
     try {
       let target = queue[nextPosition];
+      const targetKey = this.previewKey(target);
       useAppStore.getState().setPlayer({ loading: true, error: '' });
       if (!target.url && target.resolve) target = await target.resolve();
       if (pendingVersion !== this.version) return;
+      // Resolution can outlive an in-place queue refresh. A numeric slot may
+      // now contain another song, so retain and relocate the selected identity.
+      const resolvedPosition = queue.findIndex(item => this.previewKey(item) === targetKey);
+      if (resolvedPosition < 0) { useAppStore.getState().setPlayer({ loading: false }); return; }
       const ready = { ...target, queue };
-      this.previewPositions.set(ready, nextPosition);
+      this.previewPositions.set(ready, resolvedPosition);
+      this.previewKeys.set(ready, targetKey);
       await this.playPreview(ready);
     } catch (error) {
       if (pendingVersion !== this.version) return;
@@ -501,14 +510,28 @@ class PlayerService {
     }
   }
 
+  private previewKey(item: PreviewSong): string {
+    const known = this.previewKeys.get(item);
+    if (known) return known;
+    const source = item.original?.source || item.source || '';
+    const id = item.original?.id ?? item.original?.hash ?? item.original?.trackId;
+    // Unknown unresolved songs need distinct identities, even with equal titles.
+    const key = id != null && String(id) ? JSON.stringify(['source', source, String(id)])
+      : item.url ? JSON.stringify(['url', item.url]) : `preview-object:${++this.previewKeySequence}`;
+    this.previewKeys.set(item, key);
+    return key;
+  }
+
   private previewIndex(preview: PreviewSong, queue: PreviewSong[]): number {
     const source = (item: PreviewSong) => item.original?.source || item.source || '';
     const id = (item: PreviewSong) => String(item.original?.id ?? item.original?.hash ?? item.original?.trackId ?? '');
     let index = queue.findIndex(item => item === preview);
+    const known = this.previewKeys.get(preview);
+    if (index < 0 && known) index = queue.findIndex(item => this.previewKey(item) === known);
     if (index < 0 && id(preview)) index = queue.findIndex(item => id(item) === id(preview) && source(item) === source(preview));
     if (index < 0 && preview.url) index = queue.findIndex(item => !!item.url && item.url === preview.url);
-    if (index < 0) index = queue.findIndex(item => item.name === preview.name && item.artist === preview.artist && source(item) === source(preview));
-    if (index < 0) index = queue.findIndex(item => item.name === preview.name && item.artist === preview.artist);
+    if (index < 0 && preview.resolve) index = queue.findIndex(item => item.resolve === preview.resolve);
+    if (index < 0 && !preview.url && !id(preview)) index = queue.findIndex(item => item.name === preview.name && item.artist === preview.artist && source(item) === source(preview));
     return index;
   }
 
@@ -626,8 +649,14 @@ class PlayerService {
   };
   private onPlay = (): void => {
     const { song, preview } = useAppStore.getState().player;
-    if (preview) this.rememberPreview(preview);
-    else if (song) this.rememberSong(song.audioPath);
+    if (preview) {
+      if (this.rememberPreview(preview) && preview.queue) {
+        const keys = preview.queue.map(item => this.previewKey(item));
+        this.previewShuffle.visit(keys, this.previewKey(preview));
+      }
+    } else if (song && this.rememberSong(song.audioPath)) {
+      this.songShuffle.visit(this.playlist().map(item => item.audioPath), song.audioPath);
+    }
     useAppStore.getState().setPlayer({ playing: true, loading: false, error: '' });
     this.lastWall = performance.now(); this.startLyricTimer(); this.syncDesktop(true);
     if (navigator.mediaSession) navigator.mediaSession.playbackState = 'playing';

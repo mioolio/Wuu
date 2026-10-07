@@ -150,8 +150,10 @@ async function refreshMainLibrary() {
   try {
     if (typeof window.musicAPI !== 'undefined' && window.musicAPI.getSongs) {
       const songList = await window.musicAPI.getSongs();
+      const currentPath = !fmPreviewMode && songs[curIdx]?.audioPath;
       songs = songList;
-      // 歌库变化后 shuffle 队列索引失效, 重新洗牌 home 和 liked 两个队列
+      if (currentPath) curIdx = songs.findIndex(song => song.audioPath === currentPath);
+      // 路径轮次保留已播放/未播放集合, 仅同步新增/删除的可用项
       if (typeof buildShuffleQueue === 'function') {
         buildShuffleQueue('home');
         buildShuffleQueue('liked');

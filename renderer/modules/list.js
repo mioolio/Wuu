@@ -50,24 +50,76 @@ function getFilteredList() {
   );
 }
 
-// Fisher-Yates 洗牌: 对指定上下文的 playlist 生成随机索引队列
-// context: 'home' (默认, 全部 songs) | 'liked' (按点赞时间降序的 liked 列表)
-// 一轮播完后调用此函数重新洗牌
+// One unplayed round per actual playback scope. Stable paths survive library
+// reordering; routine view/list refreshes reconcile eligibility rather than reset.
+const _classicShuffleRounds = new Map();
+function _shuffleScope(context) {
+  if (context !== 'liked') return 'home';
+  const id = playContext === 'liked' ? playCollectionId : activeCollectionId;
+  return 'liked:' + (id || 'union');
+}
+function _shufflePaths(paths) {
+  const result = paths.slice();
+  for (let i = result.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [result[i], result[j]] = [result[j], result[i]];
+  }
+  return result;
+}
+function _shuffleRound(context) {
+  const paths = [...new Set(_getPlaylistForContext(context).map(index => songs[index]?.audioPath)
+    .filter(path => path && !dislikedSet.has(path)))];
+  const allowed = new Set(paths), key = _shuffleScope(context);
+  let round = _classicShuffleRounds.get(key);
+  if (!round) {
+    round = { remaining: _shufflePaths(paths), seen: new Set(), trail: [], cursor: -1, pending: null };
+    _classicShuffleRounds.set(key, round);
+  } else {
+    round.remaining = round.remaining.filter(path => allowed.has(path));
+    const pending = new Set(round.remaining);
+    for (const path of paths) if (!round.seen.has(path) && !pending.has(path)) {
+      round.remaining.splice(Math.floor(Math.random() * (round.remaining.length + 1)), 0, path);
+      pending.add(path);
+    }
+  }
+  round.paths = paths;
+  return round;
+}
+function _projectShuffleQueue(context, round) {
+  const indices = new Map(songs.map((song, index) => [song.audioPath, index]));
+  const queue = round.remaining.map(path => indices.get(path));
+  if (context === 'liked') { shuffleQueueLiked = queue; shufflePosLiked = -1; }
+  else { shuffleQueue = queue; shufflePos = -1; }
+}
 function buildShuffleQueue(context) {
   context = context || 'home';
-  const playlist = _getPlaylistForContext(context);
-  const queue = playlist.slice();
-  for (let i = queue.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [queue[i], queue[j]] = [queue[j], queue[i]];
+  _projectShuffleQueue(context, _shuffleRound(context));
+}
+function selectShuffleSong(index, manual = false) {
+  if (playMode !== 2 || !songs[index]) return;
+  const round = _shuffleRound(playContext), path = songs[index].audioPath;
+  const replay = !manual && (round.pending?.path === path ||
+    round.trail[round.cursor] === path && round.cursor < round.trail.length - 1);
+  if (manual || round.pending?.path !== path) round.pending = null;
+  if (!replay && round.paths.includes(path)) {
+    round.seen.add(path);
+    round.remaining = round.remaining.filter(candidate => candidate !== path);
   }
-  if (context === 'liked') {
-    shuffleQueueLiked = queue;
-    shufflePosLiked = -1;
-  } else {
-    shuffleQueue = queue;
-    shufflePos = -1;
+  _projectShuffleQueue(playContext, round);
+}
+// Keep only actual successful playback for previous/forward navigation. Walking
+// this small trail never refills the unplayed round or rewinds its consumption.
+function recordShufflePlayback(index) {
+  if (playMode !== 2 || !songs[index]) return;
+  const round = _shuffleRound(playContext), path = songs[index].audioPath;
+  if (!round.paths.includes(path)) return;
+  if (round.pending?.path === path) round.cursor = round.pending.cursor;
+  else if (round.trail[round.cursor] !== path) {
+    round.trail.splice(round.cursor + 1);
+    round.trail.push(path); round.cursor = round.trail.length - 1;
+    if (round.trail.length > 2000) { round.trail.shift(); round.cursor--; }
   }
+  round.pending = null;
 }
 
 // 根据播放上下文获取当前 playlist (songs 索引数组)
@@ -79,8 +131,9 @@ function _getPlaylistForContext(context) {
   if (context === 'liked') {
     const playlist = [];
     // 优先用激活歌单的歌曲, 这样在某个歌单内点歌后下一首仍在该歌单内循环
-    if (activeCollectionId) {
-      const coll = collections.find(c => c.id === activeCollectionId);
+    const collectionId = playContext === 'liked' ? playCollectionId : activeCollectionId;
+    if (collectionId) {
+      const coll = collections.find(c => c.id === collectionId);
       if (coll) {
         for (let i = 0; i < songs.length; i++) {
           if (coll.songs.has(songs[i].audioPath)) playlist.push(i);
@@ -88,6 +141,7 @@ function _getPlaylistForContext(context) {
         playlist.sort((a, b) => (likedSet.get(songs[b].audioPath) || 0) - (likedSet.get(songs[a].audioPath) || 0));
         return playlist;
       }
+      return []; // 删除实际播放歌单时, 不扩大到其他歌单
     }
     // 回退: 所有歌单歌曲的并集
     for (let i = 0; i < songs.length; i++) {
@@ -105,53 +159,32 @@ function _getPlaylistForContext(context) {
 // 行为:
 //   - playMode===0(单曲循环): 由调用方处理, pickNextIdx 不参与
 //   - playMode===1(列表循环): 基于 playContext 的 playlist 顺序循环
-//   - playMode===2(随机播放): home 和 liked 各自独立的 shuffle 队列
-//     · 下一首: 指针++, 越界则重新洗牌回到 0
-//     · 上一首: 指针--, 越界停在 0(不循环回退)
+//   - playMode===2: 未播放轮次用路径保存; 上一首/前进使用已播放记录
 function pickNextIdx(direction) {
   const ctx = playContext;
 
   // 随机模式: 走对应上下文的 shuffle 队列
   if (playMode === 2) {
-    const isLiked = ctx === 'liked';
-    let queue = isLiked ? shuffleQueueLiked : shuffleQueue;
-    let pos = isLiked ? shufflePosLiked : shufflePos;
-    if (queue.length === 0) {
-      buildShuffleQueue(ctx);
-      queue = isLiked ? shuffleQueueLiked : shuffleQueue;
-      pos = -1;
-    }
-    if (queue.length === 0) return -1;
-    if (direction > 0) {
-      // 下一首: 指针后移, 越界则重新洗牌
-      pos++;
-      if (pos >= queue.length) {
-        // 重新洗牌
-        const fresh = queue.slice();
-        for (let i = fresh.length - 1; i > 0; i--) {
-          const j = Math.floor(Math.random() * (i + 1));
-          [fresh[i], fresh[j]] = [fresh[j], fresh[i]];
-        }
-        // 避免新队列第一首等于当前歌(若队列长度>1)
-        if (fresh.length > 1 && fresh[0] === curIdx) {
-          [fresh[0], fresh[1]] = [fresh[1], fresh[0]];
-        }
-        if (isLiked) { shuffleQueueLiked = fresh; queue = fresh; }
-        else { shuffleQueue = fresh; queue = fresh; }
-        pos = 0;
+    const round = _shuffleRound(ctx), current = songs[curIdx]?.audioPath;
+    if (!round.paths.length) return -1;
+    const cursor = round.pending && round.pending.path === current ? round.pending.cursor : round.cursor;
+    for (let i = cursor + direction; i >= 0 && i < round.trail.length; i += direction) {
+      const path = round.trail[i];
+      if (path !== current && round.paths.includes(path)) {
+        round.pending = { path, cursor: i };
+        return songs.findIndex(song => song.audioPath === path);
       }
-      if (isLiked) shufflePosLiked = pos; else shufflePos = pos;
-      return queue[pos];
-    } else {
-      // 上一首: 指针前移, 越界停在 0(不循环回退)
-      if (pos < 0) {
-        // 首次上一首(从未播过), 定位当前歌在队列中
-        pos = queue.indexOf(curIdx);
-      }
-      pos = Math.max(0, pos - 1);
-      if (isLiked) shufflePosLiked = pos; else shufflePos = pos;
-      return queue[pos];
     }
+    if (direction < 0) return -1;
+    round.pending = null;
+    if (!round.remaining.length) {
+      round.seen.clear(); round.remaining = _shufflePaths(round.paths);
+      if (round.remaining.length > 1 && round.remaining[0] === current) {
+        [round.remaining[0], round.remaining[1]] = [round.remaining[1], round.remaining[0]];
+      }
+    }
+    _projectShuffleQueue(ctx, round);
+    return songs.findIndex(song => song.audioPath === round.remaining[0]);
   }
 
   // 顺序模式: 基于 playContext 的 playlist 循环
@@ -392,7 +425,7 @@ function renderCollectionList() {
     li.addEventListener('click', () => {
       activeCollectionId = coll.id;
       listTitle.textContent = coll.name;
-      // 进入歌单时重新洗牌 liked 上下文队列, 使其包含该歌单的歌曲
+      // 浏览只同步可用歌曲, 不重置正在播放歌单的未听轮次
       buildShuffleQueue('liked');
       renderList();
     });
@@ -706,7 +739,7 @@ function renderFloatList() {
   }
   // 收集匹配项
   const items = [];
-  for (let idx = 0; idx < songs.length; idx++) {
+  for (const idx of _getPlaylistForContext()) {
     const s = songs[idx];
     if (q && !(s.songName.toLowerCase().includes(q) || (s.artist || '').toLowerCase().includes(q))) continue;
     items.push(idx);
@@ -767,7 +800,7 @@ function _buildFlItem(idx) {
   }
   li.innerHTML = `${thumb}<div class="fl-info"><div class="fl-name">${s.songName}</div><div class="fl-artist">${s.artist}</div></div>`;
   li.addEventListener('click', () => {
-    play(idx);
+    play(idx, true, false);
   });
   return li;
 }
