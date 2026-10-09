@@ -28,6 +28,7 @@ https://github.com/nextlevelbuilder/ui-ux-pro-max-skill
 - 普通播放页直接展示封面与歌词，移除「正在聆听」状态头。封面变色与不透明度仅在设置的外观区域调整，拖动仍即时生效。
 - 新版顶部品牌区和右侧空白区各自声明原生窗口拖动范围，最小化、最大化和关闭按钮单独排除拖动；窗口边缘保留系统调整大小范围。
 - 新版「设置 → 外观 → 实验性外观」提供默认关闭的 Apple 风格：红色关闭、黄色最小化、绿色最大化／还原，配合深色中性分层、圆角侧栏选中项与分组控件。启用后可选择窗口按钮在左侧或右侧；左侧采用关闭／最小化／最大化，右侧采用最小化／最大化／关闭，保留各自的操作习惯。窗口操作继续使用现有行为，关闭仍隐藏到托盘。开关与位置即时生效并保存，关闭恢复原外观，再开启保留上次位置，不重置透明度、封面配色、侧栏或播放偏好；旧版与手机页面不应用此主题。
+- 同一区域提供独立、默认关闭的「磨砂玻璃（实验性）」，使用系统原生的窗口后背景模糊：Windows 11 22H2（build 22621）起使用 Desktop Acrylic，macOS 使用 behind-window vibrancy。不支持的系统禁用开关并说明原因，不用 CSS `backdrop-filter` 假冒桌面模糊。开关立即应用并保存，沿用界面不透明度和封面配色，可与 Apple 风格及左右窗口按钮组合。启动时按保存偏好应用；切入旧版撤销原生材质，切回新版恢复偏好，关闭后恢复普通透明背景。系统可能按透明效果、节能或窗口活跃状态使用材质后备色，应用不改变系统设置。依据：[Electron v33 文档](https://github.com/electron/electron/blob/v33.4.11/docs/api/base-window.md#winsetbackgroundmaterialmaterial-windows)、[Microsoft Acrylic](https://learn.microsoft.com/en-us/windows/apps/design/style/acrylic)。
 
 ## 启动与后台整理
 
@@ -106,6 +107,7 @@ https://github.com/nextlevelbuilder/ui-ux-pro-max-skill
 - `npm run test:previous`：真实随机播放历史、连续返回与前进及顺序播放首尾。
 - `npm run test:titlebar`：Windows 真实窗口的原生命中测试，覆盖右侧空白、推荐／设置切页、窗口宽度与缩放、最大化，以及最小化／最大化／还原／关闭按钮的实际 IPC；在独立配置的测试窗口中执行。
 - `npm run test:apple`：通过新版外观设置开启 Apple 风格，检查左右位置与按钮顺序、重开保留、关闭恢复、原有外观偏好与新旧版切换，再运行原生拖动区域和窗口按钮回归。
+- `npm run test:frosted`：原生材质支持与恢复单元测试，以及隔离 Electron 窗口的磨砂开关、持久化、新旧版切换与 Apple 外观组合回归；Windows 检查实际 DWM 属性，并在自建背景上捕获窗口合成像素验证背景模糊。
 - `npm run test:detail`：检查右侧滚动条和导航标记的实际中间帧、拖动与键盘操作、弹窗和队列的可中断退场、焦点返回、均衡器键盘选择及静音音量恢复；生成实际 Electron 交互录屏。
 
 Electron 验证使用 `.test-artifacts` 内的独立数据和窗口，不修改个人歌库。

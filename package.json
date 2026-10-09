@@ -34,6 +34,7 @@
     "test:previous": "node scripts/previous-desktop.cjs",
     "test:titlebar": "node scripts/titlebar-desktop.cjs",
     "test:apple": "node scripts/titlebar-desktop.cjs --apple",
+    "test:frosted": "node --test window/frosted-glass.test.cjs && node scripts/frosted-desktop.cjs",
     "test:startup": "node scripts/startup-desktop.cjs",
     "test:scanner": "node --test audio/library-startup.test.cjs",
     "test:detail": "node scripts/detail-desktop.cjs",

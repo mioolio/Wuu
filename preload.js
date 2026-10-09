@@ -31,6 +31,8 @@ contextBridge.exposeInMainWorld('windowAPI', {
   close: () => ipcRenderer.invoke('window-close'),
   quit: () => ipcRenderer.invoke('window-quit'),
   switchInterface: (mode, session) => ipcRenderer.invoke('window-switch-interface', mode, session),
+  getFrostedGlassSupport: () => ipcRenderer.invoke('window-frosted-glass-support'),
+  setFrostedGlass: (enabled) => ipcRenderer.invoke('window-frosted-glass', enabled),
   onWindowState: (cb) => listen('window-state', cb),
 });
 

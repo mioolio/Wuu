@@ -208,21 +208,61 @@ describe('现有用户数据迁移',() => {
   it('实验性 Apple 外观默认关闭，旧用户不被自动启用', async () => {
     const { useAppStore, defaultSettings } = await import('./store');
     expect(defaultSettings.experimentalAppleUI).toBe(false);
+    expect(defaultSettings.experimentalFrostedGlass).toBe(false);
     expect(defaultSettings.appleControlsPosition).toBe('left');
     expect(useAppStore.getState().settings.experimentalAppleUI).toBe(false);
+    expect(useAppStore.getState().settings.experimentalFrostedGlass).toBe(false);
     await useAppStore.getState().initialize();
     expect(useAppStore.getState().settings.experimentalAppleUI).toBe(false);
+    expect(useAppStore.getState().settings.experimentalFrostedGlass).toBe(false);
     expect(useAppStore.getState().settings.appleControlsPosition).toBe('left');
   });
   it.each([
     { value: true, expected: true }, { value: false, expected: false },
     { value: 'true', expected: false }, { value: 1, expected: false },
     { value: null, expected: false }, { value: [], expected: false }, { value: {}, expected: false },
-  ])('实验性外观只接受保存的布尔 true %#', async ({ value, expected }) => {
-    window.musicAPI.getUserData = vi.fn().mockResolvedValue({ ...source, settings: { ...source.settings, experimentalAppleUI: value } });
+  ])('实验性外观开关只接受保存的布尔 true %#', async ({ value, expected }) => {
+    window.musicAPI.getUserData = vi.fn().mockResolvedValue({ ...source, settings: { ...source.settings, experimentalAppleUI: value, experimentalFrostedGlass: value } });
     const { useAppStore } = await import('./store');
     await useAppStore.getState().initialize();
     expect(useAppStore.getState().settings.experimentalAppleUI).toBe(expected);
+    expect(useAppStore.getState().settings.experimentalFrostedGlass).toBe(expected);
+  });
+  it('磨砂玻璃独立即时保存，Apple 开关不影响该偏好，重载和关闭保留其他设置与播放', async () => {
+    const appearance = { glassOpacity: .3, colorIntensity: .95, themeFollowCover: true, appleControlsPosition: 'right', progressColorEnabled: true, progressColor: '#123456' };
+    window.musicAPI.getUserData = vi.fn().mockResolvedValue({ ...source, settings: { ...source.settings, ...appearance } });
+    const { useAppStore } = await import('./store');
+    await useAppStore.getState().initialize();
+    useAppStore.getState().setPlayer({ song: songs[0], playing: true, time: 42 });
+    const player = useAppStore.getState().player;
+    useAppStore.getState().setSettings({ experimentalFrostedGlass: true });
+    expect(saved).toHaveBeenCalledTimes(1);
+    expect(saved.mock.calls[0][0].settings).toMatchObject({ ...appearance, experimentalFrostedGlass: true, experimentalAppleUI: false });
+    useAppStore.getState().setSettings({ experimentalAppleUI: true });
+    useAppStore.getState().setSettings({ experimentalAppleUI: false });
+    expect(useAppStore.getState().settings.experimentalFrostedGlass).toBe(true);
+    expect(useAppStore.getState().player).toBe(player);
+    expect(saved).toHaveBeenCalledTimes(3);
+    const stored = saved.mock.calls[2][0];
+    await flush();
+    vi.resetModules(); window.musicAPI.getUserData = vi.fn().mockResolvedValue(stored);
+    const restored = (await import('./store')).useAppStore;
+    await restored.getState().initialize();
+    expect(restored.getState().settings).toMatchObject({ ...appearance, experimentalFrostedGlass: true, experimentalAppleUI: false });
+    restored.getState().setSettings({ experimentalFrostedGlass: false });
+    expect(saved).toHaveBeenCalledTimes(4);
+    expect(saved.mock.calls[3][0]).toMatchObject({ settings: { ...appearance, experimentalFrostedGlass: false, experimentalAppleUI: false, audioFx: source.settings.audioFx }, collections: source.collections, stats: source.stats, progress: source.progress });
+    await vi.advanceTimersByTimeAsync(500);
+    expect(saved).toHaveBeenCalledTimes(4);
+  });
+  it('运行时损坏的磨砂玻璃偏好不能被 truthy 值启用', async () => {
+    const { useAppStore } = await import('./store');
+    await useAppStore.getState().initialize();
+    useAppStore.getState().setSettings({ experimentalFrostedGlass: true });
+    useAppStore.getState().setSettings({ experimentalFrostedGlass: 'true' as unknown as boolean });
+    expect(useAppStore.getState().settings.experimentalFrostedGlass).toBe(false);
+    expect(saved.mock.calls.at(-1)?.[0].settings).toMatchObject({ experimentalFrostedGlass: false, experimentalAppleUI: false, volume: source.settings.volume });
+    await flush();
   });
   it.each([
     { value: 'right', expected: 'right' }, { value: 'left', expected: 'left' },
@@ -298,19 +338,20 @@ describe('现有用户数据迁移',() => {
     expect(saved.mock.calls[1][0].progress).toEqual(source.progress);
     await flush();
   });
-  it('初始化期间启用实验外观不会提前覆盖用户数据，加载后保留该操作', async () => {
+  it('初始化期间启用实验外观不会提前覆盖用户数据，加载后保留两个独立开关', async () => {
     const pending = deferred<typeof source>();
     window.musicAPI.getUserData = vi.fn().mockReturnValue(pending.promise);
     const { useAppStore } = await import('./store');
     const initializing = useAppStore.getState().initialize(); await flush();
-    useAppStore.getState().setSettings({ experimentalAppleUI: true });
+    useAppStore.getState().setSettings({ experimentalAppleUI: true, experimentalFrostedGlass: true });
     await vi.advanceTimersByTimeAsync(500);
     expect(saved).not.toHaveBeenCalled();
     pending.resolve(structuredClone(source)); await initializing;
     expect(useAppStore.getState().settings.experimentalAppleUI).toBe(true);
+    expect(useAppStore.getState().settings.experimentalFrostedGlass).toBe(true);
     await vi.advanceTimersByTimeAsync(500);
     expect(saved).toHaveBeenCalledTimes(1);
-    expect(saved.mock.calls[0][0]).toMatchObject({ settings: { experimentalAppleUI: true, volume: source.settings.volume }, collections: source.collections, stats: source.stats });
+    expect(saved.mock.calls[0][0]).toMatchObject({ settings: { experimentalAppleUI: true, experimentalFrostedGlass: true, volume: source.settings.volume }, collections: source.collections, stats: source.stats });
   });
   it.each([
     { playbackRate: undefined, expected: 1 }, { playbackRate: .5, expected: .5 }, { playbackRate: 2, expected: 2 },

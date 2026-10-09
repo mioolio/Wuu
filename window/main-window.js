@@ -8,6 +8,7 @@ const { BrowserWindow, ipcMain, Tray, Menu, nativeImage, app } = require('electr
 const state = require('../core/state');
 const { createDesktopLyricWindow, destroyDesktopLyricWindow } = require('./desktop-lyric');
 const { loadRenderer, rendererPath } = require('./renderer-entry');
+const { getFrostedGlassSupport, applyFrostedGlass } = require('./frosted-glass');
 
 let tray = null;
 let isQuitting = false;
@@ -98,6 +99,9 @@ function setWindowRoundedCorners(win) {
 }
 
 function createWindow() {
+  const startupSettings = require('../core/storage').readUserData().settings || {};
+  const frostedAtStartup = startupSettings.interfaceMode !== 'classic' && startupSettings.experimentalFrostedGlass === true
+    && getFrostedGlassSupport(BrowserWindow.prototype).supported;
   const mainWindow = new BrowserWindow({
     width: 1100,
     height: 720,
@@ -108,6 +112,8 @@ function createWindow() {
     transparent: true,
     frame: false,
     titleBarStyle: 'hidden',
+    // Set the material before Electron shows the first window frame.
+    ...(frostedAtStartup ? (process.platform === 'win32' ? { backgroundMaterial: 'acrylic' } : { vibrancy: 'under-window' }) : {}),
     webPreferences: {
       preload: path.join(__dirname, '..', 'preload.js'),
       contextIsolation: true,
@@ -204,6 +210,17 @@ ipcMain.handle('window-maximize', () => {
   }
 });
 ipcMain.handle('window-close', () => { state.getMainWindow()?.close(); });
+ipcMain.handle('window-frosted-glass-support', (event) => {
+  const mainWindow = state.getMainWindow();
+  if (!mainWindow || event.sender !== mainWindow.webContents) return { supported: false, reason: '主窗口不可用' };
+  return getFrostedGlassSupport(mainWindow);
+});
+ipcMain.handle('window-frosted-glass', (event, enabled) => {
+  const mainWindow = state.getMainWindow();
+  if (!mainWindow || event.sender !== mainWindow.webContents) return { ok: false, enabled: false, reason: '主窗口不可用' };
+  if (switchingInterface) return { ok: false, enabled: false, reason: '正在切换界面' };
+  return applyFrostedGlass(mainWindow, enabled);
+});
 let switchingInterface = false;
 ipcMain.handle('window-switch-interface', (event, mode, session = {}) => {
   const mainWindow = state.getMainWindow();

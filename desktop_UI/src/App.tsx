@@ -32,6 +32,8 @@ export default function App() {
   const themeFollow = useAppStore(state => state.settings.themeFollowCover);
   const appleStyle = useAppStore(state => state.settings.experimentalAppleUI);
   const appleControlsPosition = useAppStore(state => state.settings.appleControlsPosition);
+  const frostedGlass = useAppStore(state => state.settings.experimentalFrostedGlass);
+  const hydrated = useAppStore(state => state.hydrated);
   const [visited,setVisited] = useState(new Set<View>([view]));
   const [maximized,setMaximized] = useState(false);
   const [showStartup,setShowStartup] = useState(false);
@@ -39,6 +41,14 @@ export default function App() {
   usePageMotion(view, loading);
   useEffect(() => { setVisited(previous => previous.has(view) ? previous : new Set([...previous,view])); }, [view]);
   useEffect(() => subscribe('windowAPI','onWindowState',setMaximized), []);
+  useEffect(() => {
+    if (!hydrated || typeof window.windowAPI?.setFrostedGlass !== 'function') return;
+    let disposed = false;
+    void Promise.resolve(window.windowAPI.setFrostedGlass(frostedGlass)).then(result => {
+      if (!disposed && !result.ok && result.supported) notify(result.reason || '磨砂玻璃应用失败', 'error');
+    }).catch(error => { if (!disposed) notify(errorMessage(error), 'error'); });
+    return () => { disposed = true; };
+  }, [hydrated, frostedGlass]);
   useEffect(() => {
     if (!loading) { setShowStartup(false); return; }
     // Only delay the notice: pages and playback remain available immediately.

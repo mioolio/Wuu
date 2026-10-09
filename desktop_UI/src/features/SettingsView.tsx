@@ -17,8 +17,8 @@ const categories = [
 ] as const;
 type Category = typeof categories[number]['id'];
 
-function Toggle({ label, description, checked, onChange, disabled = false }: { label: string; description?: string; checked: boolean; onChange: (value: boolean) => void; disabled?: boolean }) {
-  return <label className="setting-row"><span><strong>{label}</strong>{description && <small className="muted">{description}</small>}</span><input className="switch" aria-label={label} type="checkbox" checked={checked} disabled={disabled} onChange={event => onChange(event.target.checked)} /></label>;
+function Toggle({ label, description, descriptionId, checked, onChange, disabled = false }: { label: string; description?: string; descriptionId?: string; checked: boolean; onChange: (value: boolean) => void; disabled?: boolean }) {
+  return <label className="setting-row"><span><strong>{label}</strong>{description && <small id={descriptionId} className="muted">{description}</small>}</span><input className="switch" aria-label={label} aria-describedby={description ? descriptionId : undefined} type="checkbox" checked={checked} disabled={disabled} onChange={event => onChange(event.target.checked)} /></label>;
 }
 function Range({ label, value, min, max, step = 1, unit = '', disabled = false, onChange }: { label: string; value: number; min: number; max: number; step?: number; unit?: string; disabled?: boolean; onChange: (value: number) => void }) {
   return <label className={`setting-row ${disabled ? 'setting-disabled' : ''}`}><span><strong>{label}</strong></span><span className="setting-range"><output>{Number(value.toFixed(2))}{unit}</output><input aria-label={label} aria-valuetext={`${Number(value.toFixed(2))}${unit}`} type="range" min={min} max={max} step={step} value={value} disabled={disabled} onChange={event => onChange(Number(event.target.value))} /></span></label>;
@@ -37,6 +37,7 @@ export default function SettingsView() {
   const [desktopLyricBusy, setDesktopLyricBusy] = useState(false);
   const [category, setCategory] = useState<Category>('appearance');
   const [switching, setSwitching] = useState(false);
+  const [frostedSupport, setFrostedSupport] = useState<{ supported: boolean; reason?: string } | null>(null);
   const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const [network, setNetwork] = useState(settings);
   const [whitelist, setWhitelist] = useState(settings.serverWhitelist.join('\n'));
@@ -48,6 +49,19 @@ export default function SettingsView() {
     const result = await getBridge('playlistAPI').serverStatus(); setRunning(result.running === true);
   };
   useEffect(() => { void refresh().catch(error => notify(errorMessage(error), 'error')); }, [settings.serverEnabled, settings.mobileEnabled, settings.serverPort]);
+  useEffect(() => {
+    let disposed = false;
+    const detect = async () => {
+      const api = window.windowAPI;
+      if (!api || typeof api.getFrostedGlassSupport !== 'function') return { supported: false, reason: '请在支持原生磨砂玻璃的桌面应用中使用。' };
+      const result = await api.getFrostedGlassSupport();
+      return { supported: result?.supported === true, reason: typeof result?.reason === 'string' && result.reason.trim() ? result.reason.trim() : '当前系统不支持原生磨砂玻璃。' };
+    };
+    void detect().then(result => { if (!disposed) setFrostedSupport(result); }).catch(() => {
+      if (!disposed) setFrostedSupport({ supported: false, reason: '无法检测系统支持，请重新打开设置后重试。' });
+    });
+    return () => { disposed = true; };
+  }, []);
   useEffect(() => {
     setNetwork(settings); setWhitelist(settings.serverWhitelist.join('\n'));
   }, [settings.serverPort, settings.serverBindIP, settings.serverWhitelist, settings.serverRateLimit, settings.serverAccessLog, settings.publicHostMode, settings.publicHost, settings.publicPort]);
@@ -92,6 +106,7 @@ export default function SettingsView() {
     catch (error) { notify(errorMessage(error), 'error'); }
   };
   const activeCategory = categories.find(item => item.id === category)!;
+  const frostedDescription = !frostedSupport ? '正在检测系统支持…' : frostedSupport.supported ? '模糊窗口背后的内容，可继续调整背景不透明度。' : `${frostedSupport.reason}${settings.experimentalFrostedGlass ? ' 已保留偏好。' : ''}`;
   const controlDesktopLyrics = async (action: () => Promise<void>) => {
     if (desktopLyricBusy) return;
     setDesktopLyricBusy(true);
@@ -126,6 +141,7 @@ export default function SettingsView() {
           <Group title="实验性外观" description="仅用于新版界面，可随时关闭。">
             <Toggle label="Apple 风格（实验性）" description="使用红黄绿窗口按钮与轻盈的分组外观。关闭后恢复原有外观，其他外观偏好保留。" checked={settings.experimentalAppleUI} onChange={value => setSettings({ experimentalAppleUI: value })} />
             {settings.experimentalAppleUI && <label className="setting-row"><span><strong>窗口按钮位置</strong><small className="muted">选择适合自己的窗口操作位置</small></span><select aria-label="窗口按钮位置" value={settings.appleControlsPosition} onChange={event => setSettings({ appleControlsPosition: event.target.value === 'right' ? 'right' : 'left' })}><option value="left">左侧</option><option value="right">右侧</option></select></label>}
+            <Toggle label="磨砂玻璃（实验性）" description={frostedDescription} descriptionId="settings-frosted-glass-description" checked={settings.experimentalFrostedGlass && frostedSupport?.supported === true} disabled={frostedSupport?.supported !== true} onChange={value => setSettings({ experimentalFrostedGlass: value })} />
           </Group>
           <Group title="封面与背景">
             <Toggle label="圆盘封面" description="在播放页面使用唱片样式" checked={settings.discCover} onChange={value => setSettings({ discCover: value })} />

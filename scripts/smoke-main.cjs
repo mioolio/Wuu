@@ -128,6 +128,8 @@ if (polishFixture) {
   });
 }
 let serverRunning = false, accepted = false;
+// Only this isolated fixture uses the startup seed; production user data is untouched.
+if (process.env.WUU_FROSTED_STARTUP === '1') userData.settings.experimentalFrostedGlass = true;
 const calls = [];
 const discovery = { requests:[], previewRequests:[], saveRequests:[], failNext:false, previewFailure:false, previewDelayMs:0, delayMs:Number(process.env.WUU_DISCOVERY_DELAY) || 0 };
 global.__wuuSmoke = { songs,calls,polish,discovery,get data() { return userData; } };

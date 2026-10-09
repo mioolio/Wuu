@@ -8,6 +8,7 @@ import type { Collection, PlayerState, Settings, Song, SongStats, View } from '.
 export const defaultSettings: Settings = {
   interfaceMode: 'modern',
   experimentalAppleUI: false,
+  experimentalFrostedGlass: false,
   appleControlsPosition: 'left',
   sidebarCollapsed: true, sidebarWidth: SIDEBAR_DEFAULT_WIDTH,
   playMode: 1, volume: 1, playbackRate: 1, fadePause: true, glassOpacity: 0.72, discCover: false, colorIntensity: 0.85,
@@ -215,6 +216,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           settings: { ...defaultSettings, ...userData?.settings,
             interfaceMode: userData?.settings?.interfaceMode === 'classic' ? 'classic' : 'modern',
             experimentalAppleUI: userData?.settings?.experimentalAppleUI === true,
+            experimentalFrostedGlass: userData?.settings?.experimentalFrostedGlass === true,
             appleControlsPosition: userData?.settings?.appleControlsPosition === 'right' ? 'right' : 'left',
             sidebarCollapsed: typeof userData?.settings?.sidebarCollapsed === 'boolean' ? userData.settings.sidebarCollapsed : true,
             sidebarWidth: normalizeSidebarWidth(userData?.settings?.sidebarWidth),
@@ -265,6 +267,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     applyUserDataChange(state => {
       const settings = { ...state.settings, ...patch };
       if ('experimentalAppleUI' in patch) settings.experimentalAppleUI = patch.experimentalAppleUI === true;
+      if ('experimentalFrostedGlass' in patch) settings.experimentalFrostedGlass = patch.experimentalFrostedGlass === true;
       if ('appleControlsPosition' in patch) settings.appleControlsPosition = patch.appleControlsPosition === 'right' ? 'right' : 'left';
       if ('playbackRate' in patch) settings.playbackRate = normalizePlaybackRate(patch.playbackRate, normalizePlaybackRate(state.settings.playbackRate));
       if ('lyricSize' in patch || 'currentLyricSize' in patch) {
@@ -275,7 +278,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
       return { settings };
     });
-    if (('experimentalAppleUI' in patch || 'appleControlsPosition' in patch) && get().hydrated) void persistNow();
+    if (('experimentalAppleUI' in patch || 'experimentalFrostedGlass' in patch || 'appleControlsPosition' in patch) && get().hydrated) void persistNow();
     else scheduleSave();
   },
   createCollection: name => {

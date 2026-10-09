@@ -42,6 +42,7 @@ export type View = 'home' | 'list' | 'liked' | 'player' | 'import' | 'free-music
 export interface Settings {
   interfaceMode: 'modern' | 'classic';
   experimentalAppleUI: boolean;
+  experimentalFrostedGlass: boolean;
   appleControlsPosition: 'left' | 'right';
   sidebarCollapsed: boolean;
   sidebarWidth: number;

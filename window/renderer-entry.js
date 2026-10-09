@@ -7,7 +7,9 @@ function rendererPath(kind = 'main', mode = 'modern') {
 }
 
 function loadRenderer(window, kind = 'main', session = {}) {
-  const mode = session.mode || require('../core/storage').readUserData().settings?.interfaceMode || 'modern';
+  const settings = require('../core/storage').readUserData().settings || {};
+  const mode = session.mode || settings.interfaceMode || 'modern';
+  if (kind === 'main') require('./frosted-glass').configureFrostedGlass(window, { ...settings, interfaceMode: mode });
   const query = kind === 'lyrics' ? { window: 'lyrics' } : {};
   if (kind === 'main' && session.mode) query.interfaceSwitch = '1';
   if (kind === 'main' && session.playing === false) query.interfacePaused = '1';
